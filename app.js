@@ -22,6 +22,7 @@ const DELETE_UNDO_TIMEOUT = 5000;
 const COPY_FLASH_DURATION = 900;
 const DELETE_CONFIRM_TIMEOUT = 2000;
 const TOAST_DURATION = 3000;
+const HINT_TOAST_DURATION = 6000;
 
 const state = {
   db: null,
@@ -1309,17 +1310,19 @@ function applyTheme(theme) {
   );
 }
 
-function showStatusToast(message) {
+function showStatusToast(message, options = {}) {
   if (!message || message === "Ready" || message === "Editing block -> save updates") {
     return;
   }
 
+  const { duration = TOAST_DURATION, isHint = false } = options;
   statusToast.textContent = message;
+  statusToast.classList.toggle("is-hint", isHint);
   statusToast.classList.add("is-visible");
   window.clearTimeout(statusToastTimer);
   statusToastTimer = window.setTimeout(() => {
-    statusToast.classList.remove("is-visible");
-  }, TOAST_DURATION);
+    statusToast.classList.remove("is-visible", "is-hint");
+  }, duration);
 }
 
 function getSearchHistory() {
@@ -1361,7 +1364,7 @@ function showHint(id, message) {
   }
   markHintShown(id);
   window.setTimeout(() => {
-    showStatusToast(message);
+    showStatusToast(message, { duration: HINT_TOAST_DURATION, isHint: true });
   }, HINT_DELAY);
 }
 

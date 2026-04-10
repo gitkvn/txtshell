@@ -274,6 +274,12 @@ kbd {
   pointer-events: auto;
 }
 
+.status-toast.is-hint {
+  max-width: min(420px, calc(100vw - 32px));
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--paper) 98%, var(--accent) 4%);
+}
+
 .search-mode {
   position: fixed;
   inset: 0;
