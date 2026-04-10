@@ -46,8 +46,6 @@ const wordCountToggleButton = document.querySelector("#wordCountToggleButton");
 const themeToggleButton = document.querySelector("#themeToggleButton");
 const composerHint = document.querySelector("#composerHint");
 const currentDateTime = document.querySelector("#currentDateTime");
-const editBanner = document.querySelector("#editBanner");
-const cancelEditButton = document.querySelector("#cancelEditButton");
 const entryTemplate = document.querySelector("#entryTemplate");
 let draftSaveTimer = null;
 let deleteUndoTimer = null;
@@ -116,15 +114,6 @@ nextOnboardingButton.addEventListener("click", () => {
 
 skipOnboardingButton.addEventListener("click", () => {
   finishOnboarding();
-});
-
-cancelEditButton.addEventListener("click", () => {
-  state.editingEntryId = null;
-  entryInput.value = "";
-  clearDraft();
-  composerHint.textContent = "Ready";
-  render();
-  entryInput.focus();
 });
 
 wordCountToggleButton.addEventListener("click", () => {
@@ -347,9 +336,6 @@ function handleGlobalShortcut(event) {
 }
 
 function render() {
-  const isEditing = Boolean(state.editingEntryId);
-  editBanner.hidden = !isEditing;
-  composerForm.classList.toggle("is-editing", isEditing);
   savedCount.textContent = `Saved (${state.entries.length})`;
   searchUndoDeleteButton.hidden = !state.pendingDeletedEntry;
   quickReference.hidden = state.preset !== "quickref";
