@@ -242,7 +242,10 @@ entryInput.addEventListener("input", () => {
 });
 
 updateClock();
-window.setInterval(updateClock, 1000);
+window.setInterval(() => {
+  updateClock();
+  updateWordCount();
+}, 1000);
 applyTheme(window.localStorage.getItem(THEME_KEY) || "light");
 const savedCountMode = window.localStorage.getItem(WORD_COUNT_KEY);
 applyCountMode(
