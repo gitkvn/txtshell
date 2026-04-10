@@ -611,8 +611,9 @@ kbd {
   }
 
   .status-toast {
-    right: 14px;
-    bottom: 14px;
+    left: 50%;
+    right: auto;
+    bottom: 0;
   }
 
   .command-bar {
