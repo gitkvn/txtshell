@@ -12,6 +12,8 @@ const RE_EDITOR_TOKEN = /(^|\s)([#@][a-z0-9_-]*)$/i;
 const RE_WHITESPACE = /\s+/;
 const RE_ESCAPE = /[.*+?^${}()|[\]\\]/g;
 
+const SEARCH_HISTORY_KEY = "txtshell-search-history-v1";
+const MAX_SEARCH_HISTORY = 5;
 const HINTS_KEY = "txtshell-hints-v1";
 const HINT_DELAY = 800;
 
@@ -420,6 +422,9 @@ function openSearchMode() {
 }
 
 function closeSearchMode() {
+  if (state.search) {
+    saveSearchHistory(state.search);
+  }
   state.searchMode = false;
   searchMode.hidden = true;
   composerForm.hidden = false;
@@ -1119,7 +1124,7 @@ function renderEditorSuggestions() {
 
 function getSearchSuggestions() {
   if (!state.search) {
-    return [];
+    return getSearchHistory();
   }
 
   return getStructuredSuggestions(state.search);
@@ -1315,6 +1320,23 @@ function showStatusToast(message) {
   statusToastTimer = window.setTimeout(() => {
     statusToast.classList.remove("is-visible");
   }, TOAST_DURATION);
+}
+
+function getSearchHistory() {
+  try {
+    return JSON.parse(window.localStorage.getItem(SEARCH_HISTORY_KEY)) || [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSearchHistory(query) {
+  const history = getSearchHistory().filter((item) => item !== query);
+  history.unshift(query);
+  window.localStorage.setItem(
+    SEARCH_HISTORY_KEY,
+    JSON.stringify(history.slice(0, MAX_SEARCH_HISTORY)),
+  );
 }
 
 function getShownHints() {
