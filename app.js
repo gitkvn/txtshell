@@ -375,6 +375,7 @@ function handleGlobalShortcut(event) {
 
 function render() {
   savedCount.textContent = `Saved (${state.entries.length})`;
+  updateWordCount();
   scheduleInlineResults();
 
   if (!state.searchMode) {
