@@ -683,7 +683,7 @@ function handleSearchKeyboard(event) {
     return;
   }
 
-  if ((event.key === "Backspace" || event.key === "Delete") && state.selectedEntryId && !searchInput.value) {
+  if ((event.metaKey || event.ctrlKey) && (event.key === "Backspace" || event.key === "Delete") && state.selectedEntryId) {
     event.preventDefault();
     deleteEntry(state.selectedEntryId);
     return;
