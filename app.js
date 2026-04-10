@@ -157,6 +157,16 @@ document.addEventListener("keydown", (event) => {
   if (getInlineQuery()) {
     event.preventDefault();
     clearInlineQuery();
+    return;
+  }
+
+  if (state.editingEntryId) {
+    event.preventDefault();
+    state.editingEntryId = null;
+    entryInput.value = "";
+    clearDraft();
+    composerHint.textContent = "Edit discarded";
+    render();
   }
 });
 
