@@ -225,7 +225,7 @@ initialize();
 function submitComposer() {
   const text = entryInput.value.trim();
   if (!text) {
-    composerHint.textContent = "Empty";
+    composerHint.textContent = "Block cannot be saved empty";
     return;
   }
 
