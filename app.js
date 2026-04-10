@@ -21,7 +21,7 @@ const DRAFT_SAVE_DELAY = 180;
 const DELETE_UNDO_TIMEOUT = 3000;
 const COPY_FLASH_DURATION = 900;
 const DELETE_CONFIRM_TIMEOUT = 2000;
-const TOAST_DURATION = 1800;
+const TOAST_DURATION = 3000;
 
 const state = {
   db: null,
