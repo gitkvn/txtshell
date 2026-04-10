@@ -60,6 +60,11 @@ const themeToggleButton = document.querySelector("#themeToggleButton");
 const composerHint = document.querySelector("#composerHint");
 const currentDateTime = document.querySelector("#currentDateTime");
 const entryTemplate = document.querySelector("#entryTemplate");
+function setEditorValue(value) {
+  entryInput.value = value;
+  updateWordCount();
+}
+
 let draftSaveTimer = null;
 let deleteUndoTimer = null;
 let statusToastTimer = null;
@@ -178,7 +183,7 @@ document.addEventListener("keydown", (event) => {
   if (state.editingEntryId) {
     event.preventDefault();
     state.editingEntryId = null;
-    entryInput.value = "";
+    setEditorValue("");
     clearDraft();
     composerHint.textContent = "Edit discarded";
     render();
@@ -242,10 +247,7 @@ entryInput.addEventListener("input", () => {
 });
 
 updateClock();
-window.setInterval(() => {
-  updateClock();
-  updateWordCount();
-}, 1000);
+window.setInterval(updateClock, 1000);
 applyTheme(window.localStorage.getItem(THEME_KEY) || "light");
 const savedCountMode = window.localStorage.getItem(WORD_COUNT_KEY);
 applyCountMode(
@@ -271,7 +273,7 @@ function submitComposer() {
     state.search = "";
     state.preset = "yesterday";
     openSearchMode();
-    entryInput.value = "";
+    setEditorValue("");
     clearDraft();
     composerHint.textContent = "Yesterday";
     render();
@@ -282,7 +284,7 @@ function submitComposer() {
     state.search = "";
     state.preset = "week";
     openSearchMode();
-    entryInput.value = "";
+    setEditorValue("");
     clearDraft();
     composerHint.textContent = "Last week";
     render();
@@ -298,7 +300,7 @@ function submitComposer() {
     state.search = "";
     state.preset = "quickref";
     openSearchMode();
-    entryInput.value = "";
+    setEditorValue("");
     clearDraft();
     composerHint.textContent = "Quick reference";
     render();
@@ -314,7 +316,7 @@ function submitComposer() {
       existingEntry.tags = extractTags(text);
       existingEntry.mentions = extractMentions(text);
       saveEntry(existingEntry);
-      entryInput.value = "";
+      setEditorValue("");
       clearDraft();
       composerHint.textContent = "Updated";
       state.editingEntryId = null;
@@ -332,7 +334,7 @@ function submitComposer() {
   };
   state.entries.unshift(entry);
   saveEntry(entry);
-  entryInput.value = "";
+  setEditorValue("");
   clearDraft();
   composerHint.textContent = "Saved";
   render();
@@ -378,7 +380,6 @@ function handleGlobalShortcut(event) {
 
 function render() {
   savedCount.textContent = `Saved (${state.entries.length})`;
-  updateWordCount();
   scheduleInlineResults();
 
   if (!state.searchMode) {
@@ -450,13 +451,12 @@ function reopenEntryInEditor(entryId) {
   }
 
   state.editingEntryId = entry.id;
-  entryInput.value = entry.text;
+  setEditorValue(entry.text);
   saveMeta(DRAFT_KEY, entry.text);
   closeSearchMode();
   composerHint.textContent = "Editing block -> save updates";
   entryInput.focus();
   entryInput.setSelectionRange(entryInput.value.length, entryInput.value.length);
-  updateWordCount();
   showHint("edit-mode", "Press Esc to cancel editing");
 }
 
@@ -492,7 +492,7 @@ async function initialize() {
     }));
     const draft = await getMeta(DRAFT_KEY);
     if (draft) {
-      entryInput.value = draft;
+      setEditorValue(draft);
       composerHint.textContent = "Draft restored";
       entryInput.setSelectionRange(entryInput.value.length, entryInput.value.length);
     }
@@ -571,7 +571,7 @@ function deleteEntry(entryId) {
   state.entries = state.entries.filter((entry) => entry.id !== entryId);
   if (state.editingEntryId === entryId) {
     state.editingEntryId = null;
-    entryInput.value = "";
+    setEditorValue("");
     clearDraft();
   }
   removeEntry(entryId);
@@ -996,7 +996,7 @@ function clearInlineQuery() {
   }
 
   const withoutQueryMarker = trimmed.slice(0, -2).trimEnd();
-  entryInput.value = withoutQueryMarker;
+  setEditorValue(withoutQueryMarker);
   entryInput.focus();
   entryInput.setSelectionRange(entryInput.value.length, entryInput.value.length);
   queueDraftSave();
@@ -1029,7 +1029,7 @@ function indentSelection(mode) {
   });
 
   const updatedText = updatedLines.join("\n");
-  entryInput.value = `${value.slice(0, lineStart)}${updatedText}${value.slice(lineEnd)}`;
+  setEditorValue(`${value.slice(0, lineStart)}${updatedText}${value.slice(lineEnd)}`);
 
   const lengthDelta = updatedText.length - selectedText.length;
   const hasSelection = selectionStart !== selectionEnd;
@@ -1244,7 +1244,7 @@ function applyEditorSuggestion(suggestion) {
   const needsTrailingSpace = nextChar !== "" && /\s/.test(nextChar) ? false : nextChar === "";
   const completedSuggestion = needsTrailingSpace ? `${suggestion} ` : suggestion;
 
-  entryInput.value = `${currentValue.slice(0, context.start)}${completedSuggestion}${currentValue.slice(context.end)}`;
+  setEditorValue(`${currentValue.slice(0, context.start)}${completedSuggestion}${currentValue.slice(context.end)}`);
   const nextCaret = context.start + completedSuggestion.length;
   entryInput.focus();
   entryInput.setSelectionRange(nextCaret, nextCaret);
