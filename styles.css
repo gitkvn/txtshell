@@ -113,10 +113,34 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+.edit-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 20px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+  font-size: 0.85rem;
+  color: var(--accent);
+}
+
+.edit-banner[hidden] {
+  display: none;
+}
+
+.edit-banner-label {
+  font-family: var(--font-sans);
+  font-weight: 500;
+}
+
 .editor-wrap {
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.editor-wrap.is-editing {
+  border-left: 3px solid var(--accent);
 }
 
 #entryInput {
@@ -588,6 +612,7 @@ kbd {
 
 @media (max-width: 700px) {
   .topbar,
+  .edit-banner,
   .command-bar,
   .search-mode-header,
   .search-mode-input-wrap,
