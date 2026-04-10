@@ -453,6 +453,7 @@ function reopenEntryInEditor(entryId) {
   composerHint.textContent = "Editing block -> save updates";
   entryInput.focus();
   entryInput.setSelectionRange(entryInput.value.length, entryInput.value.length);
+  updateWordCount();
   showHint("edit-mode", "Press Esc to cancel editing");
 }
 
