@@ -7,6 +7,18 @@ const ONBOARDING_KEY = "txtshell-onboarding-complete-v1";
 const THEME_KEY = "txtshell-theme-v1";
 const WORD_COUNT_KEY = "txtshell-word-count-v1";
 
+const RE_TAGS = /(^|\s)#([a-z0-9_-]+)/g;
+const RE_MENTIONS = /(^|\s)@([a-z0-9_-]+)/g;
+const RE_EDITOR_TOKEN = /(^|\s)([#@][a-z0-9_-]*)$/i;
+const RE_WHITESPACE = /\s+/;
+const RE_ESCAPE = /[.*+?^${}()|[\]\\]/g;
+
+const DRAFT_SAVE_DELAY = 180;
+const DELETE_UNDO_TIMEOUT = 3000;
+const COPY_FLASH_DURATION = 900;
+const DELETE_CONFIRM_TIMEOUT = 2000;
+const TOAST_DURATION = 1800;
+
 const state = {
   db: null,
   entries: [],
@@ -51,6 +63,9 @@ let draftSaveTimer = null;
 let deleteUndoTimer = null;
 let onboardingIndex = 0;
 let statusToastTimer = null;
+let inlineResultsTimer = null;
+
+const INLINE_RESULTS_DELAY = 150;
 
 const ONBOARDING_STEPS = [
   "Type to begin.",
@@ -355,6 +370,12 @@ function handleGlobalShortcut(event) {
 
 function render() {
   savedCount.textContent = `Saved (${state.entries.length})`;
+  scheduleInlineResults();
+
+  if (!state.searchMode) {
+    return;
+  }
+
   searchUndoDeleteButton.hidden = !state.pendingDeletedEntry;
   quickReference.hidden = state.preset !== "quickref";
   entryList.hidden = state.preset === "quickref";
@@ -362,7 +383,6 @@ function render() {
   searchModeLabel.textContent = getSearchModeLabel(filteredEntries.length);
   entryList.innerHTML = "";
   renderSuggestions();
-  renderInlineResults();
 
   syncSelection(filteredEntries);
 
@@ -470,7 +490,7 @@ function queueDraftSave() {
   window.clearTimeout(draftSaveTimer);
   draftSaveTimer = window.setTimeout(() => {
     saveMeta(DRAFT_KEY, entryInput.value);
-  }, 180);
+  }, DRAFT_SAVE_DELAY);
 }
 
 function clearDraft() {
@@ -545,7 +565,7 @@ function deleteEntry(entryId) {
   deleteUndoTimer = window.setTimeout(() => {
     clearPendingDelete();
     render();
-  }, 3000);
+  }, DELETE_UNDO_TIMEOUT);
 }
 
 function getFilteredEntries() {
@@ -631,17 +651,13 @@ function handleSearchKeyboard(event) {
 
   if (event.key === "ArrowDown") {
     event.preventDefault();
-    state.selectedEntryId = entries[Math.min(currentIndex + 1, entries.length - 1)].id;
-    render();
-    scrollSelectedIntoView();
+    moveSelection(entries[Math.min(currentIndex + 1, entries.length - 1)].id);
     return;
   }
 
   if (event.key === "ArrowUp") {
     event.preventDefault();
-    state.selectedEntryId = entries[Math.max(currentIndex - 1, 0)].id;
-    render();
-    scrollSelectedIntoView();
+    moveSelection(entries[Math.max(currentIndex - 1, 0)].id);
     return;
   }
 
@@ -674,6 +690,15 @@ function toggleSelectedExpanded() {
   expandButton.setAttribute("aria-expanded", String(!isCollapsed));
 }
 
+function moveSelection(newId) {
+  const oldCard = entryList.querySelector(".entry-card.is-selected");
+  if (oldCard) oldCard.classList.remove("is-selected");
+  state.selectedEntryId = newId;
+  const newCard = entryList.querySelector(`.entry-card[data-entry-id="${newId}"]`);
+  if (newCard) newCard.classList.add("is-selected");
+  newCard?.scrollIntoView({ block: "nearest" });
+}
+
 function scrollSelectedIntoView() {
   const selectedCard = entryList.querySelector(".entry-card.is-selected");
   selectedCard?.scrollIntoView({ block: "nearest" });
@@ -688,7 +713,7 @@ function flashCopied(button) {
   button.textContent = "Copied";
   window.setTimeout(() => {
     button.textContent = originalText;
-  }, 900);
+  }, COPY_FLASH_DURATION);
 }
 
 function undoDelete() {
@@ -783,7 +808,7 @@ function updateWordCount() {
 
   const text = entryInput.value.trim();
   if (mode === "words") {
-    const count = text ? text.split(/\s+/).length : 0;
+    const count = text ? text.split(RE_WHITESPACE).length : 0;
     wordCountDisplay.textContent = `${count} ${count === 1 ? "word" : "words"}`;
   } else if (mode === "chars") {
     wordCountDisplay.textContent = `${text.length} ${text.length === 1 ? "char" : "chars"}`;
@@ -791,6 +816,16 @@ function updateWordCount() {
     const count = text ? text.split("\n").length : 0;
     wordCountDisplay.textContent = `${count} ${count === 1 ? "line" : "lines"}`;
   }
+}
+
+function scheduleInlineResults() {
+  window.clearTimeout(inlineResultsTimer);
+  if (!getInlineQuery()) {
+    inlineResults.innerHTML = "";
+    inlineResults.hidden = true;
+    return;
+  }
+  inlineResultsTimer = window.setTimeout(renderInlineResults, INLINE_RESULTS_DELAY);
 }
 
 function renderInlineResults() {
@@ -853,8 +888,8 @@ function renderEntries(container, entries, options = {}) {
       card.classList.add("is-selected");
     }
 
-    const tags = Array.isArray(entry.tags) ? entry.tags : extractTags(entry.text);
-    const mentions = Array.isArray(entry.mentions) ? entry.mentions : extractMentions(entry.text);
+    const tags = entry.tags;
+    const mentions = entry.mentions;
     if (!tags.length && !mentions.length) {
       tagsContainer.hidden = true;
     } else {
@@ -946,7 +981,7 @@ function renderEntries(container, entries, options = {}) {
         deleteButton.dataset.confirm = "";
         deleteButton.textContent = "Delete";
         deleteButton.classList.remove("is-confirming");
-      }, 2000);
+      }, DELETE_CONFIRM_TIMEOUT);
     });
     if (selectResults) {
       card.addEventListener("mousedown", () => {
@@ -1136,9 +1171,7 @@ function getStructuredSuggestions(token) {
   const counts = new Map();
 
   state.entries.forEach((entry) => {
-    const values = prefix === "#"
-      ? (Array.isArray(entry.tags) ? entry.tags : extractTags(entry.text))
-      : (Array.isArray(entry.mentions) ? entry.mentions : extractMentions(entry.text));
+    const values = prefix === "#" ? entry.tags : entry.mentions;
 
     values.forEach((value) => {
       if (!query || value.startsWith(query)) {
@@ -1165,7 +1198,7 @@ function getEditorSuggestionContext() {
 
   const caret = entryInput.selectionStart;
   const beforeCaret = entryInput.value.slice(0, caret);
-  const match = beforeCaret.match(/(^|\s)([#@][a-z0-9_-]*)$/i);
+  const match = beforeCaret.match(RE_EDITOR_TOKEN);
   if (!match) {
     return null;
   }
@@ -1239,7 +1272,7 @@ function applyEditorSuggestion(suggestion) {
 }
 
 function extractTags(text) {
-  const matches = text.toLowerCase().match(/(^|\s)#([a-z0-9_-]+)/g) || [];
+  const matches = text.toLowerCase().match(RE_TAGS) || [];
   const tags = matches
     .map((match) => match.trim().slice(1))
     .filter(Boolean);
@@ -1247,7 +1280,7 @@ function extractTags(text) {
 }
 
 function extractMentions(text) {
-  const matches = text.toLowerCase().match(/(^|\s)@([a-z0-9_-]+)/g) || [];
+  const matches = text.toLowerCase().match(RE_MENTIONS) || [];
   const mentions = matches
     .map((match) => match.trim().slice(1))
     .filter(Boolean);
@@ -1286,7 +1319,7 @@ function escapeHtml(value) {
 }
 
 function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return value.replace(RE_ESCAPE, "\\$&");
 }
 
 function applyTheme(theme) {
@@ -1309,7 +1342,7 @@ function showStatusToast(message) {
   window.clearTimeout(statusToastTimer);
   statusToastTimer = window.setTimeout(() => {
     statusToast.classList.remove("is-visible");
-  }, 1800);
+  }, TOAST_DURATION);
 }
 
 function isYesterday(value) {

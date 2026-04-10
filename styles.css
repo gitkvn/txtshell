@@ -97,12 +97,6 @@ button {
   background: color-mix(in srgb, var(--paper) 84%, transparent);
 }
 
-.icon-toggle svg {
-  display: block;
-  width: 1rem;
-  height: 1rem;
-}
-
 .word-count-badge {
   color: var(--ink);
   background: color-mix(in srgb, var(--paper) 90%, transparent);
@@ -233,14 +227,6 @@ button {
 .more-link:focus-visible {
   color: var(--accent);
   outline: none;
-}
-
-.command-hints {
-  font-family: var(--font-mono);
-  white-space: normal;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  opacity: 0.78;
 }
 
 kbd {
