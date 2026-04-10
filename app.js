@@ -233,7 +233,11 @@ updateClock();
 window.setInterval(updateClock, 1000);
 applyTheme(window.localStorage.getItem(THEME_KEY) || "light");
 const savedCountMode = window.localStorage.getItem(WORD_COUNT_KEY);
-applyCountMode(savedCountMode === "true" ? "words" : (savedCountMode || "off"));
+applyCountMode(
+  savedCountMode === "true" ? "words"
+  : COUNT_MODES.includes(savedCountMode) ? savedCountMode
+  : "off"
+);
 initialize();
 
 function submitComposer() {
