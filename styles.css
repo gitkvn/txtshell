@@ -279,7 +279,7 @@ kbd {
   position: fixed;
   left: 50%;
   bottom: 0;
-  transform: translateX(-50%);
+  transform: translateX(-50%) translateY(100%);
   z-index: 30;
   max-width: min(320px, calc(100vw - 32px));
   padding: 10px 12px;
@@ -290,6 +290,15 @@ kbd {
   box-shadow: 0 -4px 16px rgba(23, 23, 23, 0.06);
   font-size: 0.88rem;
   text-align: center;
+  opacity: 0;
+  transition: transform 0.25s ease, opacity 0.25s ease;
+  pointer-events: none;
+}
+
+.status-toast.is-visible {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .onboarding-step,
@@ -475,6 +484,11 @@ kbd {
   outline: none;
 }
 
+.delete-button.is-confirming {
+  color: #d1242f;
+  font-weight: 600;
+}
+
 .entry-body {
   margin: 0;
   white-space: pre-wrap;
@@ -548,6 +562,16 @@ kbd {
 .expand-button:focus-visible {
   color: var(--accent);
   outline: none;
+}
+
+.date-group-label {
+  margin: 0;
+  padding: 14px 0 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .empty-state {

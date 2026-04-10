@@ -116,9 +116,12 @@ skipOnboardingButton.addEventListener("click", () => {
   finishOnboarding();
 });
 
+const COUNT_MODES = ["off", "words", "chars", "lines"];
+
 wordCountToggleButton.addEventListener("click", () => {
-  const enabled = document.body.dataset.wordCount === "on";
-  applyWordCountMode(!enabled);
+  const current = document.body.dataset.countMode || "off";
+  const nextIndex = (COUNT_MODES.indexOf(current) + 1) % COUNT_MODES.length;
+  applyCountMode(COUNT_MODES[nextIndex]);
 });
 
 themeToggleButton.addEventListener("click", () => {
@@ -229,7 +232,8 @@ entryInput.addEventListener("input", () => {
 updateClock();
 window.setInterval(updateClock, 1000);
 applyTheme(window.localStorage.getItem(THEME_KEY) || "light");
-applyWordCountMode(window.localStorage.getItem(WORD_COUNT_KEY) === "true");
+const savedCountMode = window.localStorage.getItem(WORD_COUNT_KEY);
+applyCountMode(savedCountMode === "true" ? "words" : (savedCountMode || "off"));
 initialize();
 
 function submitComposer() {
@@ -350,17 +354,22 @@ function render() {
   searchUndoDeleteButton.hidden = !state.pendingDeletedEntry;
   quickReference.hidden = state.preset !== "quickref";
   entryList.hidden = state.preset === "quickref";
-  searchModeLabel.textContent = getSearchModeLabel();
+  const filteredEntries = getFilteredEntries();
+  searchModeLabel.textContent = getSearchModeLabel(filteredEntries.length);
   entryList.innerHTML = "";
   renderSuggestions();
   renderInlineResults();
 
-  const filteredEntries = getFilteredEntries();
-
   syncSelection(filteredEntries);
 
   if (!filteredEntries.length) {
-    entryList.innerHTML = '<p class="empty-state">No entries yet.</p>';
+    if (state.search) {
+      entryList.innerHTML = '<p class="empty-state">No matching blocks.</p>';
+    } else if (!state.entries.length) {
+      entryList.innerHTML = '<p class="empty-state">Nothing saved yet. Write something and press <kbd>\u2318</kbd>/<kbd>Ctrl</kbd> + <kbd>Enter</kbd> to save your first block.</p>';
+    } else {
+      entryList.innerHTML = '<p class="empty-state">No blocks in this view.</p>';
+    }
     return;
   }
 
@@ -637,6 +646,12 @@ function handleSearchKeyboard(event) {
     toggleSelectedExpanded();
     return;
   }
+
+  if ((event.key === "Backspace" || event.key === "Delete") && state.selectedEntryId && !searchInput.value) {
+    event.preventDefault();
+    deleteEntry(state.selectedEntryId);
+    return;
+  }
 }
 
 function toggleSelectedExpanded() {
@@ -728,39 +743,50 @@ function finishOnboarding() {
   onboardingCard.hidden = true;
 }
 
-function getSearchModeLabel() {
+function getSearchModeLabel(count) {
+  const suffix = count !== undefined && state.preset !== "quickref"
+    ? ` (${count})`
+    : "";
   if (state.preset === "quickref") {
     return "Quick reference";
   }
   if (state.preset === "yesterday") {
-    return "Yesterday";
+    return `Yesterday${suffix}`;
   }
   if (state.preset === "week") {
-    return "Last week";
+    return `Last week${suffix}`;
   }
-  return "Search saved blocks";
+  if (state.search) {
+    return `Results${suffix}`;
+  }
+  return `Search saved blocks${suffix}`;
 }
 
-function applyWordCountMode(enabled) {
-  document.body.dataset.wordCount = enabled ? "on" : "off";
-  window.localStorage.setItem(WORD_COUNT_KEY, String(enabled));
-  wordCountDisplay.hidden = !enabled;
-  wordCountToggleButton.classList.toggle("is-active", enabled);
-  wordCountToggleButton.setAttribute(
-    "aria-label",
-    enabled ? "Hide word count" : "Show word count",
-  );
+function applyCountMode(mode) {
+  document.body.dataset.countMode = mode;
+  window.localStorage.setItem(WORD_COUNT_KEY, mode);
+  wordCountDisplay.hidden = mode === "off";
+  wordCountToggleButton.classList.toggle("is-active", mode !== "off");
+  wordCountToggleButton.setAttribute("aria-label", `Counter: ${mode}`);
   updateWordCount();
 }
 
 function updateWordCount() {
-  if (wordCountDisplay.hidden) {
+  const mode = document.body.dataset.countMode || "off";
+  if (mode === "off") {
     return;
   }
 
   const text = entryInput.value.trim();
-  const count = text ? text.split(/\s+/).length : 0;
-  wordCountDisplay.textContent = `${count} ${count === 1 ? "word" : "words"}`;
+  if (mode === "words") {
+    const count = text ? text.split(/\s+/).length : 0;
+    wordCountDisplay.textContent = `${count} ${count === 1 ? "word" : "words"}`;
+  } else if (mode === "chars") {
+    wordCountDisplay.textContent = `${text.length} ${text.length === 1 ? "char" : "chars"}`;
+  } else if (mode === "lines") {
+    const count = text ? text.split("\n").length : 0;
+    wordCountDisplay.textContent = `${count} ${count === 1 ? "line" : "lines"}`;
+  }
 }
 
 function renderInlineResults() {
@@ -781,10 +807,35 @@ function renderInlineResults() {
   renderEntries(inlineResults, entries, { highlightTerm: inlineQuery.query, mode: "inline" });
 }
 
+function getDateGroup(dateString) {
+  const date = new Date(dateString);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const weekAgo = new Date(today);
+  weekAgo.setDate(today.getDate() - 7);
+
+  if (date >= today) return "Today";
+  if (date >= yesterday) return "Yesterday";
+  if (date >= weekAgo) return "This week";
+  return "Older";
+}
+
 function renderEntries(container, entries, options = {}) {
   const { selectResults = false, highlightTerm = "", mode = "search" } = options;
+  let lastGroup = null;
 
   entries.forEach((entry) => {
+    const group = getDateGroup(entry.createdAt);
+    if (group !== lastGroup) {
+      const divider = document.createElement("p");
+      divider.className = "date-group-label";
+      divider.textContent = group;
+      container.appendChild(divider);
+      lastGroup = group;
+    }
+
     const fragment = entryTemplate.content.cloneNode(true);
     const card = fragment.querySelector(".entry-card");
     const body = fragment.querySelector(".entry-body");
@@ -875,9 +926,23 @@ function renderEntries(container, entries, options = {}) {
       event.stopPropagation();
       reopenEntryInEditor(entry.id);
     });
-    fragment.querySelector(".delete-button").addEventListener("click", (event) => {
+    const deleteButton = fragment.querySelector(".delete-button");
+    let deleteConfirmTimer = null;
+    deleteButton.addEventListener("click", (event) => {
       event.stopPropagation();
-      deleteEntry(entry.id);
+      if (deleteButton.dataset.confirm === "true") {
+        window.clearTimeout(deleteConfirmTimer);
+        deleteEntry(entry.id);
+        return;
+      }
+      deleteButton.dataset.confirm = "true";
+      deleteButton.textContent = "Sure?";
+      deleteButton.classList.add("is-confirming");
+      deleteConfirmTimer = window.setTimeout(() => {
+        deleteButton.dataset.confirm = "";
+        deleteButton.textContent = "Delete";
+        deleteButton.classList.remove("is-confirming");
+      }, 2000);
     });
     if (selectResults) {
       card.addEventListener("mousedown", () => {
@@ -1236,10 +1301,10 @@ function showStatusToast(message) {
   }
 
   statusToast.textContent = message;
-  statusToast.hidden = false;
+  statusToast.classList.add("is-visible");
   window.clearTimeout(statusToastTimer);
   statusToastTimer = window.setTimeout(() => {
-    statusToast.hidden = true;
+    statusToast.classList.remove("is-visible");
   }, 1800);
 }
 
