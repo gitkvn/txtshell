@@ -37,6 +37,7 @@ const shortcutsLink = document.querySelector("#shortcutsLink");
 const searchUndoDeleteButton = document.querySelector("#searchUndoDeleteButton");
 const closeSearchButton = document.querySelector("#closeSearchButton");
 const onboardingCard = document.querySelector("#onboardingCard");
+const statusToast = document.querySelector("#statusToast");
 const onboardingStep = document.querySelector("#onboardingStep");
 const onboardingText = document.querySelector("#onboardingText");
 const nextOnboardingButton = document.querySelector("#nextOnboardingButton");
@@ -49,6 +50,7 @@ const entryTemplate = document.querySelector("#entryTemplate");
 let draftSaveTimer = null;
 let deleteUndoTimer = null;
 let onboardingIndex = 0;
+let statusToastTimer = null;
 
 const ONBOARDING_STEPS = [
   "Type to begin.",
@@ -85,6 +87,10 @@ composerForm.addEventListener("submit", (event) => {
   event.preventDefault();
   submitComposer();
 });
+
+new MutationObserver(() => {
+  showStatusToast(composerHint.textContent.trim());
+}).observe(composerHint, { childList: true, characterData: true, subtree: true });
 
 closeSearchButton.addEventListener("click", () => {
   closeSearchMode();
@@ -220,6 +226,11 @@ function submitComposer() {
   const text = entryInput.value.trim();
   if (!text) {
     composerHint.textContent = "Empty";
+    return;
+  }
+
+  if (getInlineQuery()) {
+    composerHint.textContent = "Inline retrieval is active";
     return;
   }
 
@@ -790,17 +801,7 @@ function renderEntries(container, entries, options = {}) {
         tagChip.textContent = `#${tag}`;
         tagChip.addEventListener("click", (event) => {
           event.stopPropagation();
-          if (mode === "inline") {
-            applyInlineQueryToken(`#${tag}`);
-            return;
-          }
-          state.preset = null;
-          state.search = `#${tag}`;
-          openSearchMode();
-          searchInput.value = state.search;
-          composerHint.textContent = `Tag: #${tag}`;
-          render();
-          window.requestAnimationFrame(() => searchInput.focus());
+          openFocusedSearch(`#${tag}`, `Tag: #${tag}`);
         });
         tagsContainer.appendChild(tagChip);
       });
@@ -812,17 +813,7 @@ function renderEntries(container, entries, options = {}) {
         mentionChip.textContent = `@${mention}`;
         mentionChip.addEventListener("click", (event) => {
           event.stopPropagation();
-          if (mode === "inline") {
-            applyInlineQueryToken(`@${mention}`);
-            return;
-          }
-          state.preset = null;
-          state.search = `@${mention}`;
-          openSearchMode();
-          searchInput.value = state.search;
-          composerHint.textContent = `Mention: @${mention}`;
-          render();
-          window.requestAnimationFrame(() => searchInput.focus());
+          openFocusedSearch(`@${mention}`, `Mention: @${mention}`);
         });
         tagsContainer.appendChild(mentionChip);
       });
@@ -917,16 +908,6 @@ function clearInlineQuery() {
   render();
 }
 
-function applyInlineQueryToken(token) {
-  entryInput.value = `${token} //`;
-  entryInput.focus();
-  entryInput.setSelectionRange(entryInput.value.length, entryInput.value.length);
-  queueDraftSave();
-  updateWordCount();
-  renderEditorSuggestions();
-  render();
-}
-
 function indentSelection(mode) {
   const value = entryInput.value;
   const selectionStart = entryInput.selectionStart;
@@ -967,6 +948,16 @@ function indentSelection(mode) {
   queueDraftSave();
   updateWordCount();
   renderEditorSuggestions();
+}
+
+function openFocusedSearch(term, statusMessage) {
+  state.preset = null;
+  state.search = term;
+  openSearchMode();
+  searchInput.value = state.search;
+  composerHint.textContent = statusMessage;
+  render();
+  window.requestAnimationFrame(() => searchInput.focus());
 }
 
 function getOutdentOffset(line) {
@@ -1227,6 +1218,19 @@ function applyTheme(theme) {
     "aria-label",
     theme === "dark" ? "Switch to light mode" : "Switch to dark mode",
   );
+}
+
+function showStatusToast(message) {
+  if (!message || message === "Ready" || message === "Editing block -> save updates") {
+    return;
+  }
+
+  statusToast.textContent = message;
+  statusToast.hidden = false;
+  window.clearTimeout(statusToastTimer);
+  statusToastTimer = window.setTimeout(() => {
+    statusToast.hidden = true;
+  }, 1800);
 }
 
 function isYesterday(value) {

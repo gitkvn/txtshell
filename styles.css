@@ -273,6 +273,21 @@ kbd {
   box-shadow: 0 16px 36px rgba(23, 23, 23, 0.08);
 }
 
+.status-toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 30;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border: 1px solid rgba(23, 23, 23, 0.08);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--paper) 96%, transparent);
+  color: var(--ink);
+  box-shadow: 0 10px 26px rgba(23, 23, 23, 0.08);
+  font-size: 0.88rem;
+}
+
 .onboarding-step,
 .onboarding-text {
   margin: 0;
@@ -591,6 +606,11 @@ kbd {
   .onboarding-card {
     right: 14px;
     bottom: 70px;
+  }
+
+  .status-toast {
+    right: 14px;
+    bottom: 14px;
   }
 
   .command-bar {
