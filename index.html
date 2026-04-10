@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Txtshell</title>
+    <link rel="icon" type="image/svg+xml" href="./logo-shell.svg" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="topbar-actions">
+          <span id="wordCountDisplay" class="word-count-badge" hidden>0 words</span>
+          <button id="wordCountToggleButton" class="theme-toggle" type="button" aria-label="Show word count">⌨</button>
+          <button id="themeToggleButton" class="theme-toggle" type="button" aria-label="Toggle dark mode">☀</button>
+        </div>
+        <div class="topbar-status">
+          <time id="currentDateTime" class="current-datetime" aria-live="polite"></time>
+        </div>
+      </header>
+
+      <form id="composerForm" class="editor-wrap">
+        <label class="sr-only" for="entryInput">Type or paste</label>
+        <textarea
+          id="entryInput"
+          name="entryInput"
+          spellcheck="false"
+          autofocus
+          placeholder="Type or paste. ⌘/Ctrl + Enter saves. ⌘/Ctrl + Shift + Enter resumes."
+        ></textarea>
+        <section id="editorSuggestions" class="editor-suggestions" hidden aria-label="Editor suggestions"></section>
+        <section id="inlineResults" class="inline-results" hidden aria-live="polite"></section>
+      </form>
+
+      <section id="commandBar" class="command-bar" aria-live="polite">
+        <button class="upgrade-link" type="button">Upgrade to back up &amp; sync</button>
+        <span id="composerHint" class="composer-hint" hidden>Ready</span>
+        <div class="footer-actions">
+          <span id="savedCount" class="saved-count">Saved (0)</span>
+          <button id="shortcutsLink" class="more-link" type="button">Reference</button>
+        </div>
+      </section>
+
+      <aside id="onboardingCard" class="onboarding-card" hidden>
+        <p id="onboardingStep" class="onboarding-step">1 / 4</p>
+        <p id="onboardingText" class="onboarding-text">Type or paste anything here to start.</p>
+        <div class="onboarding-actions">
+          <button id="skipOnboardingButton" class="search-close" type="button">Skip</button>
+          <button id="nextOnboardingButton" class="undo-button" type="button">Next</button>
+        </div>
+      </aside>
+
+      <section id="searchMode" class="search-mode" hidden>
+        <div class="search-mode-header">
+          <p id="searchModeLabel" class="search-mode-label">Search saved blocks</p>
+          <div class="search-mode-actions">
+            <button id="searchUndoDeleteButton" class="undo-button" type="button" hidden>Undo delete</button>
+            <button id="closeSearchButton" class="search-close" type="button">Close</button>
+          </div>
+        </div>
+        <div class="search-mode-input-wrap">
+          <label id="searchInputLabel" class="sr-only" for="searchInput">Search saved blocks</label>
+          <input id="searchInput" class="search-input" type="search" placeholder="Search saved blocks" />
+          <section id="searchSuggestions" class="search-suggestions" hidden aria-label="Search suggestions"></section>
+        </div>
+        <section id="entryList" class="entry-list" aria-live="polite"></section>
+        <section id="quickReference" class="quick-reference" hidden>
+          <p><strong>Quick Retrieval</strong></p>
+          <p><code>term //</code> -> show matching blocks under the editor</p>
+          <p><code>#tag //</code> -> show blocks with that tag under the editor</p>
+          <p><code>@name //</code> -> show blocks with that mention under the editor</p>
+          <p><code>Esc</code> -> clear the inline retrieval view and return to composing</p>
+          <p><strong>Commands</strong></p>
+          <p><code>/re</code> -> reopen your most recent saved block in the editor</p>
+          <p><code>/y</code> -> show blocks saved yesterday</p>
+          <p><code>/w</code> -> show blocks saved during the last week</p>
+          <p><code>/q</code> -> open this help sheet</p>
+          <p><strong>Shortcuts</strong></p>
+          <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>H</kbd> -> open this reference sheet</p>
+          <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>K</kbd> -> open focused saved-block search</p>
+          <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Enter</kbd> -> save the current block</p>
+          <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Enter</kbd> -> reopen your most recent block in the editor</p>
+          <p><kbd>Esc</kbd> -> leave search and return to the editor</p>
+          <p><kbd>↑</kbd>/<kbd>↓</kbd> -> move through search results</p>
+          <p><kbd>Enter</kbd> -> expand or collapse the selected result</p>
+        </section>
+        <section class="search-shortcuts">
+          <span><kbd>↑</kbd>/<kbd>↓</kbd> -> move</span>
+          <span><kbd>Enter</kbd> -> expand</span>
+          <span><kbd>Esc</kbd> -> back</span>
+        </section>
+      </section>
+    </main>
+
+    <template id="entryTemplate">
+      <article class="entry-card collapsed">
+        <header class="entry-meta">
+          <span class="entry-timestamp"></span>
+          <div class="entry-actions">
+            <button class="edit-button" type="button" aria-label="Edit block" title="Edit block">
+              Edit
+            </button>
+            <button class="copy-button" type="button" aria-label="Copy block" title="Copy block">
+              Copy
+            </button>
+            <button class="delete-button" type="button" aria-label="Delete block" title="Delete block">
+              Delete
+            </button>
+          </div>
+        </header>
+        <pre class="entry-body"></pre>
+        <div class="entry-tags"></div>
+        <button class="expand-button" type="button" aria-expanded="false">Expand</button>
+      </article>
+    </template>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
