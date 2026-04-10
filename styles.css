@@ -275,17 +275,19 @@ kbd {
 
 .status-toast {
   position: fixed;
-  right: 20px;
-  bottom: 20px;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
   z-index: 30;
   max-width: min(320px, calc(100vw - 32px));
   padding: 10px 12px;
   border: 1px solid rgba(23, 23, 23, 0.08);
-  border-radius: 12px;
+  border-radius: 12px 12px 0 0;
   background: color-mix(in srgb, var(--paper) 96%, transparent);
   color: var(--ink);
-  box-shadow: 0 10px 26px rgba(23, 23, 23, 0.08);
+  box-shadow: 0 -4px 16px rgba(23, 23, 23, 0.06);
   font-size: 0.88rem;
+  text-align: center;
 }
 
 .onboarding-step,
