@@ -47,6 +47,7 @@ const searchModeLabel = document.querySelector("#searchModeLabel");
 const quickReference = document.querySelector("#quickReference");
 const savedCount = document.querySelector("#savedCount");
 const wordCountDisplay = document.querySelector("#wordCountDisplay");
+const exportButton = document.querySelector("#exportButton");
 const shortcutsLink = document.querySelector("#shortcutsLink");
 const searchUndoDeleteButton = document.querySelector("#searchUndoDeleteButton");
 const closeSearchButton = document.querySelector("#closeSearchButton");
@@ -106,6 +107,18 @@ shortcutsLink.addEventListener("click", () => {
   openSearchMode();
   composerHint.textContent = "Quick reference";
   render();
+});
+
+exportButton.addEventListener("click", (event) => {
+  if (!state.entries.length) {
+    composerHint.textContent = "Nothing to export";
+    return;
+  }
+  if (event.shiftKey) {
+    exportEntries("txt");
+  } else {
+    exportEntries("json");
+  }
 });
 
 searchUndoDeleteButton.addEventListener("click", () => {
@@ -1328,6 +1341,32 @@ function showHint(id, message) {
   window.setTimeout(() => {
     showStatusToast(message);
   }, HINT_DELAY);
+}
+
+function exportEntries(format) {
+  const timestamp = new Date().toISOString().slice(0, 10);
+  let content, filename, type;
+
+  if (format === "json") {
+    content = JSON.stringify(state.entries, null, 2);
+    filename = `txtshell-${timestamp}.json`;
+    type = "application/json";
+  } else {
+    content = state.entries
+      .map((entry) => `[${entry.createdAt}]\n${entry.text}`)
+      .join("\n\n---\n\n");
+    filename = `txtshell-${timestamp}.txt`;
+    type = "text/plain";
+  }
+
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+  composerHint.textContent = `Exported ${state.entries.length} blocks as ${format.toUpperCase()}`;
 }
 
 function isYesterday(value) {
