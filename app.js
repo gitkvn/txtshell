@@ -3,7 +3,6 @@ const DB_VERSION = 1;
 const ENTRY_STORE = "entries";
 const META_STORE = "meta";
 const DRAFT_KEY = "draft";
-const ONBOARDING_KEY = "txtshell-onboarding-complete-v1";
 const THEME_KEY = "txtshell-theme-v1";
 const WORD_COUNT_KEY = "txtshell-word-count-v1";
 
@@ -12,6 +11,9 @@ const RE_MENTIONS = /(^|\s)@([a-z0-9_-]+)/g;
 const RE_EDITOR_TOKEN = /(^|\s)([#@][a-z0-9_-]*)$/i;
 const RE_WHITESPACE = /\s+/;
 const RE_ESCAPE = /[.*+?^${}()|[\]\\]/g;
+
+const HINTS_KEY = "txtshell-hints-v1";
+const HINT_DELAY = 800;
 
 const DRAFT_SAVE_DELAY = 180;
 const DELETE_UNDO_TIMEOUT = 3000;
@@ -48,12 +50,7 @@ const wordCountDisplay = document.querySelector("#wordCountDisplay");
 const shortcutsLink = document.querySelector("#shortcutsLink");
 const searchUndoDeleteButton = document.querySelector("#searchUndoDeleteButton");
 const closeSearchButton = document.querySelector("#closeSearchButton");
-const onboardingCard = document.querySelector("#onboardingCard");
 const statusToast = document.querySelector("#statusToast");
-const onboardingStep = document.querySelector("#onboardingStep");
-const onboardingText = document.querySelector("#onboardingText");
-const nextOnboardingButton = document.querySelector("#nextOnboardingButton");
-const skipOnboardingButton = document.querySelector("#skipOnboardingButton");
 const wordCountToggleButton = document.querySelector("#wordCountToggleButton");
 const themeToggleButton = document.querySelector("#themeToggleButton");
 const composerHint = document.querySelector("#composerHint");
@@ -61,18 +58,10 @@ const currentDateTime = document.querySelector("#currentDateTime");
 const entryTemplate = document.querySelector("#entryTemplate");
 let draftSaveTimer = null;
 let deleteUndoTimer = null;
-let onboardingIndex = 0;
 let statusToastTimer = null;
 let inlineResultsTimer = null;
 
 const INLINE_RESULTS_DELAY = 150;
-
-const ONBOARDING_STEPS = [
-  "Type to begin.",
-  "Press Cmd/Ctrl + Enter to save a block.",
-  "Press Cmd/Ctrl + K to search your saved blocks.",
-  "Try /q for commands and shortcuts, or /re to reopen your latest block.",
-];
 
 window.addEventListener("load", () => {
   entryInput.focus();
@@ -121,14 +110,6 @@ shortcutsLink.addEventListener("click", () => {
 
 searchUndoDeleteButton.addEventListener("click", () => {
   undoDelete();
-});
-
-nextOnboardingButton.addEventListener("click", () => {
-  advanceOnboarding();
-});
-
-skipOnboardingButton.addEventListener("click", () => {
-  finishOnboarding();
 });
 
 const COUNT_MODES = ["off", "words", "chars", "lines"];
@@ -336,6 +317,14 @@ function submitComposer() {
   clearDraft();
   composerHint.textContent = "Saved";
   render();
+
+  if (state.entries.length === 1) {
+    showHint("first-save", "Press Cmd/Ctrl + K to search your saved blocks");
+  } else if (state.entries.length === 3) {
+    showHint("inline-retrieval", "Type a word then // to search inline without leaving the editor");
+  } else if (state.entries.length === 5) {
+    showHint("five-blocks", "Try /y for yesterday's blocks or /w for last week");
+  }
 }
 
 function handleGlobalShortcut(event) {
@@ -412,6 +401,9 @@ function openSearchMode() {
   const isPresetMode = Boolean(state.preset);
   searchInput.hidden = isPresetMode;
   searchInputLabel.hidden = isPresetMode;
+  if (!isPresetMode) {
+    showHint("first-search", "Try #tag or @name to filter by tags and mentions");
+  }
 }
 
 function closeSearchMode() {
@@ -441,6 +433,7 @@ function reopenEntryInEditor(entryId) {
   composerHint.textContent = "Editing block -> save updates";
   entryInput.focus();
   entryInput.setSelectionRange(entryInput.value.length, entryInput.value.length);
+  showHint("edit-mode", "Press Esc to cancel editing");
 }
 
 function updateClock() {
@@ -482,7 +475,6 @@ async function initialize() {
   } catch {
     composerHint.textContent = "Storage unavailable";
   }
-  maybeShowOnboarding();
   render();
 }
 
@@ -737,39 +729,6 @@ function clearPendingDelete() {
   window.clearTimeout(deleteUndoTimer);
   deleteUndoTimer = null;
   state.pendingDeletedEntry = null;
-}
-
-function maybeShowOnboarding() {
-  const completed = window.localStorage.getItem(ONBOARDING_KEY) === "true";
-  if (completed) {
-    onboardingCard.hidden = true;
-    return;
-  }
-
-  onboardingCard.hidden = false;
-  onboardingIndex = 0;
-  renderOnboarding();
-}
-
-function advanceOnboarding() {
-  if (onboardingIndex >= ONBOARDING_STEPS.length - 1) {
-    finishOnboarding();
-    return;
-  }
-
-  onboardingIndex += 1;
-  renderOnboarding();
-}
-
-function renderOnboarding() {
-  onboardingStep.textContent = `${onboardingIndex + 1} / ${ONBOARDING_STEPS.length}`;
-  onboardingText.textContent = ONBOARDING_STEPS[onboardingIndex];
-  nextOnboardingButton.textContent = onboardingIndex === ONBOARDING_STEPS.length - 1 ? "Done" : "Next";
-}
-
-function finishOnboarding() {
-  window.localStorage.setItem(ONBOARDING_KEY, "true");
-  onboardingCard.hidden = true;
 }
 
 function getSearchModeLabel(count) {
@@ -1343,6 +1302,32 @@ function showStatusToast(message) {
   statusToastTimer = window.setTimeout(() => {
     statusToast.classList.remove("is-visible");
   }, TOAST_DURATION);
+}
+
+function getShownHints() {
+  try {
+    return JSON.parse(window.localStorage.getItem(HINTS_KEY)) || [];
+  } catch {
+    return [];
+  }
+}
+
+function markHintShown(id) {
+  const shown = getShownHints();
+  if (!shown.includes(id)) {
+    shown.push(id);
+    window.localStorage.setItem(HINTS_KEY, JSON.stringify(shown));
+  }
+}
+
+function showHint(id, message) {
+  if (getShownHints().includes(id)) {
+    return;
+  }
+  markHintShown(id);
+  window.setTimeout(() => {
+    showStatusToast(message);
+  }, HINT_DELAY);
 }
 
 function isYesterday(value) {

@@ -248,19 +248,6 @@ kbd {
   box-shadow: 0 1px 0 rgba(23, 23, 23, 0.03);
 }
 
-.onboarding-card {
-  position: fixed;
-  right: 20px;
-  bottom: 76px;
-  z-index: 15;
-  width: min(320px, calc(100vw - 32px));
-  padding: 14px 16px;
-  border: 1px solid rgba(23, 23, 23, 0.08);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--paper) 96%, transparent);
-  box-shadow: 0 16px 36px rgba(23, 23, 23, 0.08);
-}
-
 .status-toast {
   position: fixed;
   left: 50%;
@@ -285,28 +272,6 @@ kbd {
   transform: translateX(-50%) translateY(0);
   opacity: 1;
   pointer-events: auto;
-}
-
-.onboarding-step,
-.onboarding-text {
-  margin: 0;
-}
-
-.onboarding-step {
-  color: var(--muted);
-  font-size: 0.8rem;
-  margin-bottom: 8px;
-}
-
-.onboarding-text {
-  line-height: 1.45;
-}
-
-.onboarding-actions {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 12px;
 }
 
 .search-mode {
@@ -615,11 +580,6 @@ kbd {
     align-items: flex-start;
     gap: 10px;
     flex-direction: column;
-  }
-
-  .onboarding-card {
-    right: 14px;
-    bottom: 70px;
   }
 
   .status-toast {
