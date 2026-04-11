@@ -749,6 +749,122 @@ kbd {
   50% { opacity: 1; }
 }
 
+.interest-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.interest-overlay[hidden] {
+  display: none;
+}
+
+.interest-backdrop {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+}
+
+.interest-card {
+  position: relative;
+  width: min(380px, 100%);
+  padding: 26px 26px 22px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 8px 32px rgba(23, 23, 23, 0.08);
+  font-family: var(--font-sans);
+}
+
+.interest-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 10px;
+  color: var(--ink);
+}
+
+.interest-subtitle {
+  font-size: 0.88rem;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0 0 18px;
+}
+
+.interest-input {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 11px 13px;
+  outline: none;
+  font-size: 0.92rem;
+  font-family: var(--font-sans);
+  margin-bottom: 10px;
+}
+
+.interest-input:focus {
+  border-color: var(--accent);
+}
+
+.interest-input::placeholder {
+  color: #9a948a;
+}
+
+.interest-error {
+  font-size: 0.8rem;
+  color: #d1242f;
+  margin: 0 0 10px;
+}
+
+.interest-submit {
+  width: 100%;
+  padding: 11px;
+  border: none;
+  border-radius: 10px;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 0.9rem;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.interest-submit:hover,
+.interest-submit:focus-visible {
+  opacity: 0.88;
+  outline: none;
+}
+
+.interest-submit:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.interest-skip {
+  display: block;
+  width: 100%;
+  text-align: center;
+  margin-top: 10px;
+  font-size: 0.82rem;
+  color: var(--muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  font-family: var(--font-sans);
+  padding: 6px 0;
+}
+
+.interest-skip:hover,
+.interest-skip:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
 @media (max-width: 700px) {
   .topbar,
   .command-bar,

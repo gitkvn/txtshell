@@ -41,7 +41,7 @@
       </form>
 
       <section id="commandBar" class="command-bar" aria-live="polite">
-        <button class="upgrade-link" type="button">Upgrade to back up &amp; sync</button>
+        <button id="upgradeLink" class="upgrade-link" type="button">Upgrade to back up &amp; sync</button>
         <span id="composerHint" class="composer-hint" hidden>Ready</span>
         <div class="footer-actions">
           <span id="savedCount" class="saved-count">Saved (0)</span>
@@ -51,6 +51,39 @@
       </section>
 
       <aside id="statusToast" class="status-toast" aria-live="polite"></aside>
+
+      <section id="interestOverlay" class="interest-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="interestTitle">
+        <div id="interestBackdrop" class="interest-backdrop"></div>
+        <div class="interest-card">
+          <form id="interestForm" class="interest-form">
+            <p id="interestTitle" class="interest-title">Back up &amp; sync isn't built yet</p>
+            <p class="interest-subtitle">
+              This feature doesn't exist today. If enough people want it, it gets built.
+              Leave your email below to register interest — you'll only hear back once, if the feature ships.
+              No newsletter, no other emails.
+            </p>
+            <label class="sr-only" for="interestEmail">Email (optional)</label>
+            <input
+              id="interestEmail"
+              class="interest-input"
+              type="email"
+              placeholder="you@example.com (optional)"
+              autocomplete="email"
+              spellcheck="false"
+            />
+            <p id="interestError" class="interest-error" hidden></p>
+            <button class="interest-submit" type="submit">Register interest</button>
+            <button id="interestSkipButton" class="interest-skip" type="button">No thanks</button>
+          </form>
+          <div id="interestThanks" class="interest-thanks" hidden>
+            <p class="interest-title">Got it — interest noted.</p>
+            <p class="interest-subtitle">
+              You'll only hear back once, if the feature ships. Thanks for the signal.
+            </p>
+            <button id="interestDoneButton" class="interest-submit" type="button">Close</button>
+          </div>
+        </div>
+      </section>
 
       <section id="searchMode" class="search-mode" hidden>
         <div class="search-mode-header">

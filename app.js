@@ -23,6 +23,13 @@ const RE_ESCAPE = /[.*+?^${}()|[\]\\]/g;
 const HINTS_KEY = "txtshell-hints-v1";
 const HINT_DELAY = 800;
 
+const INTEREST_KEY = "txtshell-interest-v1";
+// Formspree endpoint — accepts a JSON POST of { email, clickedAt, userAgent, referrer }.
+// Any response is ignored. Set to null to record interest only in the visitor's own
+// localStorage (per-device, no aggregation).
+const INTEREST_ENDPOINT = "https://formspree.io/f/meepyaww";
+const RE_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 const DRAFT_SAVE_DELAY = 180;
 const DELETE_UNDO_TIMEOUT = 5000;
 const COPY_FLASH_DURATION = 900;
@@ -75,6 +82,15 @@ const currentDateTime = document.querySelector("#currentDateTime");
 const entryTemplate = document.querySelector("#entryTemplate");
 const vaultOverlay = document.querySelector("#vaultOverlay");
 const lockButton = document.querySelector("#lockButton");
+const upgradeLink = document.querySelector("#upgradeLink");
+const interestOverlay = document.querySelector("#interestOverlay");
+const interestBackdrop = document.querySelector("#interestBackdrop");
+const interestForm = document.querySelector("#interestForm");
+const interestThanks = document.querySelector("#interestThanks");
+const interestEmailInput = document.querySelector("#interestEmail");
+const interestErrorEl = document.querySelector("#interestError");
+const interestSkipButton = document.querySelector("#interestSkipButton");
+const interestDoneButton = document.querySelector("#interestDoneButton");
 function setEditorValue(value) {
   entryInput.value = value;
   updateWordCount();
@@ -115,7 +131,11 @@ window.addEventListener("pointerdown", (event) => {
     return;
   }
 
-  if (target.closest("#searchMode, .copy-button, #searchInput, #editorSuggestions, #vaultOverlay, #lockButton")) {
+  if (target.closest("#searchMode, .copy-button, #searchInput, #editorSuggestions, #vaultOverlay, #lockButton, #interestOverlay")) {
+    return;
+  }
+
+  if (!interestOverlay.hidden) {
     return;
   }
 
@@ -141,6 +161,70 @@ shortcutsLink.addEventListener("click", () => {
   openSearchMode();
   composerHint.textContent = "Quick reference";
   render();
+});
+
+upgradeLink.addEventListener("click", () => {
+  openInterestCard();
+});
+
+interestForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const email = interestEmailInput.value.trim();
+  if (email && !RE_EMAIL.test(email)) {
+    interestErrorEl.textContent = "That doesn't look like a valid email.";
+    interestErrorEl.hidden = false;
+    interestEmailInput.focus();
+    return;
+  }
+  interestErrorEl.hidden = true;
+  interestErrorEl.textContent = "";
+
+  const submitButton = interestForm.querySelector(".interest-submit");
+  submitButton.disabled = true;
+
+  const record = {
+    email: email || null,
+    clickedAt: new Date().toISOString(),
+    userAgent: navigator.userAgent,
+    referrer: document.referrer || null,
+  };
+
+  try {
+    window.localStorage.setItem(INTEREST_KEY, JSON.stringify(record));
+  } catch {
+    // localStorage may be unavailable (private mode); submission still proceeds
+  }
+
+  if (INTEREST_ENDPOINT) {
+    try {
+      await fetch(INTEREST_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(record),
+        keepalive: true,
+      });
+    } catch {
+      // silent — local record still counts as a signal
+    }
+  }
+
+  submitButton.disabled = false;
+  showInterestThanks();
+});
+
+interestSkipButton.addEventListener("click", () => {
+  closeInterestCard();
+});
+
+interestDoneButton.addEventListener("click", () => {
+  closeInterestCard();
+});
+
+interestBackdrop.addEventListener("click", () => {
+  closeInterestCard();
 });
 
 exportButton.addEventListener("click", (event) => {
@@ -201,6 +285,12 @@ searchInput.addEventListener("keydown", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") {
     handleGlobalShortcut(event);
+    return;
+  }
+
+  if (!interestOverlay.hidden) {
+    event.preventDefault();
+    closeInterestCard();
     return;
   }
 
@@ -1523,6 +1613,51 @@ function showStatusToast(message, options = {}) {
   statusToastTimer = window.setTimeout(() => {
     statusToast.classList.remove("is-visible", "is-hint");
   }, duration);
+}
+
+function openInterestCard() {
+  let alreadyRegistered = false;
+  try {
+    alreadyRegistered = Boolean(window.localStorage.getItem(INTEREST_KEY));
+  } catch {
+    alreadyRegistered = false;
+  }
+
+  if (alreadyRegistered) {
+    showInterestThanks();
+  } else {
+    showInterestForm();
+  }
+
+  interestOverlay.hidden = false;
+
+  window.requestAnimationFrame(() => {
+    if (alreadyRegistered) {
+      interestDoneButton.focus();
+    } else {
+      interestEmailInput.focus();
+    }
+  });
+}
+
+function closeInterestCard() {
+  interestOverlay.hidden = true;
+  interestErrorEl.hidden = true;
+  interestErrorEl.textContent = "";
+  interestEmailInput.value = "";
+  if (!state.vaultView) {
+    entryInput.focus();
+  }
+}
+
+function showInterestForm() {
+  interestForm.hidden = false;
+  interestThanks.hidden = true;
+}
+
+function showInterestThanks() {
+  interestForm.hidden = true;
+  interestThanks.hidden = false;
 }
 
 function getShownHints() {
