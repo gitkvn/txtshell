@@ -421,7 +421,8 @@ kbd {
 
 .copy-button,
 .delete-button,
-.edit-button {
+.edit-button,
+.pin-button {
   border: 0;
   background: transparent;
   color: var(--muted);
@@ -436,9 +437,15 @@ kbd {
 .edit-button:hover,
 .edit-button:focus-visible,
 .delete-button:hover,
-.delete-button:focus-visible {
+.delete-button:focus-visible,
+.pin-button:hover,
+.pin-button:focus-visible {
   color: var(--accent);
   outline: none;
+}
+
+.pin-button[aria-pressed="true"] {
+  color: var(--accent);
 }
 
 .delete-button.is-confirming {

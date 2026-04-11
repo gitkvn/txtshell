@@ -231,6 +231,12 @@ entryInput.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (event.key === "Enter" && entryInput.value.trim() === "/pin") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
     submitComposer();
@@ -307,6 +313,17 @@ function submitComposer() {
     return;
   }
 
+  if (text === "/pin") {
+    state.search = "";
+    state.preset = "pinned";
+    openSearchMode();
+    setEditorValue("");
+    clearDraft();
+    composerHint.textContent = "Pinned";
+    render();
+    return;
+  }
+
   if (state.editingEntryId) {
     const existingEntry = state.entries.find((entry) => entry.id === state.editingEntryId);
     if (!existingEntry) {
@@ -331,6 +348,7 @@ function submitComposer() {
     tags: extractTags(text),
     mentions: extractMentions(text),
     createdAt: new Date().toISOString(),
+    pinned: false,
   };
   state.entries.unshift(entry);
   saveEntry(entry);
@@ -489,6 +507,7 @@ async function initialize() {
       ...entry,
       tags: Array.isArray(entry.tags) ? entry.tags : extractTags(entry.text),
       mentions: Array.isArray(entry.mentions) ? entry.mentions : extractMentions(entry.text),
+      pinned: entry.pinned === true,
     }));
     const draft = await getMeta(DRAFT_KEY);
     if (draft) {
@@ -598,6 +617,9 @@ function getEntriesForQuery({ preset = null, search = "" } = {}) {
     }
     if (preset === "week") {
       return isLastWeek(entry.createdAt);
+    }
+    if (preset === "pinned") {
+      return entry.pinned === true;
     }
     if (preset === "recent") {
       return entry.id === state.entries[0]?.id;
@@ -768,6 +790,9 @@ function getSearchModeLabel(count) {
   if (state.preset === "week") {
     return `Last week${suffix}`;
   }
+  if (state.preset === "pinned") {
+    return `Pinned${suffix}`;
+  }
   if (state.search) {
     return `Results${suffix}`;
   }
@@ -932,6 +957,26 @@ function renderEntries(container, entries, options = {}) {
         });
       }
     }
+
+    const pinButton = fragment.querySelector(".pin-button");
+    const applyPinState = () => {
+      const isPinned = entry.pinned === true;
+      pinButton.textContent = isPinned ? "★" : "☆";
+      pinButton.setAttribute("aria-pressed", String(isPinned));
+      pinButton.setAttribute("aria-label", isPinned ? "Unpin block" : "Pin block");
+      pinButton.setAttribute("title", isPinned ? "Unpin block" : "Pin block");
+    };
+    applyPinState();
+    pinButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      entry.pinned = !entry.pinned;
+      saveEntry(entry);
+      applyPinState();
+      composerHint.textContent = entry.pinned ? "Pinned" : "Unpinned";
+      if (state.preset === "pinned") {
+        render();
+      }
+    });
 
     fragment.querySelector(".copy-button").addEventListener("click", async (event) => {
       event.stopPropagation();
