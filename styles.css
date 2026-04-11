@@ -593,6 +593,10 @@ kbd {
   background: color-mix(in srgb, var(--bg) 92%, transparent);
 }
 
+.vault-overlay[hidden] {
+  display: none;
+}
+
 .vault-card {
   width: min(360px, 100%);
   padding: 28px 24px;
