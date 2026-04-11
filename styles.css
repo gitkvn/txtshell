@@ -111,6 +111,7 @@ button {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 #entryInput {
@@ -574,6 +575,174 @@ kbd {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+.lock-toggle[data-state="locked"],
+.lock-toggle[data-state="unlocked"] {
+  color: var(--accent);
+}
+
+.vault-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 5;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+}
+
+.vault-card {
+  width: min(360px, 100%);
+  padding: 28px 24px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 8px 32px rgba(23, 23, 23, 0.06);
+  font-family: var(--font-sans);
+}
+
+.vault-icon {
+  display: block;
+  margin: 0 auto 16px;
+  color: var(--muted);
+}
+
+.vault-title {
+  font-size: 1rem;
+  font-weight: 500;
+  text-align: center;
+  margin: 0 0 4px;
+  color: var(--ink);
+}
+
+.vault-subtitle {
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-align: center;
+  margin: 0 0 20px;
+  line-height: 1.45;
+}
+
+.vault-input {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 12px 14px;
+  outline: none;
+  font-size: 0.95rem;
+  font-family: var(--font-mono);
+  margin-bottom: 12px;
+  text-align: center;
+  letter-spacing: 0.15em;
+}
+
+.vault-input:focus {
+  border-color: var(--accent);
+}
+
+.vault-input::placeholder {
+  letter-spacing: normal;
+  font-family: var(--font-sans);
+  color: #9a948a;
+}
+
+.vault-button {
+  width: 100%;
+  padding: 11px;
+  border: none;
+  border-radius: 10px;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 0.9rem;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.vault-button:hover,
+.vault-button:focus-visible {
+  opacity: 0.88;
+  outline: none;
+}
+
+.vault-button.secondary {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--line);
+  margin-top: 8px;
+}
+
+.vault-link {
+  display: block;
+  text-align: center;
+  margin-top: 14px;
+  font-size: 0.82rem;
+  color: var(--muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  width: 100%;
+  font-family: var(--font-sans);
+  padding: 4px 0;
+}
+
+.vault-link:hover,
+.vault-link:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
+.recovery-key {
+  background: var(--bg);
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 16px;
+  text-align: center;
+}
+
+.recovery-key code {
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  word-break: break-all;
+  line-height: 1.6;
+  color: var(--ink);
+}
+
+.recovery-warning {
+  font-size: 0.8rem;
+  color: #d1242f;
+  text-align: center;
+  margin: 0 0 16px;
+  line-height: 1.45;
+}
+
+.vault-error {
+  font-size: 0.82rem;
+  color: #d1242f;
+  text-align: center;
+  margin: 0 0 12px;
+}
+
+.encrypting-status {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.88rem;
+  padding: 12px 0;
+}
+
+.encrypting-status .dot {
+  display: inline-block;
+  animation: vault-pulse 1.2s infinite;
+}
+
+@keyframes vault-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
 }
 
 @media (max-width: 700px) {

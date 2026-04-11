@@ -6,6 +6,14 @@ const DRAFT_KEY = "draft";
 const THEME_KEY = "txtshell-theme-v1";
 const WORD_COUNT_KEY = "txtshell-word-count-v1";
 
+const ENC_SALT_PASS_KEY = "enc-salt-pass";
+const ENC_SALT_RECOVERY_KEY = "enc-salt-recovery";
+const ENC_WRAPPED_PASS_KEY = "enc-wrapped-pass";
+const ENC_WRAPPED_RECOVERY_KEY = "enc-wrapped-recovery";
+const ENC_VERIFY_KEY = "enc-verify";
+const ENC_VERIFY_PLAINTEXT = "txtshell-verify-v1";
+const PBKDF2_ITERATIONS = 100000;
+
 const RE_TAGS = /(^|\s)#([a-z0-9_-]+)/g;
 const RE_MENTIONS = /(^|\s)@([a-z0-9_-]+)/g;
 const RE_EDITOR_TOKEN = /(^|\s)([#@][a-z0-9_-]*)$/i;
@@ -35,6 +43,13 @@ const state = {
   pendingDeletedEntry: null,
   selectedSuggestionIndex: 0,
   editorSelectedSuggestionIndex: 0,
+  encryption: {
+    enabled: false,
+    unlocked: false,
+    masterKey: null,
+  },
+  vaultView: null,
+  vaultPending: null,
 };
 
 const composerForm = document.querySelector("#composerForm");
@@ -60,6 +75,8 @@ const themeToggleButton = document.querySelector("#themeToggleButton");
 const composerHint = document.querySelector("#composerHint");
 const currentDateTime = document.querySelector("#currentDateTime");
 const entryTemplate = document.querySelector("#entryTemplate");
+const vaultOverlay = document.querySelector("#vaultOverlay");
+const lockButton = document.querySelector("#lockButton");
 function setEditorValue(value) {
   entryInput.value = value;
   updateWordCount();
@@ -73,14 +90,21 @@ let inlineResultsTimer = null;
 const INLINE_RESULTS_DELAY = 150;
 
 window.addEventListener("load", () => {
+  if (state.vaultView) {
+    return;
+  }
   entryInput.focus();
   entryInput.setSelectionRange(entryInput.value.length, entryInput.value.length);
 });
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) {
-    entryInput.focus();
+  if (document.hidden) {
+    return;
   }
+  if (state.vaultView) {
+    return;
+  }
+  entryInput.focus();
 });
 
 window.addEventListener("pointerdown", (event) => {
@@ -89,7 +113,11 @@ window.addEventListener("pointerdown", (event) => {
     return;
   }
 
-  if (target.closest("#searchMode, .copy-button, #searchInput, #editorSuggestions")) {
+  if (state.vaultView) {
+    return;
+  }
+
+  if (target.closest("#searchMode, .copy-button, #searchInput, #editorSuggestions, #vaultOverlay, #lockButton")) {
     return;
   }
 
@@ -144,6 +172,16 @@ wordCountToggleButton.addEventListener("click", () => {
 themeToggleButton.addEventListener("click", () => {
   const nextTheme = document.body.dataset.theme === "dark" ? "light" : "dark";
   applyTheme(nextTheme);
+});
+
+lockButton.addEventListener("click", () => {
+  if (!state.encryption.enabled) {
+    return;
+  }
+  if (!state.encryption.unlocked) {
+    return;
+  }
+  lockVault();
 });
 
 searchInput.addEventListener("input", (event) => {
@@ -237,6 +275,30 @@ entryInput.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (event.key === "Enter" && entryInput.value.trim() === "/encrypt") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
+  if (event.key === "Enter" && entryInput.value.trim() === "/encrypt change") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
+  if (event.key === "Enter" && entryInput.value.trim() === "/encrypt off") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
+  if (event.key === "Enter" && entryInput.value.trim() === "/lock") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
     submitComposer();
@@ -264,6 +326,10 @@ applyCountMode(
 initialize();
 
 function submitComposer() {
+  if (isVaultLocked()) {
+    return;
+  }
+
   const text = entryInput.value.trim();
   if (!text) {
     composerHint.textContent = "Block cannot be saved empty";
@@ -324,6 +390,57 @@ function submitComposer() {
     return;
   }
 
+  if (text === "/encrypt") {
+    if (state.encryption.enabled) {
+      composerHint.textContent = "Encryption already on";
+      return;
+    }
+    setEditorValue("");
+    clearDraft();
+    state.vaultPending = null;
+    state.vaultView = "setup";
+    renderVault();
+    composerHint.textContent = "Set up encryption";
+    return;
+  }
+
+  if (text === "/encrypt change") {
+    if (!state.encryption.enabled) {
+      composerHint.textContent = "Encryption not enabled";
+      return;
+    }
+    setEditorValue("");
+    clearDraft();
+    state.vaultPending = null;
+    state.vaultView = "change-current";
+    renderVault();
+    composerHint.textContent = "Change passphrase";
+    return;
+  }
+
+  if (text === "/encrypt off") {
+    if (!state.encryption.enabled) {
+      composerHint.textContent = "Encryption not enabled";
+      return;
+    }
+    setEditorValue("");
+    clearDraft();
+    state.vaultPending = null;
+    state.vaultView = "disable-confirm";
+    renderVault();
+    composerHint.textContent = "Disable encryption";
+    return;
+  }
+
+  if (text === "/lock") {
+    if (!state.encryption.enabled) {
+      composerHint.textContent = "Encryption not enabled";
+      return;
+    }
+    lockVault();
+    return;
+  }
+
   if (state.editingEntryId) {
     const existingEntry = state.entries.find((entry) => entry.id === state.editingEntryId);
     if (!existingEntry) {
@@ -367,6 +484,10 @@ function submitComposer() {
 }
 
 function handleGlobalShortcut(event) {
+  if (isVaultLocked()) {
+    return;
+  }
+
   const isModifier = event.metaKey || event.ctrlKey;
   if (!isModifier) {
     return;
@@ -502,6 +623,17 @@ function formatTimestamp(value) {
 async function initialize() {
   try {
     state.db = await openDatabase();
+    const saltPassBase64 = await getMeta(ENC_SALT_PASS_KEY);
+    state.encryption.enabled = Boolean(saltPassBase64);
+
+    if (state.encryption.enabled) {
+      state.vaultView = "unlock";
+      renderVault();
+      updateLockButton();
+      render();
+      return;
+    }
+
     state.entries = await getAllEntries();
     state.entries = state.entries.map((entry) => ({
       ...entry,
@@ -518,11 +650,15 @@ async function initialize() {
   } catch {
     composerHint.textContent = "Storage unavailable";
   }
+  updateLockButton();
   render();
 }
 
 function queueDraftSave() {
   window.clearTimeout(draftSaveTimer);
+  if (state.encryption.enabled) {
+    return;
+  }
   draftSaveTimer = window.setTimeout(() => {
     saveMeta(DRAFT_KEY, entryInput.value);
   }, DRAFT_SAVE_DELAY);
@@ -570,12 +706,31 @@ function getAllEntries() {
   });
 }
 
-function saveEntry(entry) {
+async function saveEntry(entry) {
   if (!state.db) {
     return;
   }
-  const transaction = state.db.transaction(ENTRY_STORE, "readwrite");
-  transaction.objectStore(ENTRY_STORE).put(entry);
+  let record = entry;
+  if (state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey) {
+    record = {
+      id: entry.id,
+      text: await encryptPlaintext(entry.text, state.encryption.masterKey),
+      tags: [],
+      mentions: [],
+      createdAt: entry.createdAt,
+      pinned: entry.pinned === true,
+    };
+  }
+  await putEntryRecord(record);
+}
+
+function putEntryRecord(record) {
+  return new Promise((resolve, reject) => {
+    const transaction = state.db.transaction(ENTRY_STORE, "readwrite");
+    transaction.objectStore(ENTRY_STORE).put(record);
+    transaction.addEventListener("complete", () => resolve());
+    transaction.addEventListener("error", () => reject(transaction.error));
+  });
 }
 
 function deleteEntry(entryId) {
@@ -1487,8 +1642,707 @@ function getMeta(key) {
 
 function saveMeta(key, value) {
   if (!state.db) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const transaction = state.db.transaction(META_STORE, "readwrite");
+    transaction.objectStore(META_STORE).put({ key, value });
+    transaction.addEventListener("complete", () => resolve());
+    transaction.addEventListener("error", () => reject(transaction.error));
+  });
+}
+
+function deleteMeta(key) {
+  if (!state.db) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const transaction = state.db.transaction(META_STORE, "readwrite");
+    transaction.objectStore(META_STORE).delete(key);
+    transaction.addEventListener("complete", () => resolve());
+    transaction.addEventListener("error", () => reject(transaction.error));
+  });
+}
+
+function isVaultLocked() {
+  return state.encryption.enabled && !state.encryption.unlocked;
+}
+
+function randomBytes(length) {
+  return crypto.getRandomValues(new Uint8Array(length));
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return window.btoa(binary);
+}
+
+function base64ToBytes(value) {
+  const binary = window.atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function combineIvAndData(iv, data) {
+  const combined = new Uint8Array(iv.length + data.length);
+  combined.set(iv, 0);
+  combined.set(data, iv.length);
+  return combined;
+}
+
+async function deriveWrappingKey(passphrase, saltBytes) {
+  const material = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(passphrase),
+    { name: "PBKDF2" },
+    false,
+    ["deriveKey"],
+  );
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: saltBytes, iterations: PBKDF2_ITERATIONS, hash: "SHA-256" },
+    material,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+
+async function generateMasterKey() {
+  return crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"],
+  );
+}
+
+async function wrapMasterKey(masterKey, wrappingKey) {
+  const rawMaster = await crypto.subtle.exportKey("raw", masterKey);
+  const iv = randomBytes(12);
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    wrappingKey,
+    rawMaster,
+  );
+  return bytesToBase64(combineIvAndData(iv, new Uint8Array(ciphertext)));
+}
+
+async function unwrapMasterKey(base64, wrappingKey) {
+  const combined = base64ToBytes(base64);
+  const iv = combined.slice(0, 12);
+  const ciphertext = combined.slice(12);
+  const rawMaster = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv },
+    wrappingKey,
+    ciphertext,
+  );
+  return crypto.subtle.importKey(
+    "raw",
+    rawMaster,
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"],
+  );
+}
+
+async function encryptPlaintext(plaintext, masterKey) {
+  const iv = randomBytes(12);
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    masterKey,
+    new TextEncoder().encode(plaintext),
+  );
+  return bytesToBase64(combineIvAndData(iv, new Uint8Array(ciphertext)));
+}
+
+async function decryptCiphertext(base64, masterKey) {
+  const combined = base64ToBytes(base64);
+  const iv = combined.slice(0, 12);
+  const ciphertext = combined.slice(12);
+  const plainBytes = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv },
+    masterKey,
+    ciphertext,
+  );
+  return new TextDecoder().decode(plainBytes);
+}
+
+function generateRecoveryKey() {
+  const bytes = randomBytes(16);
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `rk-${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+async function verifyMasterKey(masterKey) {
+  const verifyBase64 = await getMeta(ENC_VERIFY_KEY);
+  if (!verifyBase64) {
+    return true;
+  }
+  const plaintext = await decryptCiphertext(verifyBase64, masterKey);
+  return plaintext === ENC_VERIFY_PLAINTEXT;
+}
+
+async function decryptAllEntriesIntoState() {
+  const raw = await getAllEntries();
+  const decrypted = [];
+  for (const record of raw) {
+    try {
+      const text = await decryptCiphertext(record.text, state.encryption.masterKey);
+      decrypted.push({
+        id: record.id,
+        text,
+        tags: extractTags(text),
+        mentions: extractMentions(text),
+        createdAt: record.createdAt,
+        pinned: record.pinned === true,
+      });
+    } catch (error) {
+      console.error("Failed to decrypt entry", record.id, error);
+    }
+  }
+  decrypted.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  state.entries = decrypted;
+}
+
+function updateLockButton() {
+  if (!lockButton) {
     return;
   }
-  const transaction = state.db.transaction(META_STORE, "readwrite");
-  transaction.objectStore(META_STORE).put({ key, value });
+  if (!state.encryption.enabled) {
+    lockButton.hidden = true;
+    lockButton.removeAttribute("data-state");
+    return;
+  }
+  lockButton.hidden = false;
+  const locked = !state.encryption.unlocked;
+  lockButton.dataset.state = locked ? "locked" : "unlocked";
+  lockButton.setAttribute("aria-label", locked ? "Vault locked" : "Lock vault");
+  lockButton.setAttribute("title", locked ? "Vault locked" : "Lock vault");
+  const shackle = lockButton.querySelector(".lock-shackle");
+  if (shackle) {
+    shackle.setAttribute(
+      "d",
+      locked ? "M6 8V5.5a3 3 0 0 1 6 0V8" : "M12 8V5.5a3 3 0 0 0-6 0",
+    );
+  }
+}
+
+function lockVault() {
+  state.encryption.unlocked = false;
+  state.encryption.masterKey = null;
+  state.entries = [];
+  state.search = "";
+  state.preset = null;
+  state.selectedEntryId = null;
+  state.editingEntryId = null;
+  state.pendingDeletedEntry = null;
+  setEditorValue("");
+  clearDraft();
+  if (state.searchMode) {
+    closeSearchMode();
+  }
+  state.vaultView = "unlock";
+  state.vaultPending = null;
+  renderVault();
+  updateLockButton();
+  composerHint.textContent = "Vault locked";
+  render();
+}
+
+function renderVault() {
+  const view = state.vaultView;
+  if (!view) {
+    vaultOverlay.hidden = true;
+    vaultOverlay.innerHTML = "";
+    entryInput.disabled = false;
+    return;
+  }
+
+  vaultOverlay.hidden = false;
+  entryInput.disabled = true;
+
+  if (view === "setup") {
+    renderSetupCard();
+  } else if (view === "recovery-display") {
+    renderRecoveryDisplayCard();
+  } else if (view === "encrypting") {
+    renderEncryptingCard("Encrypting your blocks");
+  } else if (view === "decrypting") {
+    renderEncryptingCard("Decrypting your blocks");
+  } else if (view === "unlock") {
+    renderUnlockCard(false);
+  } else if (view === "unlock-recovery") {
+    renderUnlockCard(true);
+  } else if (view === "change-current") {
+    renderPassphraseConfirmCard({
+      title: "Change passphrase",
+      subtitle: "Enter your current passphrase to continue.",
+      buttonText: "Continue",
+      onSubmit: handleChangeCurrentSubmit,
+      onCancel: exitVaultToNormal,
+    });
+  } else if (view === "change-new") {
+    renderSetupCard({
+      title: "New passphrase",
+      subtitle: "Choose a new passphrase. You will still be able to unlock with your existing recovery key.",
+      buttonText: "Save new passphrase",
+      skipRecovery: true,
+      onSubmit: handleChangeNewSubmit,
+      onCancel: exitVaultToNormal,
+    });
+  } else if (view === "disable-confirm") {
+    renderPassphraseConfirmCard({
+      title: "Turn off encryption",
+      subtitle: "Enter your passphrase. Your blocks will be restored to plaintext in local storage.",
+      buttonText: "Turn off encryption",
+      onSubmit: handleDisableSubmit,
+      onCancel: exitVaultToNormal,
+    });
+  }
+}
+
+const LOCK_ICON_SVG = `<svg class="vault-icon" width="32" height="32" viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="3.5" y="8" width="11" height="8" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M6 8V5.5a3 3 0 0 1 6 0V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+const LOCK_ICON_SVG_DOT = `<svg class="vault-icon" width="32" height="32" viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="3.5" y="8" width="11" height="8" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M6 8V5.5a3 3 0 0 1 6 0V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="9" cy="12.5" r="1.2" fill="currentColor"/></svg>`;
+
+function renderSetupCard(options = {}) {
+  const {
+    title = "Encrypt your blocks",
+    subtitle = "Choose a passphrase. Your blocks will be encrypted locally — only you can read them.",
+    buttonText = "Set up encryption",
+    skipRecovery = false,
+    onSubmit = handleSetupSubmit,
+    onCancel = exitVaultToNormal,
+  } = options;
+
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG_DOT}
+      <p class="vault-title">${escapeHtml(title)}</p>
+      <p class="vault-subtitle">${escapeHtml(subtitle)}</p>
+      <p class="vault-error" hidden></p>
+      <input class="vault-input" data-field="pass" type="password" placeholder="Create passphrase" autocomplete="new-password" />
+      <input class="vault-input" data-field="confirm" type="password" placeholder="Confirm passphrase" autocomplete="new-password" />
+      <button class="vault-button" type="button" data-action="submit">${escapeHtml(buttonText)}</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+
+  const passInput = vaultOverlay.querySelector('[data-field="pass"]');
+  const confirmInput = vaultOverlay.querySelector('[data-field="confirm"]');
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const submitButton = vaultOverlay.querySelector('[data-action="submit"]');
+  const cancelButton = vaultOverlay.querySelector('[data-action="cancel"]');
+
+  const showError = (message) => {
+    errorLine.textContent = message;
+    errorLine.hidden = !message;
+  };
+
+  const submit = async () => {
+    const pass = passInput.value;
+    const confirm = confirmInput.value;
+    if (!pass || pass.length < 4) {
+      showError("Use at least 4 characters.");
+      return;
+    }
+    if (pass !== confirm) {
+      showError("Passphrases do not match.");
+      return;
+    }
+    showError("");
+    submitButton.disabled = true;
+    try {
+      await onSubmit(pass, { skipRecovery });
+    } catch (error) {
+      console.error(error);
+      showError("Something went wrong. Try again.");
+      submitButton.disabled = false;
+    }
+  };
+
+  submitButton.addEventListener("click", submit);
+  [passInput, confirmInput].forEach((input) => {
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        submit();
+      }
+    });
+  });
+  cancelButton.addEventListener("click", onCancel);
+  window.requestAnimationFrame(() => passInput.focus());
+}
+
+function renderRecoveryDisplayCard() {
+  const recoveryKey = state.vaultPending?.recoveryKey || "";
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG_DOT}
+      <p class="vault-title">Save your recovery key</p>
+      <p class="vault-subtitle">If you forget your passphrase, this is the only way to recover your blocks.</p>
+      <div class="recovery-key"><code data-field="recovery"></code></div>
+      <p class="recovery-warning">This will not be shown again. Save it somewhere safe.</p>
+      <button class="vault-button" type="button" data-action="copy">Copy recovery key</button>
+      <button class="vault-button secondary" type="button" data-action="confirm">I've saved it — continue</button>
+    </div>
+  `;
+
+  vaultOverlay.querySelector('[data-field="recovery"]').textContent = recoveryKey;
+
+  const copyButton = vaultOverlay.querySelector('[data-action="copy"]');
+  copyButton.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(recoveryKey);
+      copyButton.textContent = "Copied";
+      window.setTimeout(() => {
+        copyButton.textContent = "Copy recovery key";
+      }, COPY_FLASH_DURATION);
+    } catch {
+      composerHint.textContent = "Copy failed";
+    }
+  });
+
+  vaultOverlay
+    .querySelector('[data-action="confirm"]')
+    .addEventListener("click", handleRecoveryConfirm);
+}
+
+function renderEncryptingCard(label) {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      <p class="encrypting-status">${escapeHtml(label)}<span class="dot"> ...</span></p>
+    </div>
+  `;
+}
+
+function renderUnlockCard(isRecovery) {
+  const subtitle = isRecovery
+    ? "Paste your recovery key to unlock."
+    : "Enter your passphrase to unlock";
+  const placeholder = isRecovery ? "Recovery key" : "Passphrase";
+  const linkText = isRecovery ? "Use passphrase instead" : "Use recovery key instead";
+
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG}
+      <p class="vault-title">Vault locked</p>
+      <p class="vault-subtitle">${escapeHtml(subtitle)}</p>
+      <p class="vault-error" hidden></p>
+      <input class="vault-input" data-field="pass" type="${isRecovery ? "text" : "password"}" placeholder="${escapeHtml(placeholder)}" autocomplete="off" />
+      <button class="vault-button" type="button" data-action="submit">Unlock</button>
+      <button class="vault-link" type="button" data-action="toggle">${escapeHtml(linkText)}</button>
+    </div>
+  `;
+
+  const passInput = vaultOverlay.querySelector('[data-field="pass"]');
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const submitButton = vaultOverlay.querySelector('[data-action="submit"]');
+  const toggleButton = vaultOverlay.querySelector('[data-action="toggle"]');
+
+  const showError = (message) => {
+    errorLine.textContent = message;
+    errorLine.hidden = !message;
+  };
+
+  const submit = async () => {
+    const value = passInput.value.trim();
+    if (!value) {
+      showError(isRecovery ? "Enter your recovery key." : "Enter your passphrase.");
+      return;
+    }
+    showError("");
+    submitButton.disabled = true;
+    try {
+      await handleUnlockSubmit(value, isRecovery);
+    } catch (error) {
+      const message = error?.message === "wrong-key"
+        ? (isRecovery ? "Recovery key did not work. Try again." : "Wrong passphrase. Try again.")
+        : "Something went wrong. Try again.";
+      showError(message);
+      submitButton.disabled = false;
+      passInput.select();
+    }
+  };
+
+  submitButton.addEventListener("click", submit);
+  passInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      submit();
+    }
+  });
+  toggleButton.addEventListener("click", () => {
+    state.vaultView = isRecovery ? "unlock" : "unlock-recovery";
+    renderVault();
+  });
+  window.requestAnimationFrame(() => passInput.focus());
+}
+
+function renderPassphraseConfirmCard(options) {
+  const { title, subtitle, buttonText, onSubmit, onCancel } = options;
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG}
+      <p class="vault-title">${escapeHtml(title)}</p>
+      <p class="vault-subtitle">${escapeHtml(subtitle)}</p>
+      <p class="vault-error" hidden></p>
+      <input class="vault-input" data-field="pass" type="password" placeholder="Current passphrase" autocomplete="current-password" />
+      <button class="vault-button" type="button" data-action="submit">${escapeHtml(buttonText)}</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+
+  const passInput = vaultOverlay.querySelector('[data-field="pass"]');
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const submitButton = vaultOverlay.querySelector('[data-action="submit"]');
+  const cancelButton = vaultOverlay.querySelector('[data-action="cancel"]');
+
+  const showError = (message) => {
+    errorLine.textContent = message;
+    errorLine.hidden = !message;
+  };
+
+  const submit = async () => {
+    const value = passInput.value;
+    if (!value) {
+      showError("Enter your current passphrase.");
+      return;
+    }
+    showError("");
+    submitButton.disabled = true;
+    try {
+      await onSubmit(value);
+    } catch (error) {
+      const message = error?.message === "wrong-key"
+        ? "Wrong passphrase. Try again."
+        : "Something went wrong. Try again.";
+      showError(message);
+      submitButton.disabled = false;
+      passInput.select();
+    }
+  };
+
+  submitButton.addEventListener("click", submit);
+  passInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      submit();
+    }
+  });
+  cancelButton.addEventListener("click", onCancel);
+  window.requestAnimationFrame(() => passInput.focus());
+}
+
+function exitVaultToNormal() {
+  if (state.encryption.enabled && !state.encryption.unlocked) {
+    state.vaultView = "unlock";
+    renderVault();
+    return;
+  }
+  state.vaultView = null;
+  state.vaultPending = null;
+  renderVault();
+  composerHint.textContent = state.editingEntryId ? "Editing block -> save updates" : "Ready";
+  entryInput.focus();
+}
+
+async function handleSetupSubmit(passphrase) {
+  const saltPass = randomBytes(16);
+  const saltRecovery = randomBytes(16);
+  const wrappingPass = await deriveWrappingKey(passphrase, saltPass);
+  const recoveryKey = generateRecoveryKey();
+  const wrappingRecovery = await deriveWrappingKey(recoveryKey, saltRecovery);
+  const masterKey = await generateMasterKey();
+  const wrappedPass = await wrapMasterKey(masterKey, wrappingPass);
+  const wrappedRecovery = await wrapMasterKey(masterKey, wrappingRecovery);
+  const verify = await encryptPlaintext(ENC_VERIFY_PLAINTEXT, masterKey);
+
+  state.vaultPending = {
+    saltPass,
+    saltRecovery,
+    wrappedPass,
+    wrappedRecovery,
+    verify,
+    masterKey,
+    recoveryKey,
+  };
+  state.vaultView = "recovery-display";
+  renderVault();
+}
+
+async function handleRecoveryConfirm() {
+  const pending = state.vaultPending;
+  if (!pending) {
+    return;
+  }
+
+  state.vaultView = "encrypting";
+  renderVault();
+
+  try {
+    await saveMeta(ENC_SALT_PASS_KEY, bytesToBase64(pending.saltPass));
+    await saveMeta(ENC_SALT_RECOVERY_KEY, bytesToBase64(pending.saltRecovery));
+    await saveMeta(ENC_WRAPPED_PASS_KEY, pending.wrappedPass);
+    await saveMeta(ENC_WRAPPED_RECOVERY_KEY, pending.wrappedRecovery);
+    await saveMeta(ENC_VERIFY_KEY, pending.verify);
+
+    state.encryption.enabled = true;
+    state.encryption.unlocked = true;
+    state.encryption.masterKey = pending.masterKey;
+
+    for (const entry of state.entries) {
+      await saveEntry(entry);
+    }
+
+    await deleteMeta(DRAFT_KEY);
+
+    state.vaultView = null;
+    state.vaultPending = null;
+    renderVault();
+    updateLockButton();
+    composerHint.textContent = "Encryption on";
+    render();
+    entryInput.focus();
+  } catch (error) {
+    console.error(error);
+    state.vaultView = "recovery-display";
+    renderVault();
+    composerHint.textContent = "Encryption setup failed";
+  }
+}
+
+async function handleUnlockSubmit(value, isRecovery) {
+  const saltKey = isRecovery ? ENC_SALT_RECOVERY_KEY : ENC_SALT_PASS_KEY;
+  const wrappedKey = isRecovery ? ENC_WRAPPED_RECOVERY_KEY : ENC_WRAPPED_PASS_KEY;
+  const saltBase64 = await getMeta(saltKey);
+  const wrappedBase64 = await getMeta(wrappedKey);
+  if (!saltBase64 || !wrappedBase64) {
+    throw new Error("missing-meta");
+  }
+  const wrappingKey = await deriveWrappingKey(value, base64ToBytes(saltBase64));
+  let masterKey;
+  try {
+    masterKey = await unwrapMasterKey(wrappedBase64, wrappingKey);
+  } catch {
+    throw new Error("wrong-key");
+  }
+  const verified = await verifyMasterKey(masterKey);
+  if (!verified) {
+    throw new Error("wrong-key");
+  }
+
+  state.encryption.masterKey = masterKey;
+  state.encryption.unlocked = true;
+  await decryptAllEntriesIntoState();
+
+  state.vaultView = null;
+  state.vaultPending = null;
+  renderVault();
+  updateLockButton();
+  composerHint.textContent = "Vault unlocked";
+  render();
+  entryInput.focus();
+}
+
+async function handleChangeCurrentSubmit(passphrase) {
+  const saltBase64 = await getMeta(ENC_SALT_PASS_KEY);
+  const wrappedBase64 = await getMeta(ENC_WRAPPED_PASS_KEY);
+  if (!saltBase64 || !wrappedBase64) {
+    throw new Error("missing-meta");
+  }
+  const wrappingKey = await deriveWrappingKey(passphrase, base64ToBytes(saltBase64));
+  let masterKey;
+  try {
+    masterKey = await unwrapMasterKey(wrappedBase64, wrappingKey);
+  } catch {
+    throw new Error("wrong-key");
+  }
+
+  state.vaultPending = { masterKey };
+  state.vaultView = "change-new";
+  renderVault();
+}
+
+async function handleChangeNewSubmit(newPassphrase) {
+  const pending = state.vaultPending;
+  if (!pending?.masterKey) {
+    throw new Error("missing-key");
+  }
+  const saltPass = randomBytes(16);
+  const wrappingKey = await deriveWrappingKey(newPassphrase, saltPass);
+  const wrappedPass = await wrapMasterKey(pending.masterKey, wrappingKey);
+  await saveMeta(ENC_SALT_PASS_KEY, bytesToBase64(saltPass));
+  await saveMeta(ENC_WRAPPED_PASS_KEY, wrappedPass);
+
+  state.vaultPending = null;
+  state.vaultView = null;
+  renderVault();
+  updateLockButton();
+  composerHint.textContent = "Passphrase updated";
+  render();
+  entryInput.focus();
+}
+
+async function handleDisableSubmit(passphrase) {
+  const saltBase64 = await getMeta(ENC_SALT_PASS_KEY);
+  const wrappedBase64 = await getMeta(ENC_WRAPPED_PASS_KEY);
+  if (!saltBase64 || !wrappedBase64) {
+    throw new Error("missing-meta");
+  }
+  const wrappingKey = await deriveWrappingKey(passphrase, base64ToBytes(saltBase64));
+  let masterKey;
+  try {
+    masterKey = await unwrapMasterKey(wrappedBase64, wrappingKey);
+  } catch {
+    throw new Error("wrong-key");
+  }
+
+  state.encryption.masterKey = masterKey;
+  state.encryption.unlocked = true;
+  state.vaultView = "decrypting";
+  renderVault();
+
+  try {
+    if (!state.entries.length) {
+      await decryptAllEntriesIntoState();
+    }
+    const plaintextEntries = state.entries.map((entry) => ({
+      ...entry,
+      tags: extractTags(entry.text),
+      mentions: extractMentions(entry.text),
+    }));
+
+    state.encryption.enabled = false;
+    state.encryption.unlocked = false;
+    state.encryption.masterKey = null;
+    state.entries = plaintextEntries;
+
+    for (const entry of plaintextEntries) {
+      await saveEntry(entry);
+    }
+
+    await deleteMeta(ENC_SALT_PASS_KEY);
+    await deleteMeta(ENC_SALT_RECOVERY_KEY);
+    await deleteMeta(ENC_WRAPPED_PASS_KEY);
+    await deleteMeta(ENC_WRAPPED_RECOVERY_KEY);
+    await deleteMeta(ENC_VERIFY_KEY);
+
+    state.vaultView = null;
+    state.vaultPending = null;
+    renderVault();
+    updateLockButton();
+    composerHint.textContent = "Encryption off";
+    render();
+    entryInput.focus();
+  } catch (error) {
+    console.error(error);
+    state.vaultView = "disable-confirm";
+    renderVault();
+    composerHint.textContent = "Disable failed";
+  }
 }
