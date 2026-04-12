@@ -100,39 +100,51 @@
         </div>
         <section id="entryList" class="entry-list" aria-live="polite"></section>
         <section id="quickReference" class="quick-reference" hidden>
-          <p><strong>Quick Retrieval</strong></p>
-          <p><code>term //</code> -> show matching blocks under the editor</p>
-          <p><code>#tag //</code> -> show blocks with that tag under the editor</p>
-          <p><code>@name //</code> -> show blocks with that mention under the editor</p>
-          <p><strong>Commands</strong></p>
-          <p><code>/re</code> -> reopen your most recent saved block in the editor</p>
-          <p><code>/y</code> -> show blocks saved yesterday</p>
-          <p><code>/w</code> -> show blocks saved during the last week</p>
-          <p><code>/pin</code> -> show only pinned blocks</p>
-          <p><kbd>☆</kbd>/<kbd>★</kbd> on a block -> toggle pin</p>
-          <p><code>/import</code> -> import blocks from a JSON export file</p>
-          <p><code>/q</code> -> open this help sheet</p>
-          <p><strong>Encryption</strong></p>
-          <p><code>/encrypt</code> -> encrypt your blocks with a passphrase</p>
-          <p><code>/encrypt change</code> -> change your passphrase</p>
-          <p><code>/encrypt off</code> -> remove encryption and restore plaintext</p>
-          <p><code>/lock</code> -> lock the vault (clears decrypted data from memory)</p>
-          <p>Save your recovery key when shown -> it is the only way back if you forget your passphrase</p>
-          <p><strong>Editor</strong></p>
-          <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⏎</kbd> -> save the current block</p>
-          <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>⏎</kbd> -> reopen your most recent block</p>
-          <p><kbd>Esc</kbd> -> cancel editing and clear the editor</p>
-          <p><kbd>Tab</kbd> / <kbd>Shift</kbd> + <kbd>Tab</kbd> -> indent / outdent</p>
-          <p><strong>Search</strong></p>
-          <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>K</kbd> -> open search</p>
-          <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>H</kbd> -> open this reference sheet</p>
-          <p><kbd>↑</kbd>/<kbd>↓</kbd> -> move through results</p>
-          <p><kbd>Enter</kbd> -> expand or collapse the selected result</p>
-          <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⌫</kbd> -> delete the selected block</p>
-          <p><kbd>Esc</kbd> -> close search</p>
-          <p><strong>Toolbar</strong></p>
-          <p><kbd>⌨</kbd> button -> cycle counter: words / chars / lines / off</p>
-          <p><kbd>↓</kbd> button -> export blocks (click = JSON, shift+click = TXT)</p>
+          <div class="qr-group">
+            <p><strong>Quick Retrieval</strong></p>
+            <p><code>term //</code> -> show matching blocks under the editor</p>
+            <p><code>#tag //</code> -> show blocks with that tag under the editor</p>
+            <p><code>@name //</code> -> show blocks with that mention under the editor</p>
+          </div>
+          <div class="qr-group">
+            <p><strong>Commands</strong></p>
+            <p><code>/re</code> -> reopen your most recent saved block in the editor</p>
+            <p><code>/y</code> -> show blocks saved yesterday</p>
+            <p><code>/w</code> -> show blocks saved during the last week</p>
+            <p><code>/pin</code> -> show only pinned blocks</p>
+            <p><kbd>☆</kbd>/<kbd>★</kbd> on a block -> toggle pin</p>
+            <p><code>/import</code> -> import blocks from a JSON export file</p>
+            <p><code>/q</code> -> open this help sheet</p>
+          </div>
+          <div class="qr-group">
+            <p><strong>Encryption</strong></p>
+            <p><code>/encrypt</code> -> encrypt your blocks with a passphrase</p>
+            <p><code>/encrypt change</code> -> change your passphrase</p>
+            <p><code>/encrypt off</code> -> remove encryption and restore plaintext</p>
+            <p><code>/lock</code> -> lock the vault (clears decrypted data from memory)</p>
+            <p>Save your recovery key when shown -> it is the only way back if you forget your passphrase</p>
+          </div>
+          <div class="qr-group">
+            <p><strong>Editor</strong></p>
+            <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⏎</kbd> -> save the current block</p>
+            <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>⏎</kbd> -> reopen your most recent block</p>
+            <p><kbd>Esc</kbd> -> cancel editing and clear the editor</p>
+            <p><kbd>Tab</kbd> / <kbd>Shift</kbd> + <kbd>Tab</kbd> -> indent / outdent</p>
+          </div>
+          <div class="qr-group">
+            <p><strong>Search</strong></p>
+            <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>K</kbd> -> open search</p>
+            <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>H</kbd> -> open this reference sheet</p>
+            <p><kbd>↑</kbd>/<kbd>↓</kbd> -> move through results</p>
+            <p><kbd>Enter</kbd> -> expand or collapse the selected result</p>
+            <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⌫</kbd> -> delete the selected block</p>
+            <p><kbd>Esc</kbd> -> close search</p>
+          </div>
+          <div class="qr-group">
+            <p><strong>Toolbar</strong></p>
+            <p><kbd>⌨</kbd> button -> cycle counter: words / chars / lines / off</p>
+            <p><kbd>↓</kbd> button -> export blocks (click = JSON, shift+click = TXT)</p>
+          </div>
         </section>
         <section class="search-shortcuts">
           <span><kbd>↑</kbd>/<kbd>↓</kbd> -> move</span>
