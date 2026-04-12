@@ -68,6 +68,7 @@ const searchSuggestions = document.querySelector("#searchSuggestions");
 const searchMode = document.querySelector("#searchMode");
 const searchModeLabel = document.querySelector("#searchModeLabel");
 const quickReference = document.querySelector("#quickReference");
+const aboutGuide = document.querySelector("#aboutGuide");
 const savedCount = document.querySelector("#savedCount");
 const wordCountDisplay = document.querySelector("#wordCountDisplay");
 const exportButton = document.querySelector("#exportButton");
@@ -357,6 +358,12 @@ entryInput.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (event.key === "Enter" && entryInput.value.trim() === "/about") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
   if (event.key === "Enter" && entryInput.value.trim() === "/pin") {
     event.preventDefault();
     submitComposer();
@@ -469,6 +476,17 @@ function submitComposer() {
     setEditorValue("");
     clearDraft();
     composerHint.textContent = "Quick reference";
+    render();
+    return;
+  }
+
+  if (text === "/about") {
+    state.search = "";
+    state.preset = "about";
+    openSearchMode();
+    setEditorValue("");
+    clearDraft();
+    composerHint.textContent = "About txtshell";
     render();
     return;
   }
@@ -628,7 +646,8 @@ function render() {
 
   searchUndoDeleteButton.hidden = !state.pendingDeletedEntry;
   quickReference.hidden = state.preset !== "quickref";
-  entryList.hidden = state.preset === "quickref";
+  aboutGuide.hidden = state.preset !== "about";
+  entryList.hidden = state.preset === "quickref" || state.preset === "about";
   const filteredEntries = getFilteredEntries();
   searchModeLabel.textContent = getSearchModeLabel(filteredEntries.length);
   entryList.innerHTML = "";
@@ -862,7 +881,7 @@ function getFilteredEntries() {
 
 function getEntriesForQuery({ preset = null, search = "" } = {}) {
   return state.entries.filter((entry) => {
-    if (preset === "quickref") {
+    if (preset === "quickref" || preset === "about") {
       return false;
     }
     if (preset === "yesterday") {
@@ -1031,9 +1050,12 @@ function clearPendingDelete() {
 }
 
 function getSearchModeLabel(count) {
-  const suffix = count !== undefined && state.preset !== "quickref"
+  const suffix = count !== undefined && state.preset !== "quickref" && state.preset !== "about"
     ? ` (${count})`
     : "";
+  if (state.preset === "about") {
+    return "About txtshell";
+  }
   if (state.preset === "quickref") {
     return "Quick reference";
   }

@@ -33,7 +33,7 @@
           name="entryInput"
           spellcheck="false"
           autofocus
-          placeholder="Type or paste. ⌘/Ctrl + ⏎ saves. ⌘/Ctrl + K searches."
+          placeholder="Type /about and hit enter to get started, or just start typing."
         ></textarea>
         <section id="editorSuggestions" class="editor-suggestions" hidden aria-label="Editor suggestions"></section>
         <section id="inlineResults" class="inline-results" hidden aria-live="polite"></section>
@@ -99,6 +99,34 @@
           <section id="searchSuggestions" class="search-suggestions" hidden aria-label="Search suggestions"></section>
         </div>
         <section id="entryList" class="entry-list" aria-live="polite"></section>
+        <section id="aboutGuide" class="quick-reference" hidden>
+          <div class="qr-group">
+            <p><strong>What is txtshell?</strong></p>
+            <p>A fast, local-first text editor. Everything stays on your device — no accounts, no cloud, no tracking. Just type and save.</p>
+          </div>
+          <div class="qr-group">
+            <p><strong>How it works</strong></p>
+            <p>Type anything in the editor. Press <kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⏎</kbd> to save it as a block. That's the core loop — write, save, find later.</p>
+          </div>
+          <div class="qr-group">
+            <p><strong>Finding your blocks</strong></p>
+            <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>K</kbd> opens search. Type to filter, use <code>#tags</code> and <code>@mentions</code> to organise. Or type a word followed by <code>//</code> in the editor to search inline without leaving your writing.</p>
+          </div>
+          <div class="qr-group">
+            <p><strong>Useful commands</strong></p>
+            <p><code>/re</code> reopens your latest block for editing</p>
+            <p><code>/y</code> shows yesterday's blocks</p>
+            <p><code>/w</code> shows last week</p>
+            <p><code>/pin</code> shows pinned blocks</p>
+            <p><code>/q</code> opens the full shortcut reference</p>
+          </div>
+          <div class="qr-group">
+            <p><strong>Optional features</strong></p>
+            <p><code>/encrypt</code> encrypts your blocks locally with a passphrase</p>
+            <p><code>/export</code> downloads your blocks as JSON</p>
+            <p><code>/import</code> restores from an export file</p>
+          </div>
+        </section>
         <section id="quickReference" class="quick-reference" hidden>
           <div class="qr-group">
             <p><strong>Quick Retrieval</strong></p>
