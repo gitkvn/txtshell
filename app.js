@@ -387,6 +387,12 @@ entryInput.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (event.key === "Enter" && entryInput.value.trim() === "/import") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
     submitComposer();
@@ -526,6 +532,13 @@ function submitComposer() {
       return;
     }
     lockVault();
+    return;
+  }
+
+  if (text === "/import") {
+    setEditorValue("");
+    clearDraft();
+    importEntries();
     return;
   }
 
@@ -1710,6 +1723,66 @@ function exportEntries(format) {
   link.click();
   URL.revokeObjectURL(url);
   composerHint.textContent = `Exported ${state.entries.length} blocks as ${format.toUpperCase()}`;
+}
+
+function importEntries() {
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = ".json";
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+    let data;
+    try {
+      const text = await file.text();
+      data = JSON.parse(text);
+    } catch {
+      composerHint.textContent = "Invalid import file";
+      return;
+    }
+    if (!Array.isArray(data)) {
+      composerHint.textContent = "Invalid import file";
+      return;
+    }
+    let added = 0;
+    let updated = 0;
+    for (const item of data) {
+      if (typeof item.id !== "string" || typeof item.text !== "string" || typeof item.createdAt !== "string") {
+        continue;
+      }
+      const entry = {
+        id: item.id,
+        text: item.text,
+        tags: extractTags(item.text),
+        mentions: extractMentions(item.text),
+        createdAt: item.createdAt,
+        pinned: item.pinned === true,
+      };
+      const existing = state.entries.find((e) => e.id === entry.id);
+      if (existing) {
+        if (new Date(entry.createdAt) > new Date(existing.createdAt)) {
+          Object.assign(existing, entry);
+          await saveEntry(existing);
+          updated++;
+        }
+      } else {
+        state.entries.push(entry);
+        await saveEntry(entry);
+        added++;
+      }
+    }
+    state.entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    render();
+    if (added === 0 && updated === 0) {
+      composerHint.textContent = "No new entries to import";
+    } else {
+      const parts = [];
+      if (added > 0) parts.push(`${added} new`);
+      if (updated > 0) parts.push(`${updated} updated`);
+      composerHint.textContent = `Imported ${parts.join(", ")}`;
+    }
+  });
+  fileInput.click();
 }
 
 function isYesterday(value) {
