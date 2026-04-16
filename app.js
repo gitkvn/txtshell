@@ -1211,6 +1211,9 @@ function renderEntries(container, entries, options = {}) {
           if (event.target.closest(".entry-body")) {
             return;
           }
+          if (window.getSelection().toString()) {
+            return;
+          }
           state.selectedEntryId = entry.id;
           render();
         });
@@ -1230,6 +1233,9 @@ function renderEntries(container, entries, options = {}) {
       if (selectResults) {
         card.addEventListener("click", (event) => {
           if (event.target.closest(".entry-body")) {
+            return;
+          }
+          if (window.getSelection().toString()) {
             return;
           }
           state.selectedEntryId = entry.id;
