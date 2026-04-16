@@ -1207,7 +1207,10 @@ function renderEntries(container, entries, options = {}) {
       card.classList.remove("collapsed");
       expandButton.hidden = true;
       if (selectResults) {
-        card.addEventListener("click", () => {
+        card.addEventListener("click", (event) => {
+          if (event.target.closest(".entry-body")) {
+            return;
+          }
           state.selectedEntryId = entry.id;
           render();
         });
@@ -1225,7 +1228,10 @@ function renderEntries(container, entries, options = {}) {
       });
 
       if (selectResults) {
-        card.addEventListener("click", () => {
+        card.addEventListener("click", (event) => {
+          if (event.target.closest(".entry-body")) {
+            return;
+          }
           state.selectedEntryId = entry.id;
           toggleExpanded();
           render();
