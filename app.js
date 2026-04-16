@@ -1215,7 +1215,10 @@ function renderEntries(container, entries, options = {}) {
             return;
           }
           state.selectedEntryId = entry.id;
-          render();
+          container.querySelectorAll(".entry-card.is-selected").forEach((el) => {
+            if (el !== card) el.classList.remove("is-selected");
+          });
+          card.classList.add("is-selected");
         });
       }
     } else {
@@ -1240,8 +1243,11 @@ function renderEntries(container, entries, options = {}) {
             return;
           }
           state.selectedEntryId = entry.id;
+          container.querySelectorAll(".entry-card.is-selected").forEach((el) => {
+            if (el !== card) el.classList.remove("is-selected");
+          });
+          card.classList.add("is-selected");
           toggleExpanded();
-          render();
         });
       }
     }
