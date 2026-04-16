@@ -1232,10 +1232,11 @@ function renderEntries(container, entries, options = {}) {
 
       if (selectResults) {
         card.addEventListener("click", (event) => {
-          if (event.target.closest(".entry-body")) {
+          if (window.getSelection().toString()) {
             return;
           }
-          if (window.getSelection().toString()) {
+          const isCollapsed = card.classList.contains("collapsed");
+          if (!isCollapsed && event.target.closest(".entry-body")) {
             return;
           }
           state.selectedEntryId = entry.id;
