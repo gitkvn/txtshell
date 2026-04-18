@@ -662,7 +662,7 @@ function handleGlobalShortcut(event) {
     return;
   }
 
-  if (key === "f") {
+  if (event.shiftKey && key === "f") {
     event.preventDefault();
     if (state.searchMode) {
       return;
