@@ -45,10 +45,11 @@ button {
 .app-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-rows: auto minmax(280px, 1fr) auto auto;
+  grid-template-rows: auto auto minmax(280px, 1fr) auto;
 }
 
 .topbar {
+  grid-row: 1;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -108,7 +109,92 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+.word-count-badge.is-near-target {
+  color: var(--accent);
+}
+
+.word-count-badge.is-over-target {
+  color: #d1242f;
+}
+
+.find-replace-bar {
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper) 78%, transparent);
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 0.88rem;
+  flex-wrap: wrap;
+}
+
+.find-replace-bar[hidden] {
+  display: none;
+}
+
+.find-replace-input {
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 0.85rem;
+  font-family: var(--font-sans);
+  outline: none;
+  min-width: 140px;
+}
+
+.find-replace-input:focus {
+  border-color: var(--accent);
+}
+
+.find-replace-count {
+  font-size: 0.82rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 68px;
+}
+
+.find-replace-button {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-family: var(--font-sans);
+}
+
+.find-replace-button:hover,
+.find-replace-button:focus-visible {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  outline: none;
+}
+
+.find-replace-close {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 0.9rem;
+  font-family: var(--font-sans);
+  margin-left: auto;
+}
+
+.find-replace-close:hover,
+.find-replace-close:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
 .editor-wrap {
+  grid-row: 3;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -148,6 +234,7 @@ button {
 }
 
 .command-bar {
+  grid-row: 4;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -888,7 +975,8 @@ kbd {
   .search-shortcuts,
   .entry-list,
   #entryInput,
-  .editor-suggestions {
+  .editor-suggestions,
+  .find-replace-bar {
     padding-left: 14px;
     padding-right: 14px;
   }

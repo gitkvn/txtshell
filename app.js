@@ -55,7 +55,10 @@ const state = {
   },
   vaultView: null,
   vaultPending: null,
+  targetCount: null,
 };
+
+const RE_TARGET_COMMAND = /^\/target(?:\s+(\d+))?$/;
 
 const composerForm = document.querySelector("#composerForm");
 const entryInput = document.querySelector("#entryInput");
@@ -92,6 +95,13 @@ const interestEmailInput = document.querySelector("#interestEmail");
 const interestErrorEl = document.querySelector("#interestError");
 const interestSkipButton = document.querySelector("#interestSkipButton");
 const interestDoneButton = document.querySelector("#interestDoneButton");
+const findReplaceBar = document.querySelector("#findReplaceBar");
+const findInput = document.querySelector("#findInput");
+const replaceInput = document.querySelector("#replaceInput");
+const findReplaceCount = document.querySelector("#findReplaceCount");
+const findReplaceReplaceButton = document.querySelector("#findReplaceReplaceButton");
+const findReplaceReplaceAllButton = document.querySelector("#findReplaceReplaceAllButton");
+const findReplaceCloseButton = document.querySelector("#findReplaceCloseButton");
 function setEditorValue(value) {
   entryInput.value = value;
   updateWordCount();
@@ -132,7 +142,7 @@ window.addEventListener("pointerdown", (event) => {
     return;
   }
 
-  if (target.closest("#searchMode, .copy-button, #searchInput, #editorSuggestions, #vaultOverlay, #lockButton, #interestOverlay")) {
+  if (target.closest("#searchMode, .copy-button, #searchInput, #editorSuggestions, #vaultOverlay, #lockButton, #interestOverlay, #findReplaceBar")) {
     return;
   }
 
@@ -295,6 +305,12 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (!findReplaceBar.hidden) {
+    event.preventDefault();
+    closeFindReplace();
+    return;
+  }
+
   if (state.searchMode) {
     event.preventDefault();
     closeSearchMode();
@@ -395,6 +411,12 @@ entryInput.addEventListener("keydown", (event) => {
   }
 
   if (event.key === "Enter" && entryInput.value.trim() === "/import") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
+  if (event.key === "Enter" && RE_TARGET_COMMAND.test(entryInput.value.trim())) {
     event.preventDefault();
     submitComposer();
     return;
@@ -560,6 +582,22 @@ function submitComposer() {
     return;
   }
 
+  const targetMatch = text.match(RE_TARGET_COMMAND);
+  if (targetMatch) {
+    const raw = targetMatch[1];
+    const parsed = raw ? parseInt(raw, 10) : 0;
+    if (!parsed) {
+      state.targetCount = null;
+      composerHint.textContent = "Target cleared";
+    } else {
+      state.targetCount = parsed;
+      composerHint.textContent = `Target set to ${parsed}`;
+    }
+    setEditorValue("");
+    clearDraft();
+    return;
+  }
+
   if (state.editingEntryId) {
     const existingEntry = state.entries.find((entry) => entry.id === state.editingEntryId);
     if (!existingEntry) {
@@ -621,6 +659,15 @@ function handleGlobalShortcut(event) {
     openSearchMode();
     composerHint.textContent = "Quick reference";
     render();
+    return;
+  }
+
+  if (key === "h") {
+    event.preventDefault();
+    if (state.searchMode) {
+      return;
+    }
+    openFindReplace();
     return;
   }
 
@@ -1090,14 +1137,29 @@ function updateWordCount() {
   }
 
   const text = entryInput.value.trim();
+  let count = 0;
+  let unit = "";
   if (mode === "words") {
-    const count = text ? text.split(RE_WHITESPACE).length : 0;
-    wordCountDisplay.textContent = `${count} ${count === 1 ? "word" : "words"}`;
+    count = text ? text.split(RE_WHITESPACE).length : 0;
+    unit = count === 1 ? "word" : "words";
   } else if (mode === "chars") {
-    wordCountDisplay.textContent = `${text.length} ${text.length === 1 ? "char" : "chars"}`;
+    count = text.length;
+    unit = count === 1 ? "char" : "chars";
   } else if (mode === "lines") {
-    const count = text ? text.split("\n").length : 0;
-    wordCountDisplay.textContent = `${count} ${count === 1 ? "line" : "lines"}`;
+    count = text ? text.split("\n").length : 0;
+    unit = count === 1 ? "line" : "lines";
+  }
+
+  const target = state.targetCount;
+  if (target) {
+    wordCountDisplay.textContent = `${count} / ${target} ${unit}`;
+    const isOver = count > target;
+    const isNear = !isOver && count >= target * 0.9;
+    wordCountDisplay.classList.toggle("is-near-target", isNear);
+    wordCountDisplay.classList.toggle("is-over-target", isOver);
+  } else {
+    wordCountDisplay.textContent = `${count} ${unit}`;
+    wordCountDisplay.classList.remove("is-near-target", "is-over-target");
   }
 }
 
@@ -1385,6 +1447,121 @@ function indentSelection(mode) {
   updateWordCount();
   renderEditorSuggestions();
 }
+
+function openFindReplace() {
+  findReplaceBar.hidden = false;
+  updateFindReplaceCount();
+  window.requestAnimationFrame(() => {
+    findInput.focus();
+    findInput.select();
+  });
+}
+
+function closeFindReplace() {
+  findReplaceBar.hidden = true;
+  entryInput.focus();
+}
+
+function getFindMatches() {
+  const term = findInput.value;
+  if (!term) {
+    return [];
+  }
+  const text = entryInput.value;
+  const matches = [];
+  let cursor = 0;
+  while (cursor <= text.length) {
+    const found = text.indexOf(term, cursor);
+    if (found === -1) {
+      break;
+    }
+    matches.push(found);
+    cursor = found + term.length;
+  }
+  return matches;
+}
+
+function updateFindReplaceCount() {
+  const matches = getFindMatches();
+  if (!findInput.value) {
+    findReplaceCount.textContent = "0 matches";
+    return;
+  }
+  findReplaceCount.textContent = matches.length === 1 ? "1 match" : `${matches.length} matches`;
+}
+
+function replaceNextMatch() {
+  const term = findInput.value;
+  if (!term) {
+    return;
+  }
+  const matches = getFindMatches();
+  if (!matches.length) {
+    composerHint.textContent = "No matches";
+    return;
+  }
+  const replacement = replaceInput.value;
+  const targetIdx = matches[0];
+  const text = entryInput.value;
+  const nextText = text.slice(0, targetIdx) + replacement + text.slice(targetIdx + term.length);
+  setEditorValue(nextText);
+  const caret = targetIdx + replacement.length;
+  entryInput.setSelectionRange(caret, caret);
+  queueDraftSave();
+  renderEditorSuggestions();
+  updateFindReplaceCount();
+  composerHint.textContent = "Replaced";
+}
+
+function replaceAllMatches() {
+  const term = findInput.value;
+  if (!term) {
+    return;
+  }
+  const matches = getFindMatches();
+  if (!matches.length) {
+    composerHint.textContent = "No matches";
+    return;
+  }
+  const replacement = replaceInput.value;
+  const count = matches.length;
+  const nextText = entryInput.value.split(term).join(replacement);
+  setEditorValue(nextText);
+  queueDraftSave();
+  renderEditorSuggestions();
+  updateFindReplaceCount();
+  composerHint.textContent = count === 1 ? "Replaced 1 match" : `Replaced ${count} matches`;
+}
+
+findInput.addEventListener("input", () => {
+  updateFindReplaceCount();
+});
+
+findInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    replaceNextMatch();
+  }
+});
+
+replaceInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    replaceNextMatch();
+  }
+});
+
+findReplaceReplaceButton.addEventListener("click", () => {
+  replaceNextMatch();
+});
+
+findReplaceReplaceAllButton.addEventListener("click", () => {
+  replaceAllMatches();
+});
+
+findReplaceCloseButton.addEventListener("click", () => {
+  closeFindReplace();
+});
 
 function openFocusedSearch(term, statusMessage) {
   state.preset = null;

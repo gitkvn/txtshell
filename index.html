@@ -26,6 +26,15 @@
         </div>
       </header>
 
+      <section id="findReplaceBar" class="find-replace-bar" hidden aria-label="Find and replace">
+        <input id="findInput" class="find-replace-input" type="text" placeholder="Find" spellcheck="false" autocomplete="off" />
+        <span id="findReplaceCount" class="find-replace-count">0 matches</span>
+        <input id="replaceInput" class="find-replace-input" type="text" placeholder="Replace" spellcheck="false" autocomplete="off" />
+        <button id="findReplaceReplaceButton" class="find-replace-button" type="button">Replace</button>
+        <button id="findReplaceReplaceAllButton" class="find-replace-button" type="button">Replace all</button>
+        <button id="findReplaceCloseButton" class="find-replace-close" type="button" aria-label="Close find and replace">✕</button>
+      </section>
+
       <form id="composerForm" class="editor-wrap">
         <label class="sr-only" for="entryInput">Type or paste</label>
         <textarea
@@ -141,6 +150,7 @@
             <p><code>/w</code> -> show blocks saved during the last week</p>
             <p><code>/pin</code> -> show only pinned blocks</p>
             <p><kbd>☆</kbd>/<kbd>★</kbd> on a block -> toggle pin</p>
+            <p><code>/target &lt;number&gt;</code> -> set a target for the counter (<code>/target</code> clears)</p>
             <p><code>/import</code> -> import blocks from a JSON export file</p>
             <p><code>/q</code> -> open this help sheet</p>
           </div>
@@ -156,6 +166,7 @@
             <p><strong>Editor</strong></p>
             <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⏎</kbd> -> save the current block</p>
             <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>⏎</kbd> -> reopen your most recent block</p>
+            <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>H</kbd> -> open find and replace</p>
             <p><kbd>Esc</kbd> -> cancel editing and clear the editor</p>
             <p><kbd>Tab</kbd> / <kbd>Shift</kbd> + <kbd>Tab</kbd> -> indent / outdent</p>
           </div>
