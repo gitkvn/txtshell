@@ -58,7 +58,6 @@ const state = {
   targetCount: null,
 };
 
-const RE_TARGET_COMMAND = /^\/target(?:\s+(\d+))?$/;
 
 const composerForm = document.querySelector("#composerForm");
 const entryInput = document.querySelector("#entryInput");
@@ -416,12 +415,6 @@ entryInput.addEventListener("keydown", (event) => {
     return;
   }
 
-  if (event.key === "Enter" && RE_TARGET_COMMAND.test(entryInput.value.trim())) {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
     submitComposer();
@@ -582,22 +575,6 @@ function submitComposer() {
     return;
   }
 
-  const targetMatch = text.match(RE_TARGET_COMMAND);
-  if (targetMatch) {
-    const raw = targetMatch[1];
-    const parsed = raw ? parseInt(raw, 10) : 0;
-    if (!parsed) {
-      state.targetCount = null;
-      composerHint.textContent = "Target cleared";
-    } else {
-      state.targetCount = parsed;
-      composerHint.textContent = `Target set to ${parsed}`;
-    }
-    setEditorValue("");
-    clearDraft();
-    return;
-  }
-
   if (state.editingEntryId) {
     const existingEntry = state.entries.find((entry) => entry.id === state.editingEntryId);
     if (!existingEntry) {
@@ -668,6 +645,21 @@ function handleGlobalShortcut(event) {
       return;
     }
     openFindReplace();
+    return;
+  }
+
+  if (event.shiftKey && key === "t") {
+    event.preventDefault();
+    const response = window.prompt("Set word/char/line target:", state.targetCount || "");
+    const parsed = response ? parseInt(response, 10) : 0;
+    if (parsed > 0) {
+      state.targetCount = parsed;
+      composerHint.textContent = `Target set to ${parsed}`;
+    } else {
+      state.targetCount = null;
+      composerHint.textContent = "Target cleared";
+    }
+    updateWordCount();
     return;
   }
 
