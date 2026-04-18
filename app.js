@@ -55,6 +55,7 @@ const state = {
   },
   vaultView: null,
   vaultPending: null,
+  targetCount: null,
 };
 
 const composerForm = document.querySelector("#composerForm");
@@ -320,6 +321,14 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (state.targetCount !== null) {
+    event.preventDefault();
+    state.targetCount = null;
+    updateWordCount();
+    composerHint.textContent = "Target cleared";
+    return;
+  }
+
   if (state.editingEntryId) {
     event.preventDefault();
     state.editingEntryId = null;
@@ -410,6 +419,18 @@ entryInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && entryInput.value.trim() === "/import") {
     event.preventDefault();
     submitComposer();
+    return;
+  }
+
+  const targetMatch = event.key === "Enter" ? entryInput.value.trim().match(/^\/(\d+)$/) : null;
+  if (targetMatch) {
+    event.preventDefault();
+    const value = parseInt(targetMatch[1], 10);
+    state.targetCount = value > 0 ? value : null;
+    setEditorValue("");
+    clearDraft();
+    updateWordCount();
+    composerHint.textContent = state.targetCount ? `Target set to ${state.targetCount}` : "Target cleared";
     return;
   }
 
@@ -570,6 +591,17 @@ function submitComposer() {
     setEditorValue("");
     clearDraft();
     importEntries();
+    return;
+  }
+
+  const targetMatch = text.match(/^\/(\d+)$/);
+  if (targetMatch) {
+    const value = parseInt(targetMatch[1], 10);
+    state.targetCount = value > 0 ? value : null;
+    setEditorValue("");
+    clearDraft();
+    updateWordCount();
+    composerHint.textContent = state.targetCount ? `Target set to ${state.targetCount}` : "Target cleared";
     return;
   }
 
@@ -1125,7 +1157,17 @@ function updateWordCount() {
     unit = count === 1 ? "line" : "lines";
   }
 
-  wordCountDisplay.textContent = `${count} ${unit}`;
+  const target = state.targetCount;
+  if (target) {
+    const pluralUnit = target === 1 ? unit.replace(/s$/, "") : (unit.endsWith("s") ? unit : `${unit}s`);
+    wordCountDisplay.textContent = `${count} / ${target} ${pluralUnit}`;
+    wordCountDisplay.classList.toggle("is-over-target", count > target);
+    wordCountDisplay.classList.toggle("is-near-target", count >= target * 0.9 && count <= target);
+  } else {
+    wordCountDisplay.textContent = `${count} ${unit}`;
+    wordCountDisplay.classList.remove("is-near-target");
+    wordCountDisplay.classList.remove("is-over-target");
+  }
 }
 
 function scheduleInlineResults() {

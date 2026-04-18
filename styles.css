@@ -109,6 +109,14 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+.word-count-badge.is-near-target {
+  color: var(--accent);
+}
+
+.word-count-badge.is-over-target {
+  color: #d1242f;
+}
+
 .find-replace-bar {
   grid-row: 2;
   display: flex;
