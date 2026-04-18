@@ -55,9 +55,7 @@ const state = {
   },
   vaultView: null,
   vaultPending: null,
-  targetCount: null,
 };
-
 
 const composerForm = document.querySelector("#composerForm");
 const entryInput = document.querySelector("#entryInput");
@@ -648,21 +646,6 @@ function handleGlobalShortcut(event) {
     return;
   }
 
-  if (event.shiftKey && key === "t") {
-    event.preventDefault();
-    const response = window.prompt("Set word/char/line target:", state.targetCount || "");
-    const parsed = response ? parseInt(response, 10) : 0;
-    if (parsed > 0) {
-      state.targetCount = parsed;
-      composerHint.textContent = `Target set to ${parsed}`;
-    } else {
-      state.targetCount = null;
-      composerHint.textContent = "Target cleared";
-    }
-    updateWordCount();
-    return;
-  }
-
   if (key === "k") {
     event.preventDefault();
     state.preset = null;
@@ -1142,17 +1125,7 @@ function updateWordCount() {
     unit = count === 1 ? "line" : "lines";
   }
 
-  const target = state.targetCount;
-  if (target) {
-    wordCountDisplay.textContent = `${count} / ${target} ${unit}`;
-    const isOver = count > target;
-    const isNear = !isOver && count >= target * 0.9;
-    wordCountDisplay.classList.toggle("is-near-target", isNear);
-    wordCountDisplay.classList.toggle("is-over-target", isOver);
-  } else {
-    wordCountDisplay.textContent = `${count} ${unit}`;
-    wordCountDisplay.classList.remove("is-near-target", "is-over-target");
-  }
+  wordCountDisplay.textContent = `${count} ${unit}`;
 }
 
 function scheduleInlineResults() {
