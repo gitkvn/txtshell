@@ -769,6 +769,9 @@ function reopenEntryInEditor(entryId) {
   state.editingEntryId = entry.id;
   setEditorValue(entry.text);
   saveMeta(DRAFT_KEY, entry.text);
+  window.clearTimeout(inlineResultsTimer);
+  inlineResults.innerHTML = "";
+  inlineResults.hidden = true;
   closeSearchMode();
   composerHint.textContent = "Editing block -> save updates";
   entryInput.focus();
