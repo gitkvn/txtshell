@@ -293,6 +293,12 @@ searchInput.addEventListener("keydown", (event) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") {
+    if (state.searchMode && event.target !== searchInput) {
+      handleSearchKeyboard(event);
+      if (event.defaultPrevented) {
+        return;
+      }
+    }
     handleGlobalShortcut(event);
     return;
   }
@@ -977,6 +983,12 @@ function syncSelection(entries) {
 }
 
 function handleSearchKeyboard(event) {
+  if ((event.metaKey || event.ctrlKey) && event.shiftKey && (event.key === "e" || event.key === "E") && state.selectedEntryId) {
+    event.preventDefault();
+    reopenEntryInEditor(state.selectedEntryId);
+    return;
+  }
+
   const suggestions = getSearchSuggestions();
   if (suggestions.length) {
     if (event.key === "ArrowDown") {
