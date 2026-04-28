@@ -228,6 +228,61 @@ button {
   padding: 0 20px 14px;
 }
 
+.command-palette {
+  display: flex;
+  flex-direction: column;
+  margin: 0 20px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper) 96%, var(--ink) 4%);
+  max-height: calc(6 * 38px);
+  overflow-y: auto;
+}
+
+.command-palette-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
+
+.command-palette-item:last-child {
+  border-bottom: 0;
+}
+
+.command-palette-item:hover,
+.command-palette-item.is-selected {
+  background: color-mix(in srgb, var(--paper) 92%, var(--accent) 12%);
+  color: var(--accent);
+  outline: none;
+}
+
+.command-palette-name {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.command-palette-desc {
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  text-align: right;
+}
+
+.command-palette-item:hover .command-palette-desc,
+.command-palette-item.is-selected .command-palette-desc {
+  color: color-mix(in srgb, var(--accent) 70%, var(--muted));
+}
+
 .inline-results {
   padding: 0 20px 14px;
   overflow: auto;
@@ -1029,5 +1084,21 @@ kbd {
   .footer-actions {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .command-palette {
+    order: -1;
+    margin: 14px 14px 0;
+    max-height: calc(6 * 56px);
+  }
+
+  .command-palette-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+
+  .command-palette-desc {
+    text-align: left;
   }
 }

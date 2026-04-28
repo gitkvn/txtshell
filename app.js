@@ -37,6 +37,23 @@ const DELETE_CONFIRM_TIMEOUT = 2000;
 const TOAST_DURATION = 3000;
 const HINT_TOAST_DURATION = 6000;
 
+const COMPOSER_PLACEHOLDER_EMPTY = "Type /about and press enter to get started";
+const COMPOSER_PLACEHOLDER_HAS_BLOCKS = "Type a block, or / for commands";
+
+const SLASH_COMMANDS = [
+  { name: "/about", description: "First-time user guide" },
+  { name: "/encrypt", description: "Set up vault encryption with a passphrase" },
+  { name: "/encrypt change", description: "Change your encryption passphrase" },
+  { name: "/encrypt off", description: "Remove encryption and restore plaintext" },
+  { name: "/import", description: "Restore blocks from a JSON export" },
+  { name: "/lock", description: "Lock the vault" },
+  { name: "/pin", description: "Show only pinned blocks" },
+  { name: "/q", description: "Open the full shortcut reference" },
+  { name: "/re", description: "Reopen your most recent block" },
+  { name: "/w", description: "Show blocks saved during the last week" },
+  { name: "/y", description: "Show blocks saved yesterday" },
+];
+
 const state = {
   db: null,
   entries: [],
@@ -48,6 +65,7 @@ const state = {
   pendingDeletedEntry: null,
   selectedSuggestionIndex: 0,
   editorSelectedSuggestionIndex: 0,
+  commandPaletteIndex: 0,
   encryption: {
     enabled: false,
     unlocked: false,
@@ -61,6 +79,7 @@ const state = {
 const composerForm = document.querySelector("#composerForm");
 const entryInput = document.querySelector("#entryInput");
 const editorSuggestions = document.querySelector("#editorSuggestions");
+const commandPalette = document.querySelector("#commandPalette");
 const inlineResults = document.querySelector("#inlineResults");
 const entryList = document.querySelector("#entryList");
 const searchInput = document.querySelector("#searchInput");
@@ -140,7 +159,7 @@ window.addEventListener("pointerdown", (event) => {
     return;
   }
 
-  if (target.closest("#searchMode, .copy-button, #searchInput, #editorSuggestions, #vaultOverlay, #lockButton, #interestOverlay, #findReplaceBar")) {
+  if (target.closest("#searchMode, .copy-button, #searchInput, #editorSuggestions, #commandPalette, #vaultOverlay, #lockButton, #interestOverlay, #findReplaceBar")) {
     return;
   }
 
@@ -350,6 +369,10 @@ entryInput.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (handleCommandPaletteKeyboard(event)) {
+    return;
+  }
+
   if (event.key === "Tab") {
     event.preventDefault();
     indentSelection(event.shiftKey ? "outdent" : "indent");
@@ -451,6 +474,7 @@ entryInput.addEventListener("input", () => {
   queueDraftSave();
   updateWordCount();
   state.editorSelectedSuggestionIndex = 0;
+  state.commandPaletteIndex = 0;
   renderEditorSuggestions();
   render();
 });
@@ -698,7 +722,11 @@ function handleGlobalShortcut(event) {
 
 function render() {
   savedCount.textContent = `Saved (${state.entries.length})`;
+  entryInput.placeholder = state.entries.length
+    ? COMPOSER_PLACEHOLDER_HAS_BLOCKS
+    : COMPOSER_PLACEHOLDER_EMPTY;
   scheduleInlineResults();
+  renderCommandPalette();
 
   if (!state.searchMode) {
     return;
@@ -1664,6 +1692,101 @@ function renderEditorSuggestions() {
     });
     editorSuggestions.appendChild(button);
   });
+}
+
+function getMatchingCommands() {
+  const value = entryInput.value;
+  if (!value.startsWith("/") || value.includes("\n")) {
+    return [];
+  }
+  const lowered = value.toLowerCase();
+  return SLASH_COMMANDS.filter((cmd) => cmd.name.startsWith(lowered));
+}
+
+function renderCommandPalette() {
+  const matches = getMatchingCommands();
+  commandPalette.innerHTML = "";
+
+  if (!matches.length) {
+    commandPalette.hidden = true;
+    return;
+  }
+
+  state.commandPaletteIndex = Math.min(
+    Math.max(state.commandPaletteIndex, 0),
+    matches.length - 1,
+  );
+
+  matches.forEach((cmd, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "command-palette-item";
+    button.setAttribute("role", "option");
+    if (index === state.commandPaletteIndex) {
+      button.classList.add("is-selected");
+      button.setAttribute("aria-selected", "true");
+    }
+    const nameEl = document.createElement("span");
+    nameEl.className = "command-palette-name";
+    nameEl.textContent = cmd.name;
+    const descEl = document.createElement("span");
+    descEl.className = "command-palette-desc";
+    descEl.textContent = cmd.description;
+    button.append(nameEl, descEl);
+    button.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      applyCommand(cmd.name);
+    });
+    commandPalette.appendChild(button);
+  });
+
+  commandPalette.hidden = false;
+}
+
+function handleCommandPaletteKeyboard(event) {
+  const matches = getMatchingCommands();
+  if (!matches.length) {
+    return false;
+  }
+
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    state.commandPaletteIndex = (state.commandPaletteIndex + 1) % matches.length;
+    renderCommandPalette();
+    return true;
+  }
+
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    state.commandPaletteIndex =
+      (state.commandPaletteIndex - 1 + matches.length) % matches.length;
+    renderCommandPalette();
+    return true;
+  }
+
+  if (event.key === "Tab") {
+    event.preventDefault();
+    applyCommand(matches[state.commandPaletteIndex].name);
+    return true;
+  }
+
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    commandPalette.hidden = true;
+    return true;
+  }
+
+  return false;
+}
+
+function applyCommand(name) {
+  setEditorValue(name);
+  entryInput.focus();
+  entryInput.setSelectionRange(name.length, name.length);
+  state.commandPaletteIndex = 0;
+  queueDraftSave();
+  renderCommandPalette();
 }
 
 function getSearchSuggestions() {
