@@ -381,7 +381,7 @@ entryInput.addEventListener("keydown", (event) => {
 
   if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key === "Enter") {
     event.preventDefault();
-    reopenEntryInEditor(state.entries[0]?.id);
+    reopenEntryInEditor(getMostRecentlyEditedEntryId());
     return;
   }
 
@@ -529,7 +529,7 @@ function submitComposer() {
   }
 
   if (text === "/re") {
-    reopenEntryInEditor(state.entries[0]?.id);
+    reopenEntryInEditor(getMostRecentlyEditedEntryId());
     return;
   }
 
@@ -643,6 +643,7 @@ function submitComposer() {
       existingEntry.text = text;
       existingEntry.tags = extractTags(text);
       existingEntry.mentions = extractMentions(text);
+      existingEntry.editedAt = new Date().toISOString();
       saveEntry(existingEntry);
       setEditorValue("");
       clearDraft();
@@ -653,12 +654,14 @@ function submitComposer() {
     }
   }
 
+  const createdAt = new Date().toISOString();
   const entry = {
     id: crypto.randomUUID(),
     text,
     tags: extractTags(text),
     mentions: extractMentions(text),
-    createdAt: new Date().toISOString(),
+    createdAt,
+    editedAt: createdAt,
     pinned: false,
   };
   state.entries.unshift(entry);
@@ -787,6 +790,19 @@ function closeSearchMode() {
   entryInput.setSelectionRange(entryInput.value.length, entryInput.value.length);
 }
 
+function getMostRecentlyEditedEntryId() {
+  let bestId = null;
+  let bestEditedAt = "";
+  for (const entry of state.entries) {
+    const editedAt = entry.editedAt || entry.createdAt;
+    if (editedAt > bestEditedAt) {
+      bestEditedAt = editedAt;
+      bestId = entry.id;
+    }
+  }
+  return bestId;
+}
+
 function reopenEntryInEditor(entryId) {
   const entry = state.entries.find((item) => item.id === entryId);
   if (!entry) {
@@ -848,6 +864,7 @@ async function initialize() {
       tags: Array.isArray(entry.tags) ? entry.tags : extractTags(entry.text),
       mentions: Array.isArray(entry.mentions) ? entry.mentions : extractMentions(entry.text),
       pinned: entry.pinned === true,
+      editedAt: entry.editedAt || entry.createdAt,
     }));
     const draft = await getMeta(DRAFT_KEY);
     if (draft) {
@@ -926,6 +943,7 @@ async function saveEntry(entry) {
       tags: [],
       mentions: [],
       createdAt: entry.createdAt,
+      editedAt: entry.editedAt || entry.createdAt,
       pinned: entry.pinned === true,
     };
   }
@@ -2119,6 +2137,7 @@ function importEntries() {
         tags: extractTags(item.text),
         mentions: extractMentions(item.text),
         createdAt: item.createdAt,
+        editedAt: typeof item.editedAt === "string" ? item.editedAt : item.createdAt,
         pinned: item.pinned === true,
       };
       const existing = state.entries.find((e) => e.id === entry.id);
@@ -2348,6 +2367,7 @@ async function decryptAllEntriesIntoState() {
         tags: extractTags(text),
         mentions: extractMentions(text),
         createdAt: record.createdAt,
+        editedAt: record.editedAt || record.createdAt,
         pinned: record.pinned === true,
       });
     } catch (error) {
