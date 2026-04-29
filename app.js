@@ -385,6 +385,18 @@ entryInput.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (event.shiftKey && event.key === "Enter" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    const inlineQuery = getInlineQuery();
+    if (inlineQuery) {
+      const matches = getEntriesForQuery({ search: inlineQuery.query });
+      if (matches.length) {
+        event.preventDefault();
+        reopenEntryInEditor(matches[0].id);
+        return;
+      }
+    }
+  }
+
   if (event.key === "Enter" && entryInput.value.trim() === "/y") {
     event.preventDefault();
     submitComposer();
