@@ -1038,6 +1038,12 @@ function handleSearchKeyboard(event) {
     return;
   }
 
+  if (event.shiftKey && event.key === "Enter" && !event.metaKey && !event.ctrlKey && !event.altKey && state.selectedEntryId) {
+    event.preventDefault();
+    reopenEntryInEditor(state.selectedEntryId);
+    return;
+  }
+
   const suggestions = getSearchSuggestions();
   if (suggestions.length) {
     if (event.key === "ArrowDown") {
