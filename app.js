@@ -655,24 +655,7 @@ function submitComposer() {
 
   const tagMatch = text.match(/^\/-([a-zA-Z0-9_-]+)$/);
   if (tagMatch) {
-    const tag = tagMatch[1].toLowerCase();
-    let bestId = null;
-    let bestEditedAt = "";
-    for (const entry of state.entries) {
-      if (!(entry.tags || []).includes(tag)) {
-        continue;
-      }
-      const editedAt = entry.editedAt || entry.createdAt;
-      if (editedAt > bestEditedAt) {
-        bestEditedAt = editedAt;
-        bestId = entry.id;
-      }
-    }
-    if (bestId) {
-      reopenEntryInEditor(bestId);
-    } else {
-      composerHint.textContent = `No block tagged #${tag}`;
-    }
+    openMostRecentlyEditedTaggedBlock(tagMatch[1].toLowerCase());
     return;
   }
 
@@ -862,6 +845,26 @@ function reopenEntryInEditor(entryId) {
   entryInput.focus();
   entryInput.setSelectionRange(entryInput.value.length, entryInput.value.length);
   showHint("edit-mode", "Press Esc to cancel editing");
+}
+
+function openMostRecentlyEditedTaggedBlock(tag) {
+  let bestId = null;
+  let bestEditedAt = "";
+  for (const entry of state.entries) {
+    if (!(entry.tags || []).includes(tag)) {
+      continue;
+    }
+    const editedAt = entry.editedAt || entry.createdAt;
+    if (editedAt > bestEditedAt) {
+      bestEditedAt = editedAt;
+      bestId = entry.id;
+    }
+  }
+  if (bestId) {
+    reopenEntryInEditor(bestId);
+  } else {
+    composerHint.textContent = `No block tagged #${tag}`;
+  }
 }
 
 function updateClock() {
@@ -1864,6 +1867,16 @@ function handleCommandPaletteKeyboard(event) {
     event.stopPropagation();
     commandPalette.hidden = true;
     return true;
+  }
+
+  if (event.key === "Enter" && entryInput.value.startsWith("/-")) {
+    const highlighted = matches[state.commandPaletteIndex];
+    if (highlighted && highlighted.name.startsWith("/-")) {
+      event.preventDefault();
+      commandPalette.hidden = true;
+      openMostRecentlyEditedTaggedBlock(highlighted.name.slice(2).toLowerCase());
+      return true;
+    }
   }
 
   return false;
