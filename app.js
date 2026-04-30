@@ -1759,17 +1759,41 @@ function renderEditorSuggestions() {
   });
 }
 
-function getMatchingCommands() {
+function getPaletteItems() {
   const value = entryInput.value;
   if (!value.startsWith("/") || value.includes("\n")) {
     return [];
+  }
+  if (value.startsWith("/-")) {
+    return getTagPaletteItems(value);
   }
   const lowered = value.toLowerCase();
   return SLASH_COMMANDS.filter((cmd) => cmd.name.startsWith(lowered));
 }
 
+function getTagPaletteItems(value) {
+  const prefix = value.slice(2).toLowerCase();
+  const counts = new Map();
+  for (const entry of state.entries) {
+    for (const tag of entry.tags || []) {
+      counts.set(tag, (counts.get(tag) || 0) + 1);
+    }
+  }
+  const items = [];
+  for (const [tag, count] of counts) {
+    if (count > 0 && tag.startsWith(prefix)) {
+      items.push({
+        name: `/-${tag}`,
+        description: count === 1 ? "1 block" : `${count} blocks`,
+      });
+    }
+  }
+  items.sort((a, b) => a.name.localeCompare(b.name));
+  return items;
+}
+
 function renderCommandPalette() {
-  const matches = getMatchingCommands();
+  const matches = getPaletteItems();
   commandPalette.innerHTML = "";
 
   if (!matches.length) {
@@ -1809,7 +1833,7 @@ function renderCommandPalette() {
 }
 
 function handleCommandPaletteKeyboard(event) {
-  const matches = getMatchingCommands();
+  const matches = getPaletteItems();
   if (!matches.length) {
     return false;
   }
