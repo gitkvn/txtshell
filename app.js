@@ -1845,6 +1845,7 @@ function handleCommandPaletteKeyboard(event) {
     event.preventDefault();
     state.commandPaletteIndex = (state.commandPaletteIndex + 1) % matches.length;
     renderCommandPalette();
+    commandPalette.querySelector(".is-selected")?.scrollIntoView({ block: "nearest" });
     return true;
   }
 
@@ -1853,6 +1854,7 @@ function handleCommandPaletteKeyboard(event) {
     state.commandPaletteIndex =
       (state.commandPaletteIndex - 1 + matches.length) % matches.length;
     renderCommandPalette();
+    commandPalette.querySelector(".is-selected")?.scrollIntoView({ block: "nearest" });
     return true;
   }
 
