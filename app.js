@@ -475,6 +475,12 @@ entryInput.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (event.key === "Enter" && /^\/-[a-zA-Z0-9_-]+$/.test(entryInput.value.trim())) {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
     submitComposer();
@@ -644,6 +650,29 @@ function submitComposer() {
     clearDraft();
     updateWordCount();
     composerHint.textContent = state.targetCount ? `Target set to ${state.targetCount}` : "Target cleared";
+    return;
+  }
+
+  const tagMatch = text.match(/^\/-([a-zA-Z0-9_-]+)$/);
+  if (tagMatch) {
+    const tag = tagMatch[1].toLowerCase();
+    let bestId = null;
+    let bestEditedAt = "";
+    for (const entry of state.entries) {
+      if (!(entry.tags || []).includes(tag)) {
+        continue;
+      }
+      const editedAt = entry.editedAt || entry.createdAt;
+      if (editedAt > bestEditedAt) {
+        bestEditedAt = editedAt;
+        bestId = entry.id;
+      }
+    }
+    if (bestId) {
+      reopenEntryInEditor(bestId);
+    } else {
+      composerHint.textContent = `No block tagged #${tag}`;
+    }
     return;
   }
 
