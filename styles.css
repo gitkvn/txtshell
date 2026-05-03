@@ -560,7 +560,7 @@ kbd {
 }
 
 .entry-card {
-  border-bottom: 1px solid rgba(23, 23, 23, 0.07);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
   padding: 14px 8px 16px;
   cursor: pointer;
   border-radius: 8px;
@@ -571,7 +571,7 @@ kbd {
 }
 
 .entry-card.is-selected {
-  background: rgba(23, 23, 23, 0.035);
+  background: color-mix(in srgb, var(--paper) 92%, var(--accent) 12%);
 }
 
 .entry-meta {
