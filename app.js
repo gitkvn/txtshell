@@ -74,6 +74,7 @@ const state = {
   vaultView: null,
   vaultPending: null,
   targetCount: null,
+  selectedForMerge: new Set(),
 };
 
 const composerForm = document.querySelector("#composerForm");
@@ -119,6 +120,13 @@ const findReplaceCount = document.querySelector("#findReplaceCount");
 const findReplaceReplaceButton = document.querySelector("#findReplaceReplaceButton");
 const findReplaceReplaceAllButton = document.querySelector("#findReplaceReplaceAllButton");
 const findReplaceCloseButton = document.querySelector("#findReplaceCloseButton");
+const mergeSelectedButton = document.querySelector("#mergeSelectedButton");
+const mergeModal = document.querySelector("#mergeModal");
+const mergeModalBackdrop = document.querySelector("#mergeModalBackdrop");
+const mergeModalForm = document.querySelector("#mergeModalForm");
+const mergeModalTitle = document.querySelector("#mergeModalTitle");
+const mergeOpeningInput = document.querySelector("#mergeOpeningInput");
+const mergeCancelButton = document.querySelector("#mergeCancelButton");
 function setEditorValue(value) {
   entryInput.value = value;
   updateWordCount();
@@ -159,7 +167,7 @@ window.addEventListener("pointerdown", (event) => {
     return;
   }
 
-  if (target.closest("#searchMode, .copy-button, #searchInput, #editorSuggestions, #commandPalette, #vaultOverlay, #lockButton, #interestOverlay, #findReplaceBar")) {
+  if (target.closest("#searchMode, .copy-button, #searchInput, #editorSuggestions, #commandPalette, #vaultOverlay, #lockButton, #interestOverlay, #findReplaceBar, #mergeModal")) {
     return;
   }
 
@@ -271,6 +279,23 @@ searchUndoDeleteButton.addEventListener("click", () => {
   undoDelete();
 });
 
+mergeSelectedButton.addEventListener("click", () => {
+  openMergeModal();
+});
+
+mergeCancelButton.addEventListener("click", () => {
+  closeMergeModal();
+});
+
+mergeModalBackdrop.addEventListener("click", () => {
+  closeMergeModal();
+});
+
+mergeModalForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  performMerge();
+});
+
 const COUNT_MODES = ["off", "words", "chars", "lines"];
 
 wordCountToggleButton.addEventListener("click", () => {
@@ -319,6 +344,12 @@ document.addEventListener("keydown", (event) => {
       }
     }
     handleGlobalShortcut(event);
+    return;
+  }
+
+  if (!mergeModal.hidden) {
+    event.preventDefault();
+    closeMergeModal();
     return;
   }
 
@@ -760,6 +791,14 @@ function render() {
   }
 
   searchUndoDeleteButton.hidden = !state.pendingDeletedEntry;
+  pruneStaleMergeSelections();
+  const mergeCount = state.selectedForMerge.size;
+  if (mergeCount >= 2) {
+    mergeSelectedButton.hidden = false;
+    mergeSelectedButton.textContent = `Merge selected (${mergeCount})`;
+  } else {
+    mergeSelectedButton.hidden = true;
+  }
   quickReference.hidden = state.preset !== "quickref";
   aboutGuide.hidden = state.preset !== "about";
   entryList.hidden = state.preset === "quickref" || state.preset === "about";
@@ -806,6 +845,8 @@ function closeSearchMode() {
   searchMode.hidden = true;
   composerForm.hidden = false;
   state.preset = null;
+  state.selectedForMerge.clear();
+  closeMergeModal();
   searchInput.hidden = false;
   searchInputLabel.hidden = false;
   searchSuggestions.hidden = true;
@@ -1214,6 +1255,71 @@ function clearPendingDelete() {
   state.pendingDeletedEntry = null;
 }
 
+function pruneStaleMergeSelections() {
+  if (!state.selectedForMerge.size) {
+    return;
+  }
+  const live = new Set(state.entries.map((entry) => entry.id));
+  for (const id of state.selectedForMerge) {
+    if (!live.has(id)) {
+      state.selectedForMerge.delete(id);
+    }
+  }
+}
+
+function openMergeModal() {
+  if (state.selectedForMerge.size < 2) {
+    return;
+  }
+  mergeModalTitle.textContent = `Merge ${state.selectedForMerge.size} blocks into one`;
+  mergeOpeningInput.value = "";
+  mergeModal.hidden = false;
+  window.requestAnimationFrame(() => mergeOpeningInput.focus());
+}
+
+function closeMergeModal() {
+  mergeModal.hidden = true;
+  mergeOpeningInput.value = "";
+}
+
+async function performMerge() {
+  const ids = Array.from(state.selectedForMerge);
+  const originals = state.entries
+    .filter((entry) => ids.includes(entry.id))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  if (originals.length < 2) {
+    return;
+  }
+
+  const opening = mergeOpeningInput.value.trim();
+  const bodies = originals.map((entry) => entry.text).join("\n\n---\n\n");
+  const text = opening ? `${opening}\n\n${bodies}` : bodies;
+  const now = new Date().toISOString();
+  const merged = {
+    id: crypto.randomUUID(),
+    text,
+    tags: extractTags(text),
+    mentions: extractMentions(text),
+    createdAt: now,
+    editedAt: now,
+    pinned: originals.some((entry) => entry.pinned === true),
+  };
+
+  const originalIds = new Set(originals.map((entry) => entry.id));
+  for (const id of originalIds) {
+    removeEntry(id);
+  }
+  state.entries = state.entries.filter((entry) => !originalIds.has(entry.id));
+
+  state.entries.unshift(merged);
+  await saveEntry(merged);
+
+  state.selectedForMerge.clear();
+  closeMergeModal();
+  composerHint.textContent = `Merged ${originals.length} blocks`;
+  reopenEntryInEditor(merged.id);
+}
+
 function getSearchModeLabel(count) {
   const suffix = count !== undefined && state.preset !== "quickref" && state.preset !== "about"
     ? ` (${count})`
@@ -1349,6 +1455,29 @@ function renderEntries(container, entries, options = {}) {
 
     if (selectResults && entry.id === state.selectedEntryId) {
       card.classList.add("is-selected");
+    }
+
+    if (mode === "search" && state.selectedForMerge.has(entry.id)) {
+      card.classList.add("is-merge-selected");
+    }
+
+    if (mode === "search") {
+      card.addEventListener("click", (event) => {
+        if (!event.shiftKey) {
+          return;
+        }
+        if (event.target.closest(".pin-button, .edit-button, .copy-button, .delete-button, .expand-button, .tag-chip")) {
+          return;
+        }
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (state.selectedForMerge.has(entry.id)) {
+          state.selectedForMerge.delete(entry.id);
+        } else {
+          state.selectedForMerge.add(entry.id);
+        }
+        render();
+      }, true);
     }
 
     const tags = entry.tags;
