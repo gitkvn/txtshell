@@ -1051,12 +1051,12 @@ kbd {
   outline: none;
 }
 
-.entry-card.is-merge-selected {
+.entry-card.is-multi-selected {
   background: color-mix(in srgb, var(--paper) 86%, var(--accent) 14%);
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
-.entry-card.is-merge-selected.is-selected {
+.entry-card.is-multi-selected.is-selected {
   background: color-mix(in srgb, var(--paper) 80%, var(--accent) 20%);
 }
 

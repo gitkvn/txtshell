@@ -84,6 +84,18 @@
         </form>
       </section>
 
+      <section id="deleteModal" class="modal-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle">
+        <div id="deleteModalBackdrop" class="modal-backdrop"></div>
+        <form id="deleteModalForm" class="modal-card">
+          <p id="deleteModalTitle" class="modal-title"></p>
+          <p class="modal-warning">These blocks will be moved to the recent-delete buffer. You can undo this once.</p>
+          <div class="modal-actions">
+            <button id="deleteCancelButton" class="modal-button modal-button-secondary" type="button">Cancel</button>
+            <button id="deleteConfirmButton" class="modal-button modal-button-primary" type="submit">Delete</button>
+          </div>
+        </form>
+      </section>
+
       <section id="interestOverlay" class="interest-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="interestTitle">
         <div id="interestBackdrop" class="interest-backdrop"></div>
         <div class="interest-card">
@@ -122,6 +134,7 @@
           <p id="searchModeLabel" class="search-mode-label">Search saved blocks</p>
           <div class="search-mode-actions">
             <button id="mergeSelectedButton" class="undo-button" type="button" hidden></button>
+            <button id="deleteSelectedButton" class="undo-button" type="button" hidden></button>
             <button id="searchUndoDeleteButton" class="undo-button" type="button" hidden>Undo delete</button>
             <button id="closeSearchButton" class="search-close" type="button">Close</button>
           </div>

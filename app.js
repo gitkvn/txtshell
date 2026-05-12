@@ -31,7 +31,7 @@ const INTEREST_ENDPOINT = "https://formspree.io/f/meepyaww";
 const RE_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const DRAFT_SAVE_DELAY = 180;
-const DELETE_UNDO_TIMEOUT = 5000;
+const DELETE_UNDO_TIMEOUT = 10000;
 const COPY_FLASH_DURATION = 900;
 const DELETE_CONFIRM_TIMEOUT = 2000;
 const TOAST_DURATION = 3000;
@@ -62,7 +62,7 @@ const state = {
   preset: null,
   editingEntryId: null,
   selectedEntryId: null,
-  pendingDeletedEntry: null,
+  pendingDeletedEntries: null,
   selectedSuggestionIndex: 0,
   editorSelectedSuggestionIndex: 0,
   commandPaletteIndex: 0,
@@ -74,7 +74,7 @@ const state = {
   vaultView: null,
   vaultPending: null,
   targetCount: null,
-  selectedForMerge: new Set(),
+  selectedEntries: new Set(),
 };
 
 const composerForm = document.querySelector("#composerForm");
@@ -127,6 +127,12 @@ const mergeModalForm = document.querySelector("#mergeModalForm");
 const mergeModalTitle = document.querySelector("#mergeModalTitle");
 const mergeOpeningInput = document.querySelector("#mergeOpeningInput");
 const mergeCancelButton = document.querySelector("#mergeCancelButton");
+const deleteSelectedButton = document.querySelector("#deleteSelectedButton");
+const deleteModal = document.querySelector("#deleteModal");
+const deleteModalBackdrop = document.querySelector("#deleteModalBackdrop");
+const deleteModalForm = document.querySelector("#deleteModalForm");
+const deleteModalTitle = document.querySelector("#deleteModalTitle");
+const deleteCancelButton = document.querySelector("#deleteCancelButton");
 function setEditorValue(value) {
   entryInput.value = value;
   updateWordCount();
@@ -167,7 +173,7 @@ window.addEventListener("pointerdown", (event) => {
     return;
   }
 
-  if (target.closest("#searchMode, .copy-button, #searchInput, #editorSuggestions, #commandPalette, #vaultOverlay, #lockButton, #interestOverlay, #findReplaceBar, #mergeModal")) {
+  if (target.closest("#searchMode, .copy-button, #searchInput, #editorSuggestions, #commandPalette, #vaultOverlay, #lockButton, #interestOverlay, #findReplaceBar, #mergeModal, #deleteModal")) {
     return;
   }
 
@@ -296,6 +302,23 @@ mergeModalForm.addEventListener("submit", (event) => {
   performMerge();
 });
 
+deleteSelectedButton.addEventListener("click", () => {
+  openDeleteModal();
+});
+
+deleteCancelButton.addEventListener("click", () => {
+  closeDeleteModal();
+});
+
+deleteModalBackdrop.addEventListener("click", () => {
+  closeDeleteModal();
+});
+
+deleteModalForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  performBulkDelete();
+});
+
 const COUNT_MODES = ["off", "words", "chars", "lines"];
 
 wordCountToggleButton.addEventListener("click", () => {
@@ -351,6 +374,12 @@ document.addEventListener("keydown", (event) => {
   if (!mergeModal.hidden) {
     event.preventDefault();
     closeMergeModal();
+    return;
+  }
+
+  if (!deleteModal.hidden) {
+    event.preventDefault();
+    closeDeleteModal();
     return;
   }
 
@@ -791,14 +820,17 @@ function render() {
     return;
   }
 
-  searchUndoDeleteButton.hidden = !state.pendingDeletedEntry;
-  pruneStaleMergeSelections();
-  const mergeCount = state.selectedForMerge.size;
-  if (mergeCount >= 2) {
+  searchUndoDeleteButton.hidden = !state.pendingDeletedEntries?.length;
+  pruneStaleSelections();
+  const selectionCount = state.selectedEntries.size;
+  if (selectionCount >= 2) {
     mergeSelectedButton.hidden = false;
-    mergeSelectedButton.textContent = `Merge selected (${mergeCount})`;
+    mergeSelectedButton.textContent = `Merge selected (${selectionCount})`;
+    deleteSelectedButton.hidden = false;
+    deleteSelectedButton.textContent = `Delete selected (${selectionCount})`;
   } else {
     mergeSelectedButton.hidden = true;
+    deleteSelectedButton.hidden = true;
   }
   quickReference.hidden = state.preset !== "quickref";
   aboutGuide.hidden = state.preset !== "about";
@@ -846,8 +878,9 @@ function closeSearchMode() {
   searchMode.hidden = true;
   composerForm.hidden = false;
   state.preset = null;
-  state.selectedForMerge.clear();
+  state.selectedEntries.clear();
   closeMergeModal();
+  closeDeleteModal();
   searchInput.hidden = false;
   searchInputLabel.hidden = false;
   searchSuggestions.hidden = true;
@@ -1053,7 +1086,7 @@ function deleteEntry(entryId) {
   }
 
   const deletedEntry = state.entries[deletedIndex];
-  state.pendingDeletedEntry = { entry: deletedEntry, index: deletedIndex };
+  state.pendingDeletedEntries = [{ entry: deletedEntry, index: deletedIndex }];
   state.entries = state.entries.filter((entry) => entry.id !== entryId);
   if (state.editingEntryId === entryId) {
     state.editingEntryId = null;
@@ -1234,15 +1267,17 @@ function flashCopied(button) {
 }
 
 function undoDelete() {
-  if (!state.pendingDeletedEntry) {
+  if (!state.pendingDeletedEntries?.length) {
     return;
   }
 
-  const { entry, index } = state.pendingDeletedEntry;
-  state.entries.splice(index, 0, entry);
-  saveEntry(entry);
-  state.selectedEntryId = entry.id;
-  composerHint.textContent = "Delete undone";
+  const records = [...state.pendingDeletedEntries].sort((a, b) => a.index - b.index);
+  for (const { entry, index } of records) {
+    state.entries.splice(index, 0, entry);
+    saveEntry(entry);
+  }
+  state.selectedEntryId = records[0].entry.id;
+  composerHint.textContent = records.length > 1 ? `Restored ${records.length} blocks` : "Delete undone";
   clearPendingDelete();
   render();
   window.requestAnimationFrame(() => {
@@ -1253,26 +1288,26 @@ function undoDelete() {
 function clearPendingDelete() {
   window.clearTimeout(deleteUndoTimer);
   deleteUndoTimer = null;
-  state.pendingDeletedEntry = null;
+  state.pendingDeletedEntries = null;
 }
 
-function pruneStaleMergeSelections() {
-  if (!state.selectedForMerge.size) {
+function pruneStaleSelections() {
+  if (!state.selectedEntries.size) {
     return;
   }
   const live = new Set(state.entries.map((entry) => entry.id));
-  for (const id of state.selectedForMerge) {
+  for (const id of state.selectedEntries) {
     if (!live.has(id)) {
-      state.selectedForMerge.delete(id);
+      state.selectedEntries.delete(id);
     }
   }
 }
 
 function openMergeModal() {
-  if (state.selectedForMerge.size < 2) {
+  if (state.selectedEntries.size < 2) {
     return;
   }
-  mergeModalTitle.textContent = `Merge ${state.selectedForMerge.size} blocks into one`;
+  mergeModalTitle.textContent = `Merge ${state.selectedEntries.size} blocks into one`;
   mergeOpeningInput.value = "";
   mergeModal.hidden = false;
   window.requestAnimationFrame(() => mergeOpeningInput.focus());
@@ -1281,8 +1316,8 @@ function openMergeModal() {
 function closeMergeModal() {
   mergeModal.hidden = true;
   mergeOpeningInput.value = "";
-  if (state.selectedForMerge.size) {
-    state.selectedForMerge.clear();
+  if (state.selectedEntries.size) {
+    state.selectedEntries.clear();
     if (state.searchMode) {
       render();
     }
@@ -1290,7 +1325,7 @@ function closeMergeModal() {
 }
 
 async function performMerge() {
-  const ids = Array.from(state.selectedForMerge);
+  const ids = Array.from(state.selectedEntries);
   const originals = state.entries
     .filter((entry) => ids.includes(entry.id))
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
@@ -1321,12 +1356,70 @@ async function performMerge() {
   state.entries.unshift(merged);
   await saveEntry(merged);
 
-  state.selectedForMerge.clear();
+  state.selectedEntries.clear();
   closeMergeModal();
   state.selectedEntryId = merged.id;
   composerHint.textContent = `Merged ${originals.length} blocks`;
   render();
   window.requestAnimationFrame(() => scrollSelectedIntoView());
+}
+
+function openDeleteModal() {
+  if (state.selectedEntries.size < 2) {
+    return;
+  }
+  deleteModalTitle.textContent = `Delete ${state.selectedEntries.size} blocks`;
+  deleteModal.hidden = false;
+  window.requestAnimationFrame(() => deleteCancelButton.focus());
+}
+
+function closeDeleteModal() {
+  deleteModal.hidden = true;
+  if (state.selectedEntries.size) {
+    state.selectedEntries.clear();
+    if (state.searchMode) {
+      render();
+    }
+  }
+}
+
+function performBulkDelete() {
+  const ids = Array.from(state.selectedEntries);
+  const records = [];
+  for (const id of ids) {
+    const index = state.entries.findIndex((entry) => entry.id === id);
+    if (index !== -1) {
+      records.push({ entry: state.entries[index], index });
+    }
+  }
+  if (!records.length) {
+    closeDeleteModal();
+    return;
+  }
+
+  clearPendingDelete();
+
+  const idSet = new Set(records.map((r) => r.entry.id));
+  state.entries = state.entries.filter((entry) => !idSet.has(entry.id));
+  for (const id of idSet) {
+    removeEntry(id);
+    if (state.editingEntryId === id) {
+      state.editingEntryId = null;
+      setEditorValue("");
+      clearDraft();
+    }
+  }
+
+  state.pendingDeletedEntries = records;
+  state.selectedEntries.clear();
+  deleteModal.hidden = true;
+  composerHint.textContent = `Deleted ${records.length} blocks`;
+  syncSelection(getFilteredEntries());
+  render();
+  deleteUndoTimer = window.setTimeout(() => {
+    clearPendingDelete();
+    render();
+  }, DELETE_UNDO_TIMEOUT);
 }
 
 function getSearchModeLabel(count) {
@@ -1466,8 +1559,8 @@ function renderEntries(container, entries, options = {}) {
       card.classList.add("is-selected");
     }
 
-    if (mode === "search" && state.selectedForMerge.has(entry.id)) {
-      card.classList.add("is-merge-selected");
+    if (mode === "search" && state.selectedEntries.has(entry.id)) {
+      card.classList.add("is-multi-selected");
     }
 
     if (mode === "search") {
@@ -1480,10 +1573,10 @@ function renderEntries(container, entries, options = {}) {
         }
         event.preventDefault();
         event.stopImmediatePropagation();
-        if (state.selectedForMerge.has(entry.id)) {
-          state.selectedForMerge.delete(entry.id);
+        if (state.selectedEntries.has(entry.id)) {
+          state.selectedEntries.delete(entry.id);
         } else {
-          state.selectedForMerge.add(entry.id);
+          state.selectedEntries.add(entry.id);
         }
         render();
       }, true);
@@ -2633,7 +2726,7 @@ function lockVault() {
   state.preset = null;
   state.selectedEntryId = null;
   state.editingEntryId = null;
-  state.pendingDeletedEntry = null;
+  state.pendingDeletedEntries = null;
   setEditorValue("");
   clearDraft();
   if (state.searchMode) {
