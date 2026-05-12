@@ -328,6 +328,7 @@ searchInput.addEventListener("input", (event) => {
 searchInput.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
+    event.stopPropagation();
     closeSearchMode();
     return;
   }
@@ -1280,6 +1281,12 @@ function openMergeModal() {
 function closeMergeModal() {
   mergeModal.hidden = true;
   mergeOpeningInput.value = "";
+  if (state.selectedForMerge.size) {
+    state.selectedForMerge.clear();
+    if (state.searchMode) {
+      render();
+    }
+  }
 }
 
 async function performMerge() {
