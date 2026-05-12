@@ -1323,8 +1323,10 @@ async function performMerge() {
 
   state.selectedForMerge.clear();
   closeMergeModal();
+  state.selectedEntryId = merged.id;
   composerHint.textContent = `Merged ${originals.length} blocks`;
-  reopenEntryInEditor(merged.id);
+  render();
+  window.requestAnimationFrame(() => scrollSelectedIntoView());
 }
 
 function getSearchModeLabel(count) {
