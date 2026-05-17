@@ -1027,6 +1027,7 @@ async function initialize() {
       composerHint.textContent = "Draft restored";
       entryInput.setSelectionRange(entryInput.value.length, entryInput.value.length);
     }
+    signalReady();
   } catch {
     composerHint.textContent = "Storage unavailable";
   }
@@ -2593,6 +2594,14 @@ function isVaultLocked() {
   return state.encryption.enabled && !state.encryption.unlocked;
 }
 
+let readySignalSent = false;
+function signalReady() {
+  if (readySignalSent) return;
+  if (isVaultLocked()) return;
+  readySignalSent = true;
+  window.postMessage({ type: "txtshell_ready" }, "*");
+}
+
 function randomBytes(length) {
   return crypto.getRandomValues(new Uint8Array(length));
 }
@@ -3194,6 +3203,7 @@ async function handleUnlockSubmit(value, isRecovery) {
   composerHint.textContent = "Vault unlocked";
   render();
   entryInput.focus();
+  signalReady();
 }
 
 async function handleChangeCurrentSubmit(passphrase) {
