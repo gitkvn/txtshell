@@ -2312,7 +2312,7 @@ function applyTheme(theme) {
 }
 
 function showStatusToast(message, options = {}) {
-  if (!message || message === "Ready" || message === "Editing block -> save updates") {
+  if (!message || message === "Ready" || message === "Editing block -> save updates" || message === "Search saved") {
     return;
   }
 
