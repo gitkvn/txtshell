@@ -189,6 +189,33 @@ composerForm.addEventListener("submit", (event) => {
   submitComposer();
 });
 
+window.addEventListener("message", (event) => {
+  const data = event.data;
+  if (!data || data.type !== "txtshell_capture") {
+    return;
+  }
+  const note = typeof data.note === "string" ? data.note.trim() : "";
+  const title = typeof data.title === "string" ? data.title.trim() : "";
+  const url = typeof data.url === "string" ? data.url.trim() : "";
+  if (!note && !title && !url) {
+    return;
+  }
+  const parts = [];
+  if (note) {
+    parts.push(note);
+  }
+  if (title) {
+    parts.push(note ? `\n${title}` : title);
+  }
+  if (url) {
+    parts.push(url);
+  }
+  const text = parts.join("\n");
+  const entry = createEntryFromText(text);
+  console.log("[txtshell] captured block from postMessage", entry.id);
+  render();
+});
+
 new MutationObserver(() => {
   showStatusToast(composerHint.textContent.trim());
 }).observe(composerHint, { childList: true, characterData: true, subtree: true });
@@ -569,6 +596,22 @@ applyCountMode(
 );
 initialize();
 
+function createEntryFromText(text) {
+  const now = new Date().toISOString();
+  const entry = {
+    id: crypto.randomUUID(),
+    text,
+    tags: extractTags(text),
+    mentions: extractMentions(text),
+    createdAt: now,
+    editedAt: now,
+    pinned: false,
+  };
+  state.entries.unshift(entry);
+  saveEntry(entry);
+  return entry;
+}
+
 function submitComposer() {
   if (isVaultLocked()) {
     return;
@@ -739,18 +782,7 @@ function submitComposer() {
     }
   }
 
-  const createdAt = new Date().toISOString();
-  const entry = {
-    id: crypto.randomUUID(),
-    text,
-    tags: extractTags(text),
-    mentions: extractMentions(text),
-    createdAt,
-    editedAt: createdAt,
-    pinned: false,
-  };
-  state.entries.unshift(entry);
-  saveEntry(entry);
+  createEntryFromText(text);
   setEditorValue("");
   clearDraft();
   composerHint.textContent = "Saved";
