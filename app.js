@@ -200,6 +200,10 @@ window.addEventListener("message", (event) => {
   if (!note && !title && !url) {
     return;
   }
+  if (isVaultLocked()) {
+    console.warn("[txtshell] capture dropped: vault is locked");
+    return;
+  }
   const parts = [];
   if (note) {
     parts.push(note);
@@ -2539,10 +2543,14 @@ function isLastWeek(value) {
 
 function removeEntry(entryId) {
   if (!state.db) {
-    return;
+    return Promise.resolve();
   }
-  const transaction = state.db.transaction(ENTRY_STORE, "readwrite");
-  transaction.objectStore(ENTRY_STORE).delete(entryId);
+  return new Promise((resolve, reject) => {
+    const transaction = state.db.transaction(ENTRY_STORE, "readwrite");
+    transaction.objectStore(ENTRY_STORE).delete(entryId);
+    transaction.addEventListener("complete", () => resolve());
+    transaction.addEventListener("error", () => reject(transaction.error));
+  });
 }
 
 function getMeta(key) {
@@ -2725,6 +2733,27 @@ async function decryptAllEntriesIntoState() {
   }
   decrypted.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   state.entries = decrypted;
+}
+
+async function cleanupOrphanedEntries() {
+  if (isVaultLocked()) {
+    console.warn("Cannot run cleanup while vault is locked — would delete all encrypted entries. Unlock first.");
+    return;
+  }
+  if (state.entries.length === 0) {
+    console.warn("Cannot run cleanup with empty state.entries — refusing to proceed.");
+    return;
+  }
+  const raw = await getAllEntries();
+  const known = new Set(state.entries.map((e) => e.id));
+  let removed = 0;
+  for (const record of raw) {
+    if (!known.has(record.id)) {
+      await removeEntry(record.id);
+      removed++;
+    }
+  }
+  console.log(`[txtshell] cleanupOrphanedEntries: removed ${removed} orphaned ${removed === 1 ? "entry" : "entries"}`);
 }
 
 function updateLockButton() {
