@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy — Txtshell Capture</title>
+  <link rel="icon" type="image/svg+xml" href="logo-shell.svg">
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f3ee;
+      --paper: #fffdf8;
+      --ink: #171717;
+      --muted: #68635b;
+      --line: #ddd6ca;
+      --accent: #1f6feb;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: "SFMono-Regular", "Menlo", "Consolas", monospace;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --bg: #121212;
+        --paper: #1b1b1b;
+        --ink: #f3f0e8;
+        --muted: #b0a89d;
+        --line: #2b2b2b;
+        --accent: #7fb2ff;
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font-sans);
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    .page {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 48px 24px 96px;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 32px;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .header a {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--ink);
+      text-decoration: none;
+    }
+
+    .header svg {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      padding: 6px;
+    }
+
+    .header h1 {
+      font-size: 1.05rem;
+      font-weight: 500;
+      margin: 0;
+      letter-spacing: -0.01em;
+    }
+
+    .header .subtitle {
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin: 32px 0 12px;
+      letter-spacing: -0.01em;
+    }
+
+    h2:first-of-type {
+      margin-top: 8px;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 0.85rem;
+      margin-bottom: 32px;
+    }
+
+    p {
+      margin: 0 0 14px;
+    }
+
+    ul {
+      margin: 0 0 14px;
+      padding-left: 22px;
+    }
+
+    li {
+      margin-bottom: 6px;
+    }
+
+    code, .perm {
+      font-family: var(--font-mono);
+      font-size: 0.88em;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 1px 6px;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .footer {
+      margin-top: 48px;
+      padding-top: 24px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="header">
+      <a href="/">
+        <svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect width="128" height="128" rx="28" fill="#F4F1EA"/>
+          <line x1="36" y1="40" x2="92" y2="40" stroke="#1E1E1E" stroke-width="4.5" stroke-linecap="round"/>
+          <line x1="40" y1="52" x2="88" y2="52" stroke="#1E1E1E" stroke-width="4.5" stroke-linecap="round"/>
+          <line x1="44" y1="64" x2="84" y2="64" stroke="#1E1E1E" stroke-width="4.5" stroke-linecap="round"/>
+          <line x1="48" y1="76" x2="80" y2="76" stroke="#1E1E1E" stroke-width="4.5" stroke-linecap="round"/>
+          <line x1="52" y1="88" x2="76" y2="88" stroke="#1E1E1E" stroke-width="4.5" stroke-linecap="round"/>
+        </svg>
+        <div>
+          <h1>Txtshell Capture</h1>
+          <div class="subtitle">Privacy Policy</div>
+        </div>
+      </a>
+    </div>
+
+    <p class="meta">Last updated: May 17, 2026</p>
+
+    <p>
+      Txtshell Capture is a Chrome extension that captures thoughts and links into
+      <a href="https://txtshell.com">Txtshell</a>, a local-first text editor that runs entirely in your browser.
+    </p>
+
+    <h2>What the extension handles</h2>
+    <ul>
+      <li>Text you type into the extension's popup (the Note field).</li>
+      <li>The URL and title of your currently active tab — but only when you click <strong>+ Grab current page</strong> in the popup.</li>
+      <li>These items are combined into a single capture and sent to your own Txtshell instance.</li>
+    </ul>
+
+    <h2>What the extension does with this data</h2>
+    <ul>
+      <li>Sends each capture to the Txtshell tab you have open, where it becomes a block in your local Txtshell storage.</li>
+      <li>If no Txtshell tab is open at the moment of capture, queues the data in Chrome's local extension storage on your device until Txtshell next opens, then delivers it.</li>
+      <li>All data stays inside your browser. Nothing is transmitted to any server operated by us or by anyone else.</li>
+    </ul>
+
+    <h2>What the extension does not do</h2>
+    <ul>
+      <li>Does not collect analytics or telemetry.</li>
+      <li>Does not communicate with any external servers.</li>
+      <li>Does not read browsing history beyond the active tab's URL and title at the moment you click <strong>+ Grab current page</strong>.</li>
+      <li>Does not read or modify content on any web page other than txtshell.com (and there, only to deliver captures you initiated).</li>
+      <li>Does not share, sell, or transmit your data to any third party.</li>
+    </ul>
+
+    <h2>Permissions explained</h2>
+    <ul>
+      <li><span class="perm">activeTab</span> — Read the URL and title of the tab you're on, only when you click Grab current page.</li>
+      <li><span class="perm">tabs</span> — Find your open Txtshell tab to deliver captures to it.</li>
+      <li><span class="perm">scripting</span> — Inject a single line of code into the Txtshell tab to deliver each capture.</li>
+      <li><span class="perm">storage</span> — Queue captures locally when Txtshell isn't open.</li>
+      <li>Host permissions for <code>txtshell.com</code> — Allow delivery of captures into the Txtshell page.</li>
+    </ul>
+
+    <h2>Open source</h2>
+    <p>The full source code of this extension is open for inspection.</p>
+
+    <h2>Contact</h2>
+    <p>Questions or concerns about this policy: <a href="mailto:privacy@txtshell.com">privacy@txtshell.com</a></p>
+
+    <div class="footer">
+      <a href="/">← Back to Txtshell</a>
+    </div>
+  </main>
+</body>
+</html>
