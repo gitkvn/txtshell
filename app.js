@@ -190,6 +190,9 @@ composerForm.addEventListener("submit", (event) => {
 });
 
 window.addEventListener("message", (event) => {
+  if (event.origin !== window.location.origin) {
+    return;
+  }
   const data = event.data;
   if (!data || data.type !== "txtshell_capture") {
     return;
