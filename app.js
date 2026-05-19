@@ -51,7 +51,9 @@ const SLASH_COMMANDS = [
   { name: "/q", description: "Open the full shortcut reference" },
   { name: "/re", description: "Reopen your most recent block" },
   { name: "/w", description: "Show blocks saved during the last week" },
+  { name: "/wa", description: "Show blocks created or edited in the last 7 days" },
   { name: "/y", description: "Show blocks saved yesterday" },
+  { name: "/ya", description: "Show blocks created or edited yesterday" },
 ];
 
 const state = {
@@ -499,7 +501,19 @@ entryInput.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (event.key === "Enter" && entryInput.value.trim() === "/ya") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
   if (event.key === "Enter" && entryInput.value.trim() === "/w") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
+  if (event.key === "Enter" && entryInput.value.trim() === "/wa") {
     event.preventDefault();
     submitComposer();
     return;
@@ -657,6 +671,28 @@ function submitComposer() {
     setEditorValue("");
     clearDraft();
     composerHint.textContent = "Last week";
+    render();
+    return;
+  }
+
+  if (text === "/ya") {
+    state.search = "";
+    state.preset = "yesterday-all";
+    openSearchMode();
+    setEditorValue("");
+    clearDraft();
+    composerHint.textContent = "Yesterday (all activity)";
+    render();
+    return;
+  }
+
+  if (text === "/wa") {
+    state.search = "";
+    state.preset = "week-all";
+    openSearchMode();
+    setEditorValue("");
+    clearDraft();
+    composerHint.textContent = "Last week (all activity)";
     render();
     return;
   }
@@ -1152,15 +1188,21 @@ function getFilteredEntries() {
 }
 
 function getEntriesForQuery({ preset = null, search = "" } = {}) {
-  return state.entries.filter((entry) => {
+  const filtered = state.entries.filter((entry) => {
     if (preset === "quickref" || preset === "about") {
       return false;
     }
     if (preset === "yesterday") {
       return isYesterday(entry.createdAt);
     }
+    if (preset === "yesterday-all") {
+      return isYesterday(entry.createdAt) || (entry.editedAt && isYesterday(entry.editedAt));
+    }
     if (preset === "week") {
       return isLastWeek(entry.createdAt);
+    }
+    if (preset === "week-all") {
+      return isLastWeek(entry.createdAt) || (entry.editedAt && isLastWeek(entry.editedAt));
     }
     if (preset === "pinned") {
       return entry.pinned === true;
@@ -1180,6 +1222,16 @@ function getEntriesForQuery({ preset = null, search = "" } = {}) {
     }
     return entry.text.toLowerCase().includes(normalizedSearch);
   });
+
+  if (preset === "yesterday-all" || preset === "week-all") {
+    filtered.sort((a, b) => {
+      const aMax = a.editedAt || a.createdAt;
+      const bMax = b.editedAt || b.createdAt;
+      return bMax.localeCompare(aMax);
+    });
+  }
+
+  return filtered;
 }
 
 function syncSelection(entries) {
@@ -1479,8 +1531,14 @@ function getSearchModeLabel(count) {
   if (state.preset === "yesterday") {
     return `Yesterday${suffix}`;
   }
+  if (state.preset === "yesterday-all") {
+    return `Yesterday (all activity)${suffix}`;
+  }
   if (state.preset === "week") {
     return `Last week${suffix}`;
+  }
+  if (state.preset === "week-all") {
+    return `Last week (all activity)${suffix}`;
   }
   if (state.preset === "pinned") {
     return `Pinned${suffix}`;
