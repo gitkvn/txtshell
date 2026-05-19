@@ -66,6 +66,7 @@ const state = {
   selectedSuggestionIndex: 0,
   editorSelectedSuggestionIndex: 0,
   commandPaletteIndex: 0,
+  commandPaletteDismissed: false,
   encryption: {
     enabled: false,
     unlocked: false,
@@ -588,6 +589,9 @@ entryInput.addEventListener("input", () => {
   updateWordCount();
   state.editorSelectedSuggestionIndex = 0;
   state.commandPaletteIndex = 0;
+  if (!entryInput.value.startsWith("/")) {
+    state.commandPaletteDismissed = false;
+  }
   renderEditorSuggestions();
   render();
 });
@@ -2034,6 +2038,9 @@ function renderEditorSuggestions() {
 }
 
 function getPaletteItems() {
+  if (state.commandPaletteDismissed) {
+    return [];
+  }
   const value = entryInput.value;
   if (!value.startsWith("/") || value.includes("\n")) {
     return [];
@@ -2138,16 +2145,28 @@ function handleCommandPaletteKeyboard(event) {
   if (event.key === "Escape") {
     event.preventDefault();
     event.stopPropagation();
+    state.commandPaletteDismissed = true;
     commandPalette.hidden = true;
     return true;
   }
 
-  if (event.key === "Enter" && entryInput.value.startsWith("/-")) {
+  if (event.key === "Enter") {
     const highlighted = matches[state.commandPaletteIndex];
-    if (highlighted && highlighted.name.startsWith("/-")) {
+    if (!highlighted) {
+      return false;
+    }
+    if (entryInput.value.startsWith("/-")) {
+      if (highlighted.name.startsWith("/-")) {
+        event.preventDefault();
+        commandPalette.hidden = true;
+        openMostRecentlyEditedTaggedBlock(highlighted.name.slice(2).toLowerCase());
+        return true;
+      }
+      return false;
+    }
+    if (highlighted.name !== entryInput.value) {
       event.preventDefault();
-      commandPalette.hidden = true;
-      openMostRecentlyEditedTaggedBlock(highlighted.name.slice(2).toLowerCase());
+      applyCommand(highlighted.name);
       return true;
     }
   }
