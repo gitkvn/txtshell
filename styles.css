@@ -840,6 +840,27 @@ kbd {
   color: #9a948a;
 }
 
+.vault-strength {
+  font-size: 0.85rem;
+  text-align: center;
+  margin: 4px 0 10px;
+  font-family: var(--font-sans);
+  color: var(--muted);
+  min-height: 1.1em;
+}
+
+.vault-strength[data-state="weak"] {
+  color: #b8404a;
+}
+
+.vault-strength[data-state="medium"] {
+  color: #b87830;
+}
+
+.vault-strength[data-state="strong"] {
+  color: #4a8a4a;
+}
+
 .vault-button {
   width: 100%;
   padding: 11px;

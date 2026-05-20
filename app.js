@@ -2945,6 +2945,39 @@ function renderVault() {
 const LOCK_ICON_SVG = `<svg class="vault-icon" width="32" height="32" viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="3.5" y="8" width="11" height="8" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M6 8V5.5a3 3 0 0 1 6 0V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
 const LOCK_ICON_SVG_DOT = `<svg class="vault-icon" width="32" height="32" viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="3.5" y="8" width="11" height="8" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M6 8V5.5a3 3 0 0 1 6 0V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="9" cy="12.5" r="1.2" fill="currentColor"/></svg>`;
 
+function calculatePassphraseStrength(passphrase) {
+  if (!passphrase) return "empty";
+
+  let score = 0;
+  const length = passphrase.length;
+
+  if (length >= 8) score += 1;
+  if (length >= 12) score += 1;
+  if (length >= 16) score += 1;
+  if (/[a-z]/.test(passphrase)) score += 1;
+  if (/[A-Z]/.test(passphrase)) score += 1;
+  if (/\d/.test(passphrase)) score += 1;
+  if (/[^a-zA-Z0-9]/.test(passphrase)) score += 1;
+
+  if (length > 1 && passphrase.split("").every((c) => c === passphrase[0])) {
+    score -= 1;
+  }
+
+  const sequences = [
+    "abcdefghijklmnopqrstuvwxyz",
+    "0123456789",
+    "qwertyuiopasdfghjklzxcvbnm",
+  ];
+  const lower = passphrase.toLowerCase();
+  if (lower.length >= 3 && sequences.some((seq) => seq.includes(lower))) {
+    score -= 1;
+  }
+
+  if (score <= 2) return "weak";
+  if (score <= 4) return "medium";
+  return "strong";
+}
+
 function renderSetupCard(options = {}) {
   const {
     title = "Encrypt your blocks",
@@ -2962,6 +2995,7 @@ function renderSetupCard(options = {}) {
       <p class="vault-subtitle">${escapeHtml(subtitle)}</p>
       <p class="vault-error" hidden></p>
       <input class="vault-input" data-field="pass" type="password" placeholder="Create passphrase" autocomplete="new-password" />
+      <p class="vault-strength" data-field="strength"></p>
       <input class="vault-input" data-field="confirm" type="password" placeholder="Confirm passphrase" autocomplete="new-password" />
       <button class="vault-button" type="button" data-action="submit">${escapeHtml(buttonText)}</button>
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
@@ -2970,6 +3004,7 @@ function renderSetupCard(options = {}) {
 
   const passInput = vaultOverlay.querySelector('[data-field="pass"]');
   const confirmInput = vaultOverlay.querySelector('[data-field="confirm"]');
+  const strengthEl = vaultOverlay.querySelector('[data-field="strength"]');
   const errorLine = vaultOverlay.querySelector(".vault-error");
   const submitButton = vaultOverlay.querySelector('[data-action="submit"]');
   const cancelButton = vaultOverlay.querySelector('[data-action="cancel"]');
@@ -2982,8 +3017,8 @@ function renderSetupCard(options = {}) {
   const submit = async () => {
     const pass = passInput.value;
     const confirm = confirmInput.value;
-    if (!pass || pass.length < 4) {
-      showError("Use at least 4 characters.");
+    if (!pass || pass.length < 8) {
+      showError("Use at least 8 characters.");
       return;
     }
     if (pass !== confirm) {
@@ -3000,6 +3035,23 @@ function renderSetupCard(options = {}) {
       submitButton.disabled = false;
     }
   };
+
+  passInput.addEventListener("input", () => {
+    const strength = calculatePassphraseStrength(passInput.value);
+    if (strength === "empty") {
+      strengthEl.textContent = "";
+      strengthEl.removeAttribute("data-state");
+    } else if (strength === "weak") {
+      strengthEl.textContent = "Weak passphrase";
+      strengthEl.setAttribute("data-state", "weak");
+    } else if (strength === "medium") {
+      strengthEl.textContent = "Medium passphrase";
+      strengthEl.setAttribute("data-state", "medium");
+    } else if (strength === "strong") {
+      strengthEl.textContent = "Strong passphrase";
+      strengthEl.setAttribute("data-state", "strong");
+    }
+  });
 
   submitButton.addEventListener("click", submit);
   [passInput, confirmInput].forEach((input) => {
