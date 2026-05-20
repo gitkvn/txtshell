@@ -11,8 +11,11 @@ const ENC_SALT_RECOVERY_KEY = "enc-salt-recovery";
 const ENC_WRAPPED_PASS_KEY = "enc-wrapped-pass";
 const ENC_WRAPPED_RECOVERY_KEY = "enc-wrapped-recovery";
 const ENC_VERIFY_KEY = "enc-verify";
+const ENC_ITERATIONS_PASS_KEY = "enc-iterations-pass";
+const ENC_ITERATIONS_RECOVERY_KEY = "enc-iterations-recovery";
 const ENC_VERIFY_PLAINTEXT = "txtshell-verify-v1";
-const PBKDF2_ITERATIONS = 100000;
+const PBKDF2_ITERATIONS = 600000;
+const LEGACY_PBKDF2_ITERATIONS = 100000;
 
 const RE_TAGS = /(^|\s)#([a-z0-9_-]+)/g;
 const RE_MENTIONS = /(^|\s)@([a-z0-9_-]+)/g;
@@ -2710,7 +2713,7 @@ function combineIvAndData(iv, data) {
   return combined;
 }
 
-async function deriveWrappingKey(passphrase, saltBytes) {
+async function deriveWrappingKey(passphrase, saltBytes, iterations) {
   const material = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(passphrase),
@@ -2719,12 +2722,55 @@ async function deriveWrappingKey(passphrase, saltBytes) {
     ["deriveKey"],
   );
   return crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt: saltBytes, iterations: PBKDF2_ITERATIONS, hash: "SHA-256" },
+    { name: "PBKDF2", salt: saltBytes, iterations, hash: "SHA-256" },
     material,
     { name: "AES-GCM", length: 256 },
     false,
     ["encrypt", "decrypt"],
   );
+}
+
+async function readIterations(key) {
+  const stored = await getMeta(key);
+  const n = parseInt(stored, 10);
+  return Number.isFinite(n) && n > 0 ? n : LEGACY_PBKDF2_ITERATIONS;
+}
+
+function saveMetaBatch(entries) {
+  if (!state.db) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const transaction = state.db.transaction(META_STORE, "readwrite");
+    const store = transaction.objectStore(META_STORE);
+    for (const [key, value] of entries) {
+      store.put({ key, value });
+    }
+    transaction.addEventListener("complete", () => resolve());
+    transaction.addEventListener("error", () => reject(transaction.error));
+  });
+}
+
+async function migratePassphraseWrap(passphrase, masterKey) {
+  const newSalt = randomBytes(16);
+  const newWrappingKey = await deriveWrappingKey(passphrase, newSalt, PBKDF2_ITERATIONS);
+  const newWrapped = await wrapMasterKey(masterKey, newWrappingKey);
+  await saveMetaBatch([
+    [ENC_SALT_PASS_KEY, bytesToBase64(newSalt)],
+    [ENC_WRAPPED_PASS_KEY, newWrapped],
+    [ENC_ITERATIONS_PASS_KEY, String(PBKDF2_ITERATIONS)],
+  ]);
+}
+
+async function migrateRecoveryWrap(recoveryKey, masterKey) {
+  const newSalt = randomBytes(16);
+  const newWrappingKey = await deriveWrappingKey(recoveryKey, newSalt, PBKDF2_ITERATIONS);
+  const newWrapped = await wrapMasterKey(masterKey, newWrappingKey);
+  await saveMetaBatch([
+    [ENC_SALT_RECOVERY_KEY, bytesToBase64(newSalt)],
+    [ENC_WRAPPED_RECOVERY_KEY, newWrapped],
+    [ENC_ITERATIONS_RECOVERY_KEY, String(PBKDF2_ITERATIONS)],
+  ]);
 }
 
 async function generateMasterKey() {
@@ -3145,6 +3191,7 @@ function renderUnlockCard(isRecovery) {
     }
     showError("");
     submitButton.disabled = true;
+    submitButton.textContent = "Unlocking…";
     try {
       await handleUnlockSubmit(value, isRecovery);
     } catch (error) {
@@ -3153,6 +3200,7 @@ function renderUnlockCard(isRecovery) {
         : "Something went wrong. Try again.";
       showError(message);
       submitButton.disabled = false;
+      submitButton.textContent = "Unlock";
       passInput.select();
     }
   };
@@ -3242,9 +3290,9 @@ function exitVaultToNormal() {
 async function handleSetupSubmit(passphrase) {
   const saltPass = randomBytes(16);
   const saltRecovery = randomBytes(16);
-  const wrappingPass = await deriveWrappingKey(passphrase, saltPass);
+  const wrappingPass = await deriveWrappingKey(passphrase, saltPass, PBKDF2_ITERATIONS);
   const recoveryKey = generateRecoveryKey();
-  const wrappingRecovery = await deriveWrappingKey(recoveryKey, saltRecovery);
+  const wrappingRecovery = await deriveWrappingKey(recoveryKey, saltRecovery, PBKDF2_ITERATIONS);
   const masterKey = await generateMasterKey();
   const wrappedPass = await wrapMasterKey(masterKey, wrappingPass);
   const wrappedRecovery = await wrapMasterKey(masterKey, wrappingRecovery);
@@ -3278,6 +3326,8 @@ async function handleRecoveryConfirm() {
     await saveMeta(ENC_WRAPPED_PASS_KEY, pending.wrappedPass);
     await saveMeta(ENC_WRAPPED_RECOVERY_KEY, pending.wrappedRecovery);
     await saveMeta(ENC_VERIFY_KEY, pending.verify);
+    await saveMeta(ENC_ITERATIONS_PASS_KEY, String(PBKDF2_ITERATIONS));
+    await saveMeta(ENC_ITERATIONS_RECOVERY_KEY, String(PBKDF2_ITERATIONS));
 
     state.encryption.enabled = true;
     state.encryption.unlocked = true;
@@ -3307,12 +3357,14 @@ async function handleRecoveryConfirm() {
 async function handleUnlockSubmit(value, isRecovery) {
   const saltKey = isRecovery ? ENC_SALT_RECOVERY_KEY : ENC_SALT_PASS_KEY;
   const wrappedKey = isRecovery ? ENC_WRAPPED_RECOVERY_KEY : ENC_WRAPPED_PASS_KEY;
+  const iterKey = isRecovery ? ENC_ITERATIONS_RECOVERY_KEY : ENC_ITERATIONS_PASS_KEY;
   const saltBase64 = await getMeta(saltKey);
   const wrappedBase64 = await getMeta(wrappedKey);
   if (!saltBase64 || !wrappedBase64) {
     throw new Error("missing-meta");
   }
-  const wrappingKey = await deriveWrappingKey(value, base64ToBytes(saltBase64));
+  const iterations = await readIterations(iterKey);
+  const wrappingKey = await deriveWrappingKey(value, base64ToBytes(saltBase64), iterations);
   let masterKey;
   try {
     masterKey = await unwrapMasterKey(wrappedBase64, wrappingKey);
@@ -3336,6 +3388,15 @@ async function handleUnlockSubmit(value, isRecovery) {
   render();
   entryInput.focus();
   signalReady();
+
+  if (iterations < PBKDF2_ITERATIONS) {
+    const migrate = isRecovery
+      ? migrateRecoveryWrap(value, masterKey)
+      : migratePassphraseWrap(value, masterKey);
+    migrate.catch((error) => {
+      console.warn("PBKDF2 iteration migration failed; will retry next unlock", error);
+    });
+  }
 }
 
 async function handleChangeCurrentSubmit(passphrase) {
@@ -3344,7 +3405,8 @@ async function handleChangeCurrentSubmit(passphrase) {
   if (!saltBase64 || !wrappedBase64) {
     throw new Error("missing-meta");
   }
-  const wrappingKey = await deriveWrappingKey(passphrase, base64ToBytes(saltBase64));
+  const iterations = await readIterations(ENC_ITERATIONS_PASS_KEY);
+  const wrappingKey = await deriveWrappingKey(passphrase, base64ToBytes(saltBase64), iterations);
   let masterKey;
   try {
     masterKey = await unwrapMasterKey(wrappedBase64, wrappingKey);
@@ -3363,10 +3425,13 @@ async function handleChangeNewSubmit(newPassphrase) {
     throw new Error("missing-key");
   }
   const saltPass = randomBytes(16);
-  const wrappingKey = await deriveWrappingKey(newPassphrase, saltPass);
+  const wrappingKey = await deriveWrappingKey(newPassphrase, saltPass, PBKDF2_ITERATIONS);
   const wrappedPass = await wrapMasterKey(pending.masterKey, wrappingKey);
-  await saveMeta(ENC_SALT_PASS_KEY, bytesToBase64(saltPass));
-  await saveMeta(ENC_WRAPPED_PASS_KEY, wrappedPass);
+  await saveMetaBatch([
+    [ENC_SALT_PASS_KEY, bytesToBase64(saltPass)],
+    [ENC_WRAPPED_PASS_KEY, wrappedPass],
+    [ENC_ITERATIONS_PASS_KEY, String(PBKDF2_ITERATIONS)],
+  ]);
 
   state.vaultPending = null;
   state.vaultView = null;
@@ -3383,7 +3448,8 @@ async function handleDisableSubmit(passphrase) {
   if (!saltBase64 || !wrappedBase64) {
     throw new Error("missing-meta");
   }
-  const wrappingKey = await deriveWrappingKey(passphrase, base64ToBytes(saltBase64));
+  const iterations = await readIterations(ENC_ITERATIONS_PASS_KEY);
+  const wrappingKey = await deriveWrappingKey(passphrase, base64ToBytes(saltBase64), iterations);
   let masterKey;
   try {
     masterKey = await unwrapMasterKey(wrappedBase64, wrappingKey);
@@ -3420,6 +3486,8 @@ async function handleDisableSubmit(passphrase) {
     await deleteMeta(ENC_WRAPPED_PASS_KEY);
     await deleteMeta(ENC_WRAPPED_RECOVERY_KEY);
     await deleteMeta(ENC_VERIFY_KEY);
+    await deleteMeta(ENC_ITERATIONS_PASS_KEY);
+    await deleteMeta(ENC_ITERATIONS_RECOVERY_KEY);
 
     state.vaultView = null;
     state.vaultPending = null;
