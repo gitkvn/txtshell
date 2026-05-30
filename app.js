@@ -48,6 +48,7 @@ const SLASH_COMMANDS = [
   { name: "/encrypt", description: "Set up vault encryption with a passphrase" },
   { name: "/encrypt change", description: "Change your encryption passphrase" },
   { name: "/encrypt off", description: "Remove encryption and restore plaintext" },
+  { name: "/export", description: "Download an encrypted backup of your blocks" },
   { name: "/import", description: "Restore blocks from a JSON export" },
   { name: "/lock", description: "Lock the vault" },
   { name: "/pin", description: "Show only pinned blocks" },
@@ -309,16 +310,8 @@ interestBackdrop.addEventListener("click", () => {
   closeInterestCard();
 });
 
-exportButton.addEventListener("click", (event) => {
-  if (!state.entries.length) {
-    composerHint.textContent = "Nothing to export";
-    return;
-  }
-  if (event.shiftKey) {
-    exportEntries("txt");
-  } else {
-    exportEntries("json");
-  }
+exportButton.addEventListener("click", () => {
+  exportEntries();
 });
 
 searchUndoDeleteButton.addEventListener("click", () => {
@@ -576,6 +569,12 @@ entryInput.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (event.key === "Enter" && entryInput.value.trim() === "/export") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
   const targetMatch = event.key === "Enter" ? entryInput.value.trim().match(/^\/(\d+)$/) : null;
   if (targetMatch) {
     event.preventDefault();
@@ -793,6 +792,13 @@ function submitComposer() {
     setEditorValue("");
     clearDraft();
     importEntries();
+    return;
+  }
+
+  if (text === "/export") {
+    setEditorValue("");
+    clearDraft();
+    exportEntries();
     return;
   }
 
@@ -2517,30 +2523,76 @@ function showHint(id, message) {
   }, HINT_DELAY);
 }
 
-function exportEntries(format) {
-  const timestamp = new Date().toISOString().slice(0, 10);
-  let content, filename, type;
-
-  if (format === "json") {
-    content = JSON.stringify(state.entries, null, 2);
-    filename = `txtshell-${timestamp}.json`;
-    type = "application/json";
-  } else {
-    content = state.entries
-      .map((entry) => `[${entry.createdAt}]\n${entry.text}`)
-      .join("\n\n---\n\n");
-    filename = `txtshell-${timestamp}.txt`;
-    type = "text/plain";
+async function exportEntries() {
+  if (state.encryption.enabled && !state.encryption.unlocked) {
+    composerHint.textContent = "Unlock your vault to export.";
+    return;
   }
 
-  const blob = new Blob([content], { type });
+  if (!state.entries.length) {
+    composerHint.textContent = "Nothing to export";
+    return;
+  }
+
+  if (state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey) {
+    const saltPass = await getMeta(ENC_SALT_PASS_KEY);
+    const saltRecovery = await getMeta(ENC_SALT_RECOVERY_KEY);
+    const wrappedPass = await getMeta(ENC_WRAPPED_PASS_KEY);
+    const wrappedRecovery = await getMeta(ENC_WRAPPED_RECOVERY_KEY);
+    const verify = await getMeta(ENC_VERIFY_KEY);
+    if (!saltPass || !saltRecovery || !wrappedPass || !wrappedRecovery || !verify) {
+      composerHint.textContent = "Vault metadata missing — cannot export.";
+      return;
+    }
+    const iterationsPass = await readIterations(ENC_ITERATIONS_PASS_KEY);
+    const iterationsRecovery = await readIterations(ENC_ITERATIONS_RECOVERY_KEY);
+
+    const combined = await encryptPlaintext(
+      JSON.stringify(state.entries),
+      state.encryption.masterKey,
+    );
+    const combinedBytes = base64ToBytes(combined);
+    const iv = bytesToBase64(combinedBytes.slice(0, 12));
+    const ciphertext = bytesToBase64(combinedBytes.slice(12));
+
+    const fileObj = {
+      format: "txtshell-encrypted-v1",
+      createdAt: new Date().toISOString(),
+      saltPass,
+      saltRecovery,
+      iterationsPass,
+      iterationsRecovery,
+      wrappedPass,
+      wrappedRecovery,
+      verify,
+      iv,
+      ciphertext,
+    };
+
+    const timestamp = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([JSON.stringify(fileObj, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `txtshell-encrypted-${timestamp}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    composerHint.textContent = `Exported ${state.entries.length} blocks (encrypted)`;
+    return;
+  }
+
+  const content = JSON.stringify(state.entries, null, 2);
+  const timestamp = new Date().toISOString().slice(0, 10);
+  const blob = new Blob([content], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = filename;
+  link.download = `txtshell-${timestamp}.json`;
   link.click();
   URL.revokeObjectURL(url);
-  composerHint.textContent = `Exported ${state.entries.length} blocks as ${format.toUpperCase()}`;
+  composerHint.textContent = `Exported ${state.entries.length} blocks (plaintext)`;
 }
 
 function importEntries() {
@@ -2558,50 +2610,64 @@ function importEntries() {
       composerHint.textContent = "Invalid import file";
       return;
     }
-    if (!Array.isArray(data)) {
-      composerHint.textContent = "Invalid import file";
+    if (data && data.format === "txtshell-encrypted-v1") {
+      beginEncryptedImport(data);
       return;
     }
-    let added = 0;
-    let updated = 0;
-    for (const item of data) {
-      if (typeof item.id !== "string" || typeof item.text !== "string" || typeof item.createdAt !== "string") {
-        continue;
-      }
-      const entry = {
-        id: item.id,
-        text: item.text,
-        tags: extractTags(item.text),
-        mentions: extractMentions(item.text),
-        createdAt: item.createdAt,
-        editedAt: typeof item.editedAt === "string" ? item.editedAt : item.createdAt,
-        pinned: item.pinned === true,
-      };
-      const existing = state.entries.find((e) => e.id === entry.id);
-      if (existing) {
-        if (new Date(entry.createdAt) > new Date(existing.createdAt)) {
-          Object.assign(existing, entry);
-          await saveEntry(existing);
-          updated++;
-        }
-      } else {
-        state.entries.push(entry);
-        await saveEntry(entry);
-        added++;
-      }
+    if (Array.isArray(data)) {
+      await mergeImportedEntries(data);
+      return;
     }
-    state.entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    render();
-    if (added === 0 && updated === 0) {
-      composerHint.textContent = "No new entries to import";
-    } else {
-      const parts = [];
-      if (added > 0) parts.push(`${added} new`);
-      if (updated > 0) parts.push(`${updated} updated`);
-      composerHint.textContent = `Imported ${parts.join(", ")}`;
-    }
+    composerHint.textContent = "Invalid import file";
   });
   fileInput.click();
+}
+
+async function mergeImportedEntries(items) {
+  let added = 0;
+  let updated = 0;
+  for (const item of items) {
+    if (typeof item.id !== "string" || typeof item.text !== "string" || typeof item.createdAt !== "string") {
+      continue;
+    }
+    const entry = {
+      id: item.id,
+      text: item.text,
+      tags: extractTags(item.text),
+      mentions: extractMentions(item.text),
+      createdAt: item.createdAt,
+      editedAt: typeof item.editedAt === "string" ? item.editedAt : item.createdAt,
+      pinned: item.pinned === true,
+    };
+    const existing = state.entries.find((e) => e.id === entry.id);
+    if (existing) {
+      if (new Date(entry.createdAt) > new Date(existing.createdAt)) {
+        Object.assign(existing, entry);
+        await saveEntry(existing);
+        updated++;
+      }
+    } else {
+      state.entries.push(entry);
+      await saveEntry(entry);
+      added++;
+    }
+  }
+  state.entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  render();
+  if (added === 0 && updated === 0) {
+    composerHint.textContent = "No new entries to import";
+  } else {
+    const parts = [];
+    if (added > 0) parts.push(`${added} new`);
+    if (updated > 0) parts.push(`${updated} updated`);
+    composerHint.textContent = `Imported ${parts.join(", ")}`;
+  }
+}
+
+function beginEncryptedImport(fileData) {
+  state.vaultPending = { importFileData: fileData };
+  state.vaultView = "import-unlock";
+  renderVault();
 }
 
 function isYesterday(value) {
@@ -2985,6 +3051,12 @@ function renderVault() {
       onSubmit: handleDisableSubmit,
       onCancel: exitVaultToNormal,
     });
+  } else if (view === "import-unlock") {
+    renderImportUnlockCard(false);
+  } else if (view === "import-unlock-recovery") {
+    renderImportUnlockCard(true);
+  } else if (view === "import-adopt") {
+    renderImportAdoptCard();
   }
 }
 
@@ -3272,6 +3344,212 @@ function renderPassphraseConfirmCard(options) {
   });
   cancelButton.addEventListener("click", onCancel);
   window.requestAnimationFrame(() => passInput.focus());
+}
+
+function renderImportUnlockCard(isRecovery) {
+  const subtitle = isRecovery
+    ? "Paste the recovery key for this export."
+    : "Enter the passphrase for this export.";
+  const placeholder = isRecovery ? "Recovery key" : "Passphrase";
+  const linkText = isRecovery ? "Use passphrase instead" : "Use recovery key instead";
+
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG}
+      <p class="vault-title">Import encrypted blocks</p>
+      <p class="vault-subtitle">${escapeHtml(subtitle)}</p>
+      <p class="vault-error" hidden></p>
+      <input class="vault-input" data-field="pass" type="${isRecovery ? "text" : "password"}" placeholder="${escapeHtml(placeholder)}" autocomplete="off" />
+      <button class="vault-button" type="button" data-action="submit">Import</button>
+      <button class="vault-link" type="button" data-action="toggle">${escapeHtml(linkText)}</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+
+  const passInput = vaultOverlay.querySelector('[data-field="pass"]');
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const submitButton = vaultOverlay.querySelector('[data-action="submit"]');
+  const toggleButton = vaultOverlay.querySelector('[data-action="toggle"]');
+  const cancelButton = vaultOverlay.querySelector('[data-action="cancel"]');
+
+  const showError = (message) => {
+    errorLine.textContent = message;
+    errorLine.hidden = !message;
+  };
+
+  const submit = async () => {
+    const value = passInput.value.trim();
+    if (!value) {
+      showError(isRecovery ? "Enter the recovery key." : "Enter the passphrase.");
+      return;
+    }
+    showError("");
+    submitButton.disabled = true;
+    submitButton.textContent = "Importing…";
+    try {
+      await handleImportUnlockSubmit(value, isRecovery);
+    } catch (error) {
+      console.error(error);
+      showError("Couldn't decrypt — passphrase or recovery key may be wrong.");
+      submitButton.disabled = false;
+      submitButton.textContent = "Import";
+      passInput.select();
+    }
+  };
+
+  submitButton.addEventListener("click", submit);
+  passInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      submit();
+    }
+  });
+  toggleButton.addEventListener("click", () => {
+    state.vaultView = isRecovery ? "import-unlock" : "import-unlock-recovery";
+    renderVault();
+  });
+  cancelButton.addEventListener("click", exitVaultToNormal);
+  window.requestAnimationFrame(() => passInput.focus());
+}
+
+async function handleImportUnlockSubmit(value, isRecovery) {
+  const file = state.vaultPending?.importFileData;
+  if (!file) {
+    throw new Error("missing-import-data");
+  }
+  const saltBase64 = isRecovery ? file.saltRecovery : file.saltPass;
+  const wrappedBase64 = isRecovery ? file.wrappedRecovery : file.wrappedPass;
+  const iterations = isRecovery
+    ? (file.iterationsRecovery || file.iterations || LEGACY_PBKDF2_ITERATIONS)
+    : (file.iterationsPass || file.iterations || LEGACY_PBKDF2_ITERATIONS);
+  if (!saltBase64 || !wrappedBase64 || !file.verify || !file.iv || !file.ciphertext) {
+    throw new Error("malformed-file");
+  }
+  const wrappingKey = await deriveWrappingKey(value, base64ToBytes(saltBase64), iterations);
+  let masterKey;
+  try {
+    masterKey = await unwrapMasterKey(wrappedBase64, wrappingKey);
+  } catch {
+    throw new Error("wrong-key");
+  }
+  let verifyPlain;
+  try {
+    verifyPlain = await decryptCiphertext(file.verify, masterKey);
+  } catch {
+    throw new Error("wrong-key");
+  }
+  if (verifyPlain !== ENC_VERIFY_PLAINTEXT) {
+    throw new Error("wrong-key");
+  }
+
+  const ivBytes = base64ToBytes(file.iv);
+  const ctBytes = base64ToBytes(file.ciphertext);
+  const combined = new Uint8Array(ivBytes.length + ctBytes.length);
+  combined.set(ivBytes, 0);
+  combined.set(ctBytes, ivBytes.length);
+  const blocksJson = await decryptCiphertext(bytesToBase64(combined), masterKey);
+  let entries;
+  try {
+    entries = JSON.parse(blocksJson);
+    if (!Array.isArray(entries)) throw new Error("not-array");
+  } catch {
+    throw new Error("malformed-payload");
+  }
+
+  if (state.encryption.enabled) {
+    await mergeImportedEntries(entries);
+    exitVaultToNormal();
+    return;
+  }
+
+  state.vaultPending = {
+    importFileData: file,
+    importMasterKey: masterKey,
+    importEntries: entries,
+  };
+  state.vaultView = "import-adopt";
+  renderVault();
+}
+
+function renderImportAdoptCard() {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG_DOT}
+      <p class="vault-title">Set up vault on this browser?</p>
+      <p class="vault-subtitle">This file is from an encrypted Txtshell vault. Use it to set up encryption on this browser too?</p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="setup">Set up vault</button>
+      <button class="vault-button secondary" type="button" data-action="plain">Just import blocks (no encryption)</button>
+    </div>
+  `;
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const showError = (message) => {
+    errorLine.textContent = message;
+    errorLine.hidden = !message;
+  };
+  const setupButton = vaultOverlay.querySelector('[data-action="setup"]');
+  const plainButton = vaultOverlay.querySelector('[data-action="plain"]');
+  setupButton.addEventListener("click", async () => {
+    setupButton.disabled = true;
+    plainButton.disabled = true;
+    try {
+      await handleImportAdoptVault();
+    } catch (error) {
+      console.error(error);
+      showError("Setup failed. Try again.");
+      setupButton.disabled = false;
+      plainButton.disabled = false;
+    }
+  });
+  plainButton.addEventListener("click", async () => {
+    setupButton.disabled = true;
+    plainButton.disabled = true;
+    try {
+      await handleImportPlainMerge();
+    } catch (error) {
+      console.error(error);
+      showError("Import failed. Try again.");
+      setupButton.disabled = false;
+      plainButton.disabled = false;
+    }
+  });
+}
+
+async function handleImportAdoptVault() {
+  const pending = state.vaultPending;
+  if (!pending?.importFileData || !pending?.importMasterKey || !pending?.importEntries) {
+    throw new Error("missing-import-data");
+  }
+  const file = pending.importFileData;
+  await saveMetaBatch([
+    [ENC_SALT_PASS_KEY, file.saltPass],
+    [ENC_SALT_RECOVERY_KEY, file.saltRecovery],
+    [ENC_WRAPPED_PASS_KEY, file.wrappedPass],
+    [ENC_WRAPPED_RECOVERY_KEY, file.wrappedRecovery],
+    [ENC_VERIFY_KEY, file.verify],
+    [ENC_ITERATIONS_PASS_KEY, String(file.iterationsPass || file.iterations || PBKDF2_ITERATIONS)],
+    [ENC_ITERATIONS_RECOVERY_KEY, String(file.iterationsRecovery || file.iterations || PBKDF2_ITERATIONS)],
+  ]);
+  state.encryption.enabled = true;
+  state.encryption.unlocked = true;
+  state.encryption.masterKey = pending.importMasterKey;
+  updateLockButton();
+  await mergeImportedEntries(pending.importEntries);
+  state.vaultView = null;
+  state.vaultPending = null;
+  renderVault();
+  composerHint.textContent = "Vault set up — blocks imported";
+}
+
+async function handleImportPlainMerge() {
+  const pending = state.vaultPending;
+  if (!pending?.importEntries) {
+    throw new Error("missing-import-data");
+  }
+  await mergeImportedEntries(pending.importEntries);
+  state.vaultView = null;
+  state.vaultPending = null;
+  renderVault();
 }
 
 function exitVaultToNormal() {
