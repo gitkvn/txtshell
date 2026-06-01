@@ -48,6 +48,7 @@ const SLASH_COMMANDS = [
   { name: "/encrypt", description: "Set up vault encryption with a passphrase" },
   { name: "/encrypt change", description: "Change your encryption passphrase" },
   { name: "/encrypt off", description: "Remove encryption and restore plaintext" },
+  { name: "/wipe", description: "Delete all blocks and vault metadata" },
   { name: "/export", description: "Download an encrypted backup of your blocks" },
   { name: "/import", description: "Restore blocks from a JSON export" },
   { name: "/lock", description: "Lock the vault" },
@@ -557,6 +558,12 @@ entryInput.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (event.key === "Enter" && entryInput.value.trim() === "/wipe") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
   if (event.key === "Enter" && entryInput.value.trim() === "/lock") {
     event.preventDefault();
     submitComposer();
@@ -776,6 +783,16 @@ function submitComposer() {
     state.vaultView = "disable-confirm";
     renderVault();
     composerHint.textContent = "Disable encryption";
+    return;
+  }
+
+  if (text === "/wipe") {
+    setEditorValue("");
+    clearDraft();
+    state.vaultPending = null;
+    state.vaultView = "wipe-confirm";
+    renderVault();
+    composerHint.textContent = "Wipe all data";
     return;
   }
 
@@ -3057,6 +3074,10 @@ function renderVault() {
     renderImportUnlockCard(true);
   } else if (view === "import-adopt") {
     renderImportAdoptCard();
+  } else if (view === "wipe-confirm") {
+    renderWipeCard(false);
+  } else if (view === "wipe-confirm-recovery") {
+    renderWipeCard(true);
   }
 }
 
@@ -3242,6 +3263,7 @@ function renderUnlockCard(isRecovery) {
       <input class="vault-input" data-field="pass" type="${isRecovery ? "text" : "password"}" placeholder="${escapeHtml(placeholder)}" autocomplete="off" />
       <button class="vault-button" type="button" data-action="submit">Unlock</button>
       <button class="vault-link" type="button" data-action="toggle">${escapeHtml(linkText)}</button>
+      <button class="vault-link" type="button" data-action="wipe">Wipe all data</button>
     </div>
   `;
 
@@ -3288,7 +3310,194 @@ function renderUnlockCard(isRecovery) {
     state.vaultView = isRecovery ? "unlock" : "unlock-recovery";
     renderVault();
   });
+  vaultOverlay.querySelector('[data-action="wipe"]').addEventListener("click", () => {
+    state.vaultView = "wipe-confirm";
+    renderVault();
+  });
   window.requestAnimationFrame(() => passInput.focus());
+}
+
+const WIPE_CONFIRM_PHRASE = "DELETE EVERYTHING";
+
+function renderWipeCard(isRecovery) {
+  const hasVault = state.encryption.enabled;
+  const placeholder = isRecovery ? "Recovery key" : "Passphrase";
+  const linkText = isRecovery ? "Use passphrase instead" : "Use recovery key instead";
+
+  const authFieldHtml = hasVault
+    ? `<input class="vault-input" data-field="pass" type="${isRecovery ? "text" : "password"}" placeholder="${escapeHtml(placeholder)}" autocomplete="off" />`
+    : "";
+  const toggleHtml = hasVault
+    ? `<button class="vault-link" type="button" data-action="toggle">${escapeHtml(linkText)}</button>`
+    : "";
+
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG}
+      <p class="vault-title">Wipe all data</p>
+      <p class="wipe-warning">This will permanently delete all your blocks and vault metadata from this browser. This cannot be undone.</p>
+      <p class="vault-error" hidden></p>
+      ${authFieldHtml}
+      <input class="vault-input" data-field="confirm" type="text" placeholder="Type DELETE EVERYTHING" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+      <button class="vault-button danger" type="button" data-action="submit" disabled>Wipe everything</button>
+      ${toggleHtml}
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+
+  const passInput = vaultOverlay.querySelector('[data-field="pass"]');
+  const confirmInput = vaultOverlay.querySelector('[data-field="confirm"]');
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const submitButton = vaultOverlay.querySelector('[data-action="submit"]');
+  const toggleButton = vaultOverlay.querySelector('[data-action="toggle"]');
+  const cancelButton = vaultOverlay.querySelector('[data-action="cancel"]');
+
+  const showError = (message) => {
+    errorLine.textContent = message;
+    errorLine.hidden = !message;
+  };
+
+  const updateEnabled = () => {
+    const phraseOk = confirmInput.value === WIPE_CONFIRM_PHRASE;
+    const authOk = !hasVault || (passInput && passInput.value.trim().length > 0);
+    submitButton.disabled = !(phraseOk && authOk);
+  };
+
+  const submit = async () => {
+    if (submitButton.disabled) {
+      return;
+    }
+    showError("");
+    submitButton.disabled = true;
+    submitButton.textContent = "Wiping…";
+    try {
+      await handleWipeSubmit(passInput ? passInput.value.trim() : "", isRecovery, confirmInput.value);
+    } catch (error) {
+      const message = error?.message === "wrong-key" || error?.message === "missing-meta"
+        ? "Couldn't verify — passphrase or recovery key may be wrong"
+        : "Something went wrong. Try again.";
+      showError(message);
+      submitButton.textContent = "Wipe everything";
+      updateEnabled();
+      if (passInput) {
+        passInput.select();
+      }
+    }
+  };
+
+  if (passInput) {
+    passInput.addEventListener("input", updateEnabled);
+  }
+  confirmInput.addEventListener("input", updateEnabled);
+  submitButton.addEventListener("click", submit);
+  [passInput, confirmInput].filter(Boolean).forEach((input) => {
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        submit();
+      }
+    });
+  });
+  if (toggleButton) {
+    toggleButton.addEventListener("click", () => {
+      state.vaultView = isRecovery ? "wipe-confirm" : "wipe-confirm-recovery";
+      renderVault();
+    });
+  }
+  cancelButton.addEventListener("click", exitVaultToNormal);
+  window.requestAnimationFrame(() => (passInput || confirmInput).focus());
+}
+
+async function handleWipeSubmit(value, isRecovery, confirmPhrase) {
+  if (confirmPhrase !== WIPE_CONFIRM_PHRASE) {
+    throw new Error("phrase-mismatch");
+  }
+
+  if (state.encryption.enabled) {
+    const saltKey = isRecovery ? ENC_SALT_RECOVERY_KEY : ENC_SALT_PASS_KEY;
+    const wrappedKey = isRecovery ? ENC_WRAPPED_RECOVERY_KEY : ENC_WRAPPED_PASS_KEY;
+    const iterKey = isRecovery ? ENC_ITERATIONS_RECOVERY_KEY : ENC_ITERATIONS_PASS_KEY;
+    const saltBase64 = await getMeta(saltKey);
+    const wrappedBase64 = await getMeta(wrappedKey);
+    if (!saltBase64 || !wrappedBase64) {
+      throw new Error("missing-meta");
+    }
+    const iterations = await readIterations(iterKey);
+    const wrappingKey = await deriveWrappingKey(value, base64ToBytes(saltBase64), iterations);
+    let masterKey;
+    try {
+      masterKey = await unwrapMasterKey(wrappedBase64, wrappingKey);
+    } catch {
+      throw new Error("wrong-key");
+    }
+    const verified = await verifyMasterKey(masterKey);
+    if (!verified) {
+      throw new Error("wrong-key");
+    }
+  }
+
+  await performWipe();
+}
+
+function deleteDatabase(name) {
+  return new Promise((resolve, reject) => {
+    const request = window.indexedDB.deleteDatabase(name);
+    request.addEventListener("success", () => resolve());
+    request.addEventListener("error", () => reject(request.error));
+    request.addEventListener("blocked", () => {
+      console.warn("[txtshell] deleteDatabase blocked — another tab may still have it open");
+    });
+  });
+}
+
+async function performWipe() {
+  if (state.db) {
+    state.db.close();
+    state.db = null;
+  }
+  await deleteDatabase(DB_NAME);
+
+  try {
+    const keys = [];
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+      if (key && key.startsWith("txtshell")) {
+        keys.push(key);
+      }
+    }
+    keys.forEach((key) => window.localStorage.removeItem(key));
+  } catch {
+    // localStorage may be unavailable (private mode); DB deletion is the essential step
+  }
+
+  state.entries = [];
+  state.encryption = { enabled: false, unlocked: false, masterKey: null };
+  state.vaultView = null;
+  state.vaultPending = null;
+  state.editingEntryId = null;
+  state.selectedEntryId = null;
+  state.search = "";
+  state.preset = null;
+  state.selectedEntries.clear();
+  state.pendingDeletedEntries = null;
+  state.commandPaletteDismissed = false;
+
+  renderWipedCard();
+}
+
+function renderWipedCard() {
+  vaultOverlay.hidden = false;
+  entryInput.disabled = true;
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      <p class="vault-title">Wiped</p>
+      <p class="vault-subtitle">This browser has no Txtshell data.</p>
+      <button class="vault-button" type="button" data-action="reload">Reload</button>
+    </div>
+  `;
+  vaultOverlay
+    .querySelector('[data-action="reload"]')
+    .addEventListener("click", () => window.location.reload());
 }
 
 function renderPassphraseConfirmCard(options) {

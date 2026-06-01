@@ -880,6 +880,29 @@ kbd {
   outline: none;
 }
 
+.vault-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.vault-button:disabled:hover,
+.vault-button:disabled:focus-visible {
+  opacity: 0.4;
+}
+
+.vault-button.danger {
+  background: #d1242f;
+  color: #fff;
+}
+
+.wipe-warning {
+  font-size: 0.85rem;
+  color: #d1242f;
+  text-align: center;
+  margin: 0 0 20px;
+  line-height: 1.45;
+}
+
 .vault-button.secondary {
   background: transparent;
   color: var(--accent);
