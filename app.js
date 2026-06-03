@@ -2234,6 +2234,7 @@ function handleCommandPaletteKeyboard(event) {
     if (entryInput.value.trim().startsWith("/") && !state.editingEntryId) {
       setEditorValue("");
       clearDraft();
+      state.commandPaletteDismissed = false;
       composerHint.textContent = "Ready";
     }
     return true;
