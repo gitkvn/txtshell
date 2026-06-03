@@ -13,12 +13,22 @@ const ENC_WRAPPED_RECOVERY_KEY = "enc-wrapped-recovery";
 const ENC_VERIFY_KEY = "enc-verify";
 const ENC_ITERATIONS_PASS_KEY = "enc-iterations-pass";
 const ENC_ITERATIONS_RECOVERY_KEY = "enc-iterations-recovery";
+const ENC_UNLOCK_FAIL_COUNT = "enc-unlock-fail-count";
+const ENC_UNLOCK_LOCKED_UNTIL = "enc-unlock-locked-until";
+const ENC_UNLOCK_ESCALATION = "enc-unlock-escalation";
 const ENC_VERIFY_PLAINTEXT = "txtshell-verify-v1";
 const PBKDF2_ITERATIONS = 600000;
 const LEGACY_PBKDF2_ITERATIONS = 100000;
 const MIN_IMPORT_ITERATIONS = LEGACY_PBKDF2_ITERATIONS; // 100000 — reject weaker imported KDF params
 const MAX_IMPORT_ENTRIES = 100000; // covers any realistic use case
 const MAX_IMPORT_ENTRY_TEXT = 200000; // 200K chars per entry, far above any real block
+const LOCKOUT_THRESHOLD = 5; // consecutive passphrase failures before the first lockout
+const LOCKOUT_DURATIONS_MS = [
+  5 * 60 * 1000,       // escalation 0 -> 5 min
+  15 * 60 * 1000,      // escalation 1 -> 15 min
+  60 * 60 * 1000,      // escalation 2 -> 1 hour
+  4 * 60 * 60 * 1000,  // escalation 3+ -> 4 hours
+];
 
 const RE_TAGS = /(^|\s)#([a-z0-9_-]+)/g;
 const RE_MENTIONS = /(^|\s)@([a-z0-9_-]+)/g;
@@ -166,6 +176,10 @@ window.addEventListener("load", () => {
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
+    return;
+  }
+  if (state.vaultView === "unlock") {
+    renderVault();
     return;
   }
   if (state.vaultView) {
@@ -2862,6 +2876,70 @@ function saveMetaBatch(entries) {
   });
 }
 
+async function readLockoutState() {
+  const [failRaw, lockedUntil, escRaw] = await Promise.all([
+    getMeta(ENC_UNLOCK_FAIL_COUNT),
+    getMeta(ENC_UNLOCK_LOCKED_UNTIL),
+    getMeta(ENC_UNLOCK_ESCALATION),
+  ]);
+  const failCount = parseInt(failRaw, 10);
+  const escalation = parseInt(escRaw, 10);
+  return {
+    failCount: Number.isFinite(failCount) && failCount > 0 ? failCount : 0,
+    lockedUntil: lockedUntil || "",
+    escalation: Number.isFinite(escalation) && escalation > 0 ? escalation : 0,
+  };
+}
+
+function getLockoutRemainingMs(lockoutState) {
+  if (!lockoutState.lockedUntil) return 0;
+  const until = Date.parse(lockoutState.lockedUntil);
+  if (!Number.isFinite(until)) return 0;
+  return Math.max(0, until - Date.now());
+}
+
+function isCurrentlyLockedOut(lockoutState) {
+  return getLockoutRemainingMs(lockoutState) > 0;
+}
+
+async function recordUnlockFailure() {
+  const { failCount, escalation } = await readLockoutState();
+  const newCount = failCount + 1;
+  const updates = [[ENC_UNLOCK_FAIL_COUNT, String(newCount)]];
+  if (newCount >= LOCKOUT_THRESHOLD) {
+    const idx = Math.min(escalation, LOCKOUT_DURATIONS_MS.length - 1);
+    const until = new Date(Date.now() + LOCKOUT_DURATIONS_MS[idx]).toISOString();
+    updates.push([ENC_UNLOCK_LOCKED_UNTIL, until]);
+    updates.push([ENC_UNLOCK_ESCALATION, String(escalation + 1)]);
+  }
+  await saveMetaBatch(updates);
+}
+
+async function resetUnlockState() {
+  await Promise.all([
+    deleteMeta(ENC_UNLOCK_FAIL_COUNT),
+    deleteMeta(ENC_UNLOCK_LOCKED_UNTIL),
+    deleteMeta(ENC_UNLOCK_ESCALATION),
+  ]);
+}
+
+function formatLockoutRemaining(ms) {
+  const totalSeconds = Math.ceil(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${pad(minutes)}:${pad(seconds)}`;
+}
+
+let unlockCountdownInterval = null;
+function clearUnlockCountdown() {
+  if (unlockCountdownInterval !== null) {
+    window.clearInterval(unlockCountdownInterval);
+    unlockCountdownInterval = null;
+  }
+}
+
 async function migratePassphraseWrap(passphrase, masterKey) {
   const newSalt = randomBytes(16);
   const newWrappingKey = await deriveWrappingKey(passphrase, newSalt, PBKDF2_ITERATIONS);
@@ -3052,6 +3130,7 @@ function lockVault() {
 }
 
 function renderVault() {
+  clearUnlockCountdown();
   const view = state.vaultView;
   if (!view) {
     vaultOverlay.hidden = true;
@@ -3279,12 +3358,25 @@ function renderEncryptingCard(label) {
   `;
 }
 
-function renderUnlockCard(isRecovery) {
+async function renderUnlockCard(isRecovery) {
+  let lockout = null;
+  if (!isRecovery) {
+    lockout = await readLockoutState();
+    if (isCurrentlyLockedOut(lockout)) {
+      renderUnlockCardLocked(lockout);
+      return;
+    }
+  }
+
   const subtitle = isRecovery
     ? "Paste your recovery key to unlock."
     : "Enter your passphrase to unlock";
   const placeholder = isRecovery ? "Recovery key" : "Passphrase";
   const linkText = isRecovery ? "Use passphrase instead" : "Use recovery key instead";
+  const failCount = lockout ? lockout.failCount : 0;
+  const failHint = failCount > 0
+    ? `${failCount} failed attempt${failCount === 1 ? "" : "s"}`
+    : "";
 
   vaultOverlay.innerHTML = `
     <div class="vault-card">
@@ -3293,6 +3385,7 @@ function renderUnlockCard(isRecovery) {
       <p class="vault-subtitle">${escapeHtml(subtitle)}</p>
       <p class="vault-error" hidden></p>
       <input class="vault-input" data-field="pass" type="${isRecovery ? "text" : "password"}" placeholder="${escapeHtml(placeholder)}" autocomplete="off" />
+      <p class="vault-subtitle" data-field="failcount" ${failHint ? "" : "hidden"}>${escapeHtml(failHint)}</p>
       <button class="vault-button" type="button" data-action="submit">Unlock</button>
       <button class="vault-link" type="button" data-action="toggle">${escapeHtml(linkText)}</button>
       <button class="vault-link" type="button" data-action="wipe">Wipe all data</button>
@@ -3303,6 +3396,7 @@ function renderUnlockCard(isRecovery) {
   const errorLine = vaultOverlay.querySelector(".vault-error");
   const submitButton = vaultOverlay.querySelector('[data-action="submit"]');
   const toggleButton = vaultOverlay.querySelector('[data-action="toggle"]');
+  const failHintEl = vaultOverlay.querySelector('[data-field="failcount"]');
 
   const showError = (message) => {
     errorLine.textContent = message;
@@ -3321,9 +3415,24 @@ function renderUnlockCard(isRecovery) {
     try {
       await handleUnlockSubmit(value, isRecovery);
     } catch (error) {
+      if (!isRecovery) {
+        const updated = await readLockoutState();
+        if (isCurrentlyLockedOut(updated)) {
+          renderVault(); // a failure just triggered lockout -> show locked card
+          return;
+        }
+        if (failHintEl) {
+          if (updated.failCount > 0) {
+            failHintEl.textContent = `${updated.failCount} failed attempt${updated.failCount === 1 ? "" : "s"}`;
+            failHintEl.hidden = false;
+          } else {
+            failHintEl.hidden = true;
+          }
+        }
+      }
       const message = error?.message === "wrong-key"
         ? (isRecovery ? "Recovery key did not work. Try again." : "Wrong passphrase. Try again.")
-        : "Something went wrong. Try again.";
+        : (error?.message === "locked-out" ? "Locked. Too many attempts." : "Something went wrong. Try again.");
       showError(message);
       submitButton.disabled = false;
       submitButton.textContent = "Unlock";
@@ -3347,6 +3456,39 @@ function renderUnlockCard(isRecovery) {
     renderVault();
   });
   window.requestAnimationFrame(() => passInput.focus());
+}
+
+function renderUnlockCardLocked(lockout) {
+  const label = () => `Locked. Try again in ${formatLockoutRemaining(getLockoutRemainingMs(lockout))}`;
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG}
+      <p class="vault-title">Vault locked</p>
+      <p class="vault-subtitle">Too many failed attempts.</p>
+      <input class="vault-input" type="password" placeholder="Passphrase" autocomplete="off" disabled />
+      <p class="vault-subtitle" data-field="countdown">${escapeHtml(label())}</p>
+      <button class="vault-link" type="button" data-action="toggle">Use recovery key instead</button>
+      <button class="vault-link" type="button" data-action="wipe">Wipe all data</button>
+    </div>
+  `;
+  vaultOverlay.querySelector('[data-action="toggle"]').addEventListener("click", () => {
+    state.vaultView = "unlock-recovery";
+    renderVault();
+  });
+  vaultOverlay.querySelector('[data-action="wipe"]').addEventListener("click", () => {
+    state.vaultView = "wipe-confirm";
+    renderVault();
+  });
+  const countdownEl = vaultOverlay.querySelector('[data-field="countdown"]');
+  clearUnlockCountdown();
+  unlockCountdownInterval = window.setInterval(() => {
+    if (getLockoutRemainingMs(lockout) <= 0) {
+      clearUnlockCountdown();
+      renderVault(); // expired -> transition back to the normal unlock card
+      return;
+    }
+    countdownEl.textContent = label();
+  }, 1000);
 }
 
 const WIPE_CONFIRM_PHRASE = "DELETE EVERYTHING";
@@ -3405,9 +3547,11 @@ function renderWipeCard(isRecovery) {
     try {
       await handleWipeSubmit(passInput ? passInput.value.trim() : "", isRecovery, confirmInput.value);
     } catch (error) {
-      const message = error?.message === "wrong-key" || error?.message === "missing-meta"
-        ? "Couldn't verify — passphrase or recovery key may be wrong"
-        : "Something went wrong. Try again.";
+      const message = error?.message === "locked-out"
+        ? "Too many attempts. Use the recovery key, or wait."
+        : (error?.message === "wrong-key" || error?.message === "missing-meta"
+          ? "Couldn't verify — passphrase or recovery key may be wrong"
+          : "Something went wrong. Try again.");
       showError(message);
       submitButton.textContent = "Wipe everything";
       updateEnabled();
@@ -3446,25 +3590,39 @@ async function handleWipeSubmit(value, isRecovery, confirmPhrase) {
   }
 
   if (state.encryption.enabled) {
+    if (!isRecovery) {
+      const lockout = await readLockoutState();
+      if (isCurrentlyLockedOut(lockout)) {
+        const error = new Error("locked-out");
+        error.lockedUntil = lockout.lockedUntil;
+        throw error;
+      }
+    }
     const saltKey = isRecovery ? ENC_SALT_RECOVERY_KEY : ENC_SALT_PASS_KEY;
     const wrappedKey = isRecovery ? ENC_WRAPPED_RECOVERY_KEY : ENC_WRAPPED_PASS_KEY;
     const iterKey = isRecovery ? ENC_ITERATIONS_RECOVERY_KEY : ENC_ITERATIONS_PASS_KEY;
     const saltBase64 = await getMeta(saltKey);
     const wrappedBase64 = await getMeta(wrappedKey);
-    if (!saltBase64 || !wrappedBase64) {
-      throw new Error("missing-meta");
-    }
     const iterations = await readIterations(iterKey);
-    const wrappingKey = await deriveWrappingKey(value, base64ToBytes(saltBase64), iterations);
-    let masterKey;
     try {
-      masterKey = await unwrapMasterKey(wrappedBase64, wrappingKey);
-    } catch {
-      throw new Error("wrong-key");
-    }
-    const verified = await verifyMasterKey(masterKey);
-    if (!verified) {
-      throw new Error("wrong-key");
+      if (!saltBase64 || !wrappedBase64) {
+        throw new Error("missing-meta");
+      }
+      const wrappingKey = await deriveWrappingKey(value, base64ToBytes(saltBase64), iterations);
+      let masterKey;
+      try {
+        masterKey = await unwrapMasterKey(wrappedBase64, wrappingKey);
+      } catch {
+        throw new Error("wrong-key");
+      }
+      if (!(await verifyMasterKey(masterKey))) {
+        throw new Error("wrong-key");
+      }
+    } catch (error) {
+      if (!isRecovery) {
+        await recordUnlockFailure();
+      }
+      throw error;
     }
   }
 
@@ -3879,25 +4037,44 @@ async function handleRecoveryConfirm() {
 }
 
 async function handleUnlockSubmit(value, isRecovery) {
+  if (!isRecovery) {
+    const lockout = await readLockoutState();
+    if (isCurrentlyLockedOut(lockout)) {
+      const error = new Error("locked-out");
+      error.lockedUntil = lockout.lockedUntil;
+      throw error;
+    }
+  }
+
   const saltKey = isRecovery ? ENC_SALT_RECOVERY_KEY : ENC_SALT_PASS_KEY;
   const wrappedKey = isRecovery ? ENC_WRAPPED_RECOVERY_KEY : ENC_WRAPPED_PASS_KEY;
   const iterKey = isRecovery ? ENC_ITERATIONS_RECOVERY_KEY : ENC_ITERATIONS_PASS_KEY;
   const saltBase64 = await getMeta(saltKey);
   const wrappedBase64 = await getMeta(wrappedKey);
-  if (!saltBase64 || !wrappedBase64) {
-    throw new Error("missing-meta");
-  }
   const iterations = await readIterations(iterKey);
-  const wrappingKey = await deriveWrappingKey(value, base64ToBytes(saltBase64), iterations);
   let masterKey;
+  let wrappingKey;
   try {
-    masterKey = await unwrapMasterKey(wrappedBase64, wrappingKey);
-  } catch {
-    throw new Error("wrong-key");
+    if (!saltBase64 || !wrappedBase64) {
+      throw new Error("missing-meta");
+    }
+    wrappingKey = await deriveWrappingKey(value, base64ToBytes(saltBase64), iterations);
+    try {
+      masterKey = await unwrapMasterKey(wrappedBase64, wrappingKey);
+    } catch {
+      throw new Error("wrong-key");
+    }
+    if (!(await verifyMasterKey(masterKey))) {
+      throw new Error("wrong-key");
+    }
+  } catch (error) {
+    if (!isRecovery) {
+      await recordUnlockFailure();
+    }
+    throw error;
   }
-  const verified = await verifyMasterKey(masterKey);
-  if (!verified) {
-    throw new Error("wrong-key");
+  if (!isRecovery) {
+    await resetUnlockState();
   }
 
   state.encryption.masterKey = masterKey;
