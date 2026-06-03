@@ -16,6 +16,9 @@ const ENC_ITERATIONS_RECOVERY_KEY = "enc-iterations-recovery";
 const ENC_VERIFY_PLAINTEXT = "txtshell-verify-v1";
 const PBKDF2_ITERATIONS = 600000;
 const LEGACY_PBKDF2_ITERATIONS = 100000;
+const MIN_IMPORT_ITERATIONS = LEGACY_PBKDF2_ITERATIONS; // 100000 — reject weaker imported KDF params
+const MAX_IMPORT_ENTRIES = 100000; // covers any realistic use case
+const MAX_IMPORT_ENTRY_TEXT = 200000; // 200K chars per entry, far above any real block
 
 const RE_TAGS = /(^|\s)#([a-z0-9_-]+)/g;
 const RE_MENTIONS = /(^|\s)@([a-z0-9_-]+)/g;
@@ -2443,7 +2446,9 @@ function escapeHtml(value) {
   return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function escapeRegExp(value) {
@@ -2647,10 +2652,24 @@ function importEntries() {
 }
 
 async function mergeImportedEntries(items) {
+  if (!Array.isArray(items)) {
+    composerHint.textContent = "Invalid import file";
+    return;
+  }
+  if (items.length > MAX_IMPORT_ENTRIES) {
+    composerHint.textContent = `Import too large: ${items.length} entries (max ${MAX_IMPORT_ENTRIES})`;
+    return;
+  }
   let added = 0;
   let updated = 0;
+  let skipped = 0;
   for (const item of items) {
     if (typeof item.id !== "string" || typeof item.text !== "string" || typeof item.createdAt !== "string") {
+      skipped++;
+      continue;
+    }
+    if (item.text.length > MAX_IMPORT_ENTRY_TEXT) {
+      skipped++;
       continue;
     }
     const entry = {
@@ -2678,11 +2697,14 @@ async function mergeImportedEntries(items) {
   state.entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   render();
   if (added === 0 && updated === 0) {
-    composerHint.textContent = "No new entries to import";
+    composerHint.textContent = skipped > 0
+      ? `No new entries to import (${skipped} skipped — oversized or malformed)`
+      : "No new entries to import";
   } else {
     const parts = [];
     if (added > 0) parts.push(`${added} new`);
     if (updated > 0) parts.push(`${updated} updated`);
+    if (skipped > 0) parts.push(`${skipped} skipped (oversized or malformed)`);
     composerHint.textContent = `Imported ${parts.join(", ")}`;
   }
 }
@@ -2930,10 +2952,14 @@ function generateRecoveryKey() {
 async function verifyMasterKey(masterKey) {
   const verifyBase64 = await getMeta(ENC_VERIFY_KEY);
   if (!verifyBase64) {
-    return true;
+    return false;
   }
-  const plaintext = await decryptCiphertext(verifyBase64, masterKey);
-  return plaintext === ENC_VERIFY_PLAINTEXT;
+  try {
+    const plaintext = await decryptCiphertext(verifyBase64, masterKey);
+    return plaintext === ENC_VERIFY_PLAINTEXT;
+  } catch {
+    return false;
+  }
 }
 
 async function decryptAllEntriesIntoState() {
@@ -3634,9 +3660,12 @@ async function handleImportUnlockSubmit(value, isRecovery) {
   }
   const saltBase64 = isRecovery ? file.saltRecovery : file.saltPass;
   const wrappedBase64 = isRecovery ? file.wrappedRecovery : file.wrappedPass;
-  const iterations = isRecovery
-    ? (file.iterationsRecovery || file.iterations || LEGACY_PBKDF2_ITERATIONS)
-    : (file.iterationsPass || file.iterations || LEGACY_PBKDF2_ITERATIONS);
+  const iterations = Math.max(
+    isRecovery
+      ? (file.iterationsRecovery || file.iterations || LEGACY_PBKDF2_ITERATIONS)
+      : (file.iterationsPass || file.iterations || LEGACY_PBKDF2_ITERATIONS),
+    MIN_IMPORT_ITERATIONS,
+  );
   if (!saltBase64 || !wrappedBase64 || !file.verify || !file.iv || !file.ciphertext) {
     throw new Error("malformed-file");
   }
@@ -3742,8 +3771,8 @@ async function handleImportAdoptVault() {
     [ENC_WRAPPED_PASS_KEY, file.wrappedPass],
     [ENC_WRAPPED_RECOVERY_KEY, file.wrappedRecovery],
     [ENC_VERIFY_KEY, file.verify],
-    [ENC_ITERATIONS_PASS_KEY, String(file.iterationsPass || file.iterations || PBKDF2_ITERATIONS)],
-    [ENC_ITERATIONS_RECOVERY_KEY, String(file.iterationsRecovery || file.iterations || PBKDF2_ITERATIONS)],
+    [ENC_ITERATIONS_PASS_KEY, String(Math.max(file.iterationsPass || file.iterations || PBKDF2_ITERATIONS, MIN_IMPORT_ITERATIONS))],
+    [ENC_ITERATIONS_RECOVERY_KEY, String(Math.max(file.iterationsRecovery || file.iterations || PBKDF2_ITERATIONS, MIN_IMPORT_ITERATIONS))],
   ]);
   state.encryption.enabled = true;
   state.encryption.unlocked = true;
