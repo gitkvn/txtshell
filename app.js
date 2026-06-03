@@ -2837,7 +2837,7 @@ async function deriveWrappingKey(passphrase, saltBytes, iterations) {
     material,
     { name: "AES-GCM", length: 256 },
     false,
-    ["encrypt", "decrypt"],
+    ["wrapKey", "unwrapKey"],
   );
 }
 
@@ -2885,6 +2885,9 @@ async function migrateRecoveryWrap(recoveryKey, masterKey) {
 }
 
 async function generateMasterKey() {
+  // Must stay extractable: wrapKey() can only wrap an extractable key.
+  // The long-lived session key is obtained via unwrapMasterKey (non-extractable);
+  // this freshly generated handle is wrapped, then discarded.
   return crypto.subtle.generateKey(
     { name: "AES-GCM", length: 256 },
     true,
@@ -2893,30 +2896,27 @@ async function generateMasterKey() {
 }
 
 async function wrapMasterKey(masterKey, wrappingKey) {
-  const rawMaster = await crypto.subtle.exportKey("raw", masterKey);
   const iv = randomBytes(12);
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
+  const wrapped = await crypto.subtle.wrapKey(
+    "raw",
+    masterKey,
     wrappingKey,
-    rawMaster,
+    { name: "AES-GCM", iv },
   );
-  return bytesToBase64(combineIvAndData(iv, new Uint8Array(ciphertext)));
+  return bytesToBase64(combineIvAndData(iv, new Uint8Array(wrapped)));
 }
 
-async function unwrapMasterKey(base64, wrappingKey) {
+async function unwrapMasterKey(base64, wrappingKey, extractable = false) {
   const combined = base64ToBytes(base64);
   const iv = combined.slice(0, 12);
-  const ciphertext = combined.slice(12);
-  const rawMaster = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv },
-    wrappingKey,
-    ciphertext,
-  );
-  return crypto.subtle.importKey(
+  const wrapped = combined.slice(12);
+  return crypto.subtle.unwrapKey(
     "raw",
-    rawMaster,
+    wrapped,
+    wrappingKey,
+    { name: "AES-GCM", iv },
     { name: "AES-GCM", length: 256 },
-    true,
+    extractable,
     ["encrypt", "decrypt"],
   );
 }
@@ -3819,6 +3819,8 @@ async function handleSetupSubmit(passphrase) {
   const wrappedPass = await wrapMasterKey(masterKey, wrappingPass);
   const wrappedRecovery = await wrapMasterKey(masterKey, wrappingRecovery);
   const verify = await encryptPlaintext(ENC_VERIFY_PLAINTEXT, masterKey);
+  // Re-derive a non-extractable session key; discard the extractable one used for wrapping.
+  const sessionKey = await unwrapMasterKey(wrappedPass, wrappingPass);
 
   state.vaultPending = {
     saltPass,
@@ -3826,7 +3828,7 @@ async function handleSetupSubmit(passphrase) {
     wrappedPass,
     wrappedRecovery,
     verify,
-    masterKey,
+    masterKey: sessionKey,
     recoveryKey,
   };
   state.vaultView = "recovery-display";
@@ -3912,9 +3914,12 @@ async function handleUnlockSubmit(value, isRecovery) {
   signalReady();
 
   if (iterations < PBKDF2_ITERATIONS) {
-    const migrate = isRecovery
-      ? migrateRecoveryWrap(value, masterKey)
-      : migratePassphraseWrap(value, masterKey);
+    const migrate = unwrapMasterKey(wrappedBase64, wrappingKey, true).then(
+      (rewrapKey) =>
+        isRecovery
+          ? migrateRecoveryWrap(value, rewrapKey)
+          : migratePassphraseWrap(value, rewrapKey),
+    );
     migrate.catch((error) => {
       console.warn("PBKDF2 iteration migration failed; will retry next unlock", error);
     });
@@ -3931,7 +3936,7 @@ async function handleChangeCurrentSubmit(passphrase) {
   const wrappingKey = await deriveWrappingKey(passphrase, base64ToBytes(saltBase64), iterations);
   let masterKey;
   try {
-    masterKey = await unwrapMasterKey(wrappedBase64, wrappingKey);
+    masterKey = await unwrapMasterKey(wrappedBase64, wrappingKey, true);
   } catch {
     throw new Error("wrong-key");
   }
