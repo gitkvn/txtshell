@@ -2231,6 +2231,11 @@ function handleCommandPaletteKeyboard(event) {
     event.stopPropagation();
     state.commandPaletteDismissed = true;
     commandPalette.hidden = true;
+    if (entryInput.value.trim().startsWith("/") && !state.editingEntryId) {
+      setEditorValue("");
+      clearDraft();
+      composerHint.textContent = "Ready";
+    }
     return true;
   }
 
