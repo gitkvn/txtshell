@@ -48,6 +48,16 @@
         <section id="editorSuggestions" class="editor-suggestions" hidden aria-label="Editor suggestions"></section>
         <section id="inlineResults" class="inline-results" hidden aria-live="polite"></section>
         <section id="vaultOverlay" class="vault-overlay" hidden aria-live="polite"></section>
+        <section id="inboxView" class="inbox-view" hidden aria-live="polite">
+          <div class="inbox-view-header">
+            <div class="inbox-view-heading">
+              <p class="inbox-view-title">Inbox</p>
+              <p id="inboxViewSubtitle" class="inbox-view-subtitle">Loading captures…</p>
+            </div>
+            <button id="inboxCloseButton" class="search-close" type="button">Close</button>
+          </div>
+          <ul id="inboxList" class="inbox-list" aria-live="polite"></ul>
+        </section>
       </form>
 
       <section id="commandBar" class="command-bar" aria-live="polite">

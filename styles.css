@@ -679,6 +679,135 @@ kbd {
   border-style: dashed;
 }
 
+/* /inbox full-view triage — composer stays visible (compacted) above the list */
+.inbox-view {
+  display: none;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0 20px 16px;
+}
+
+.editor-wrap.is-inbox #entryInput {
+  min-height: 0;
+  height: auto;
+  flex: 0 0 auto;
+  padding-bottom: 12px;
+}
+
+.editor-wrap.is-inbox .inbox-view {
+  display: flex;
+}
+
+.editor-wrap.is-inbox .inline-results {
+  display: none;
+}
+
+.inbox-view-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.inbox-view-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.inbox-view-subtitle {
+  margin: 2px 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.inbox-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.inbox-empty {
+  color: var(--muted);
+  font-size: 0.9rem;
+  padding: 16px 8px;
+}
+
+.inbox-entry {
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  padding: 14px 8px 16px;
+}
+
+.inbox-entry.is-undecryptable {
+  opacity: 0.8;
+}
+
+.inbox-entry-meta {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  margin: 0 0 6px;
+}
+
+.inbox-entry-text {
+  margin: 0 0 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--ink);
+}
+
+.inbox-entry-text.inbox-entry-error {
+  font-family: var(--font-sans);
+  color: var(--muted);
+  font-style: italic;
+}
+
+.inbox-entry-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.inbox-entry-actions button {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-family: var(--font-sans);
+}
+
+.inbox-entry-actions button:hover,
+.inbox-entry-actions button:focus-visible {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  outline: none;
+}
+
+.inbox-entry-actions button.inbox-action-primary {
+  color: var(--paper);
+  background: var(--ink);
+  border-color: var(--ink);
+}
+
+.inbox-entry-actions button.inbox-action-primary:hover,
+.inbox-entry-actions button.inbox-action-primary:focus-visible {
+  color: var(--paper);
+  opacity: 0.88;
+}
+
 .entry-card.collapsed .entry-body {
   max-height: 6.35em;
   overflow: hidden;

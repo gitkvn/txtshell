@@ -78,6 +78,7 @@ const SLASH_COMMANDS = [
   { name: "/ya", description: "Show blocks created or edited yesterday" },
   { name: "/mirror", description: "Show a pairing QR to link an iOS device" },
   { name: "/sync setup", description: "Set the sync Worker URL and auth token" },
+  { name: "/inbox", description: "Triage captures synced from your phone" },
 ];
 
 const state = {
@@ -130,6 +131,10 @@ const composerHint = document.querySelector("#composerHint");
 const currentDateTime = document.querySelector("#currentDateTime");
 const entryTemplate = document.querySelector("#entryTemplate");
 const vaultOverlay = document.querySelector("#vaultOverlay");
+const inboxView = document.querySelector("#inboxView");
+const inboxList = document.querySelector("#inboxList");
+const inboxViewSubtitle = document.querySelector("#inboxViewSubtitle");
+const inboxCloseButton = document.querySelector("#inboxCloseButton");
 const lockButton = document.querySelector("#lockButton");
 const upgradeLink = document.querySelector("#upgradeLink");
 const interestOverlay = document.querySelector("#interestOverlay");
@@ -409,7 +414,7 @@ searchInput.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
     event.stopPropagation();
-    closeSearchMode();
+    escapeToComposer();
     return;
   }
 
@@ -428,59 +433,88 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
-  if (!mergeModal.hidden) {
-    event.preventDefault();
-    closeMergeModal();
+  event.preventDefault();
+  escapeToComposer();
+});
+
+function focusComposer() {
+  if (entryInput.disabled) {
     return;
   }
+  entryInput.focus();
+  entryInput.setSelectionRange(entryInput.value.length, entryInput.value.length);
+}
 
-  if (!deleteModal.hidden) {
-    event.preventDefault();
-    closeDeleteModal();
+// Single, predictable Esc contract: dismiss whatever is open and land the user in a
+// clean, ready-to-type composer. Only one exclusive overlay/view is ever open at a
+// time; otherwise sweep the composer's transient UI in one pass. No lingering
+// pickers, suggestions, overlays, or stale view states after one press.
+function escapeToComposer() {
+  // Multi-select confirmation modals live inside search-mode. Esc closes the modal
+  // and returns to the search view with the selection intact (Cancel/backdrop clear
+  // it; Esc preserves it), so the user lands back on their multi-select — not the
+  // composer.
+  if (!mergeModal.hidden || !deleteModal.hidden) {
+    dismissMultiSelectModalToSearch();
     return;
   }
-
   if (!interestOverlay.hidden) {
-    event.preventDefault();
     closeInterestCard();
     return;
   }
-
   if (!findReplaceBar.hidden) {
-    event.preventDefault();
     closeFindReplace();
     return;
   }
 
+  // Vault cards: dismiss the sync/pairing cards introduced for this flow. The unlock
+  // gate and other explicit flows keep their own controls. While any vault card is
+  // up, Esc does nothing else.
+  if (state.vaultView) {
+    if (state.vaultView === "mirror-display") {
+      closeMirror();
+    } else if (state.vaultView === "mirror-confirm" || state.vaultView === "sync-setup") {
+      exitVaultToNormal();
+    }
+    return;
+  }
+
+  // Full-area views (their close functions already focus the composer).
+  if (isInboxOpen()) {
+    endInbox();
+    return;
+  }
   if (state.searchMode) {
-    event.preventDefault();
     closeSearchMode();
     return;
   }
 
+  // Plain composer: sweep all transient UI in one pass.
   if (getInlineQuery()) {
-    event.preventDefault();
     clearInlineQuery();
-    return;
   }
-
   if (state.targetCount !== null) {
-    event.preventDefault();
     state.targetCount = null;
     updateWordCount();
-    composerHint.textContent = "Target cleared";
-    return;
   }
-
   if (state.editingEntryId) {
-    event.preventDefault();
     state.editingEntryId = null;
     setEditorValue("");
     clearDraft();
-    composerHint.textContent = "Edit discarded";
-    render();
+  } else if (entryInput.value.trim().startsWith("/")) {
+    setEditorValue("");
+    clearDraft();
   }
-});
+  state.commandPaletteDismissed = false;
+  composerHint.textContent = "Ready";
+  render();
+
+  // Ensure transient chrome is hidden after the re-render, then land in the composer.
+  commandPalette.hidden = true;
+  editorSuggestions.hidden = true;
+  statusToast.classList.remove("is-visible", "is-hint");
+  focusComposer();
+}
 
 entryInput.addEventListener("keydown", (event) => {
   if (handleEditorSuggestionKeyboard(event)) {
@@ -617,6 +651,12 @@ entryInput.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (event.key === "Enter" && entryInput.value.trim() === "/inbox") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
   const targetMatch = event.key === "Enter" ? entryInput.value.trim().match(/^\/(\d+)$/) : null;
   if (targetMatch) {
     event.preventDefault();
@@ -690,6 +730,12 @@ function submitComposer() {
   if (!text) {
     composerHint.textContent = "Block cannot be saved empty";
     return;
+  }
+
+  // Any real submission (command or save) leaves the inbox view, flushing the
+  // pending DELETE batch. The /inbox branch below then re-opens it (a refresh).
+  if (isInboxOpen()) {
+    endInbox();
   }
 
   if (getInlineQuery()) {
@@ -872,6 +918,17 @@ function submitComposer() {
     setEditorValue("");
     clearDraft();
     beginMirror();
+    return;
+  }
+
+  if (text === "/inbox") {
+    if (!state.encryption.enabled) {
+      composerHint.textContent = "Encryption not enabled — run /encrypt first";
+      return;
+    }
+    setEditorValue("");
+    clearDraft();
+    beginInbox();
     return;
   }
 
@@ -1490,6 +1547,20 @@ function openMergeModal() {
   mergeOpeningInput.value = "";
   mergeModal.hidden = false;
   window.requestAnimationFrame(() => mergeOpeningInput.focus());
+}
+
+// Esc dismissal for the merge/delete confirmation modals: close the modal but keep
+// the multi-select and stay in the search view (unlike Cancel/backdrop, which clear).
+function dismissMultiSelectModalToSearch() {
+  mergeModal.hidden = true;
+  deleteModal.hidden = true;
+  mergeOpeningInput.value = "";
+  if (state.searchMode) {
+    render(); // selection preserved -> multi-select toolbar stays visible
+    if (!searchInput.hidden) {
+      window.requestAnimationFrame(() => searchInput.focus());
+    }
+  }
 }
 
 function closeMergeModal() {
@@ -2283,20 +2354,6 @@ function handleCommandPaletteKeyboard(event) {
     return true;
   }
 
-  if (event.key === "Escape") {
-    event.preventDefault();
-    event.stopPropagation();
-    state.commandPaletteDismissed = true;
-    commandPalette.hidden = true;
-    if (entryInput.value.trim().startsWith("/") && !state.editingEntryId) {
-      setEditorValue("");
-      clearDraft();
-      state.commandPaletteDismissed = false;
-      composerHint.textContent = "Ready";
-    }
-    return true;
-  }
-
   if (event.key === "Enter") {
     const highlighted = matches[state.commandPaletteIndex];
     if (!highlighted) {
@@ -2423,12 +2480,6 @@ function handleEditorSuggestionKeyboard(event) {
   if (event.key === "Tab" || event.key === "Enter") {
     event.preventDefault();
     applyEditorSuggestion(suggestions[state.editorSelectedSuggestionIndex]);
-    return true;
-  }
-
-  if (event.key === "Escape") {
-    event.preventDefault();
-    editorSuggestions.hidden = true;
     return true;
   }
 
@@ -4562,4 +4613,260 @@ function renderMirrorDisplayCard() {
   // Auto-dismiss after 60s of inactivity so the master key isn't left on screen.
   clearMirrorDismiss();
   mirrorDismissTimer = window.setTimeout(closeMirror, 60000);
+}
+
+// ---------------------------------------------------------------------------
+// /inbox — full-view triage of encrypted captures synced from the phone
+// ---------------------------------------------------------------------------
+
+// Transient triage state; never persisted. inboxState holds the current session's
+// fetched+decrypted entries and the ids the user has acted on. inboxPendingDeleteIds
+// survives a failed DELETE so it can be retried (and excluded) on the next /inbox.
+let inboxState = null;
+let inboxPendingDeleteIds = new Set();
+
+function isInboxOpen() {
+  return inboxState !== null;
+}
+
+inboxCloseButton.addEventListener("click", endInbox);
+
+function beginInbox() {
+  getSyncConfig().then(({ workerUrl, authToken }) => {
+    if (!normalizeWorkerUrl(workerUrl) || !authToken) {
+      state.vaultView = "sync-setup";
+      renderVault();
+      composerHint.textContent = "Configure sync before triaging";
+      return;
+    }
+    inboxState = { loading: true, error: null, entries: [], processed: new Set() };
+    openInboxView();
+    renderInboxView();
+    composerHint.textContent = "Inbox";
+    fetchAndDecryptInbox();
+  });
+}
+
+function openInboxView() {
+  if (state.searchMode) {
+    closeSearchMode();
+  }
+  composerForm.classList.add("is-inbox");
+  inboxView.hidden = false;
+}
+
+function inboxDecrypt(entry) {
+  // Inbox entries carry iv and ciphertext as SEPARATE base64 fields; recombine into
+  // the IV(12)||ct layout decryptCiphertext expects (same as encrypted-export import).
+  const ivBytes = base64ToBytes(entry.iv);
+  const ctBytes = base64ToBytes(entry.ciphertext);
+  const combined = new Uint8Array(ivBytes.length + ctBytes.length);
+  combined.set(ivBytes, 0);
+  combined.set(ctBytes, ivBytes.length);
+  return decryptCiphertext(bytesToBase64(combined), state.encryption.masterKey);
+}
+
+async function fetchAndDecryptInbox() {
+  const { workerUrl, authToken } = await getSyncConfig();
+  const url = normalizeWorkerUrl(workerUrl);
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), CLOUD_SYNC_TIMEOUT_MS);
+  let raw;
+  try {
+    const response = await fetch(`${url}/v1/inbox`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${authToken}` },
+      signal: controller.signal,
+    });
+    if (response.status === 401) {
+      throw new Error("auth");
+    }
+    if (!response.ok) {
+      throw new Error("http-" + response.status);
+    }
+    raw = await response.json();
+    if (!Array.isArray(raw)) {
+      throw new Error("malformed");
+    }
+  } catch (error) {
+    window.clearTimeout(timeout);
+    if (!inboxState) return; // user already closed the inbox view
+    console.warn("[txtshell] inbox fetch failed", error);
+    inboxState.loading = false;
+    inboxState.error = error?.message === "auth"
+      ? "Sync auth failed — check /sync setup."
+      : "Couldn't reach the inbox. Try again.";
+    renderInboxView();
+    return;
+  }
+  window.clearTimeout(timeout);
+  if (!inboxState) return;
+
+  // Drop entries already triaged in a prior session whose DELETE hasn't landed yet,
+  // and retry that DELETE so the Worker self-heals.
+  const visible = raw.filter((e) => e && e.id && !inboxPendingDeleteIds.has(e.id));
+  if (inboxPendingDeleteIds.size > 0) {
+    flushInboxDelete();
+  }
+
+  const entries = [];
+  for (const e of visible) {
+    let text = null;
+    let decryptOk = false;
+    try {
+      text = await inboxDecrypt(e);
+      decryptOk = true;
+    } catch (error) {
+      console.warn("[txtshell] inbox entry decrypt failed", e.id, error);
+    }
+    entries.push({ id: e.id, createdAt: e.createdAt || "", text, decryptOk });
+  }
+  inboxState.loading = false;
+  inboxState.entries = entries;
+  renderInboxView();
+}
+
+function markInboxProcessed(id) {
+  if (inboxState) {
+    inboxState.processed.add(id);
+  }
+}
+
+function inboxSave(id) {
+  const entry = inboxState?.entries.find((e) => e.id === id);
+  if (!entry || !entry.decryptOk) return;
+  createEntryFromText(entry.text); // existing path -> saveEntry -> auto-export
+  markInboxProcessed(id);
+  render();
+  renderInboxView();
+}
+
+function inboxDelete(id) {
+  // "Delete" here = remove from the inbox without saving a block. Marks the entry
+  // processed; the actual Worker DELETE is batched on exit (flushInboxDelete).
+  markInboxProcessed(id);
+  renderInboxView();
+}
+
+function endInbox() {
+  if (inboxState) {
+    for (const id of inboxState.processed) {
+      inboxPendingDeleteIds.add(id);
+    }
+  }
+  inboxState = null;
+  composerForm.classList.remove("is-inbox");
+  inboxView.hidden = true;
+  inboxList.innerHTML = "";
+  composerHint.textContent = state.editingEntryId ? "Editing block -> save updates" : "Ready";
+  entryInput.focus();
+  flushInboxDelete();
+}
+
+async function flushInboxDelete() {
+  if (inboxPendingDeleteIds.size === 0) return;
+  const ids = Array.from(inboxPendingDeleteIds);
+  const { workerUrl, authToken } = await getSyncConfig();
+  const url = normalizeWorkerUrl(workerUrl);
+  if (!url || !authToken) return;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), CLOUD_SYNC_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${url}/v1/inbox`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ids }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error("http-" + response.status);
+    }
+    // Only clear the ids we actually sent; any added since stay pending.
+    for (const id of ids) {
+      inboxPendingDeleteIds.delete(id);
+    }
+  } catch (error) {
+    console.warn("[txtshell] inbox delete failed", error);
+    showStatusToast("Inbox cleanup failed — may see duplicates until next /inbox", { isHint: true });
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+function formatInboxTimestamp(value) {
+  if (!value) return "";
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return "";
+  return formatTimestamp(value);
+}
+
+function renderInboxView() {
+  if (!inboxState) return;
+
+  if (inboxState.loading) {
+    inboxViewSubtitle.textContent = "Loading captures…";
+    inboxList.innerHTML = "";
+    return;
+  }
+
+  if (inboxState.error) {
+    inboxViewSubtitle.textContent = inboxState.error;
+    inboxList.innerHTML = "";
+    return;
+  }
+
+  const pending = inboxState.entries.filter((e) => !inboxState.processed.has(e.id));
+
+  if (inboxState.entries.length === 0) {
+    inboxViewSubtitle.textContent = "Inbox is empty.";
+    inboxList.innerHTML = "";
+    return;
+  }
+
+  inboxViewSubtitle.textContent = pending.length === 0
+    ? "All captures triaged — Esc or Close to exit."
+    : `${pending.length} ${pending.length === 1 ? "capture" : "captures"} to triage.`;
+
+  if (pending.length === 0) {
+    inboxList.innerHTML = '<li class="inbox-empty">Nothing left to triage.</li>';
+    return;
+  }
+
+  inboxList.innerHTML = pending.map((entry) => {
+    const when = formatInboxTimestamp(entry.createdAt);
+    const meta = when ? `<p class="inbox-entry-meta">${escapeHtml(when)}</p>` : "";
+    if (!entry.decryptOk) {
+      return `
+        <li class="inbox-entry is-undecryptable" data-id="${escapeHtml(entry.id)}">
+          ${meta}
+          <p class="inbox-entry-text inbox-entry-error">Couldn't decrypt — delete or report.</p>
+          <div class="inbox-entry-actions">
+            <button type="button" data-action="delete" data-id="${escapeHtml(entry.id)}">Delete</button>
+          </div>
+        </li>
+      `;
+    }
+    return `
+      <li class="inbox-entry" data-id="${escapeHtml(entry.id)}">
+        ${meta}
+        <p class="inbox-entry-text">${escapeHtml(entry.text)}</p>
+        <div class="inbox-entry-actions">
+          <button type="button" class="inbox-action-primary" data-action="save" data-id="${escapeHtml(entry.id)}">Save</button>
+          <button type="button" data-action="delete" data-id="${escapeHtml(entry.id)}">Delete</button>
+        </div>
+      </li>
+    `;
+  }).join("");
+
+  inboxList.querySelectorAll(".inbox-entry-actions button").forEach((button) => {
+    const id = button.getAttribute("data-id");
+    const action = button.getAttribute("data-action");
+    button.addEventListener("click", () => {
+      if (action === "save") inboxSave(id);
+      else if (action === "delete") inboxDelete(id);
+    });
+  });
 }
