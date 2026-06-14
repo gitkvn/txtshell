@@ -1273,3 +1273,54 @@ kbd {
     text-align: left;
   }
 }
+
+/* Sync setup + /mirror pairing */
+.vault-input[data-field="url"],
+.vault-input[data-field="token"] {
+  text-align: left;
+  letter-spacing: normal;
+}
+
+.mirror-card {
+  width: min(420px, 100%);
+  text-align: center;
+}
+
+.vault-warning {
+  font-size: 0.8rem;
+  color: var(--accent);
+  text-align: center;
+  margin: 0 0 16px;
+  line-height: 1.45;
+}
+
+.mirror-qr {
+  display: block;
+  width: 260px;
+  height: 260px;
+  max-width: 100%;
+  margin: 0 auto 16px;
+  image-rendering: pixelated;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.mirror-fields {
+  margin: 0 0 20px;
+  text-align: left;
+  font-size: 0.78rem;
+}
+
+.mirror-fields dt {
+  color: var(--muted);
+  font-family: var(--font-sans);
+  margin-top: 8px;
+}
+
+.mirror-fields dd {
+  margin: 2px 0 0;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  word-break: break-all;
+}

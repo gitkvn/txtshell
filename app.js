@@ -17,6 +17,10 @@ const ENC_UNLOCK_FAIL_COUNT = "enc-unlock-fail-count";
 const ENC_UNLOCK_LOCKED_UNTIL = "enc-unlock-locked-until";
 const ENC_UNLOCK_ESCALATION = "enc-unlock-escalation";
 const ENC_VERIFY_PLAINTEXT = "txtshell-verify-v1";
+const SYNC_WORKER_URL_KEY = "sync-worker-url";
+const SYNC_AUTH_TOKEN_KEY = "sync-auth-token";
+const CLOUD_SYNC_DEBOUNCE_MS = 1000; // coalesce rapid sequential saves into one upload
+const CLOUD_SYNC_TIMEOUT_MS = 15000; // abort a stuck upload; local save is already canonical
 const PBKDF2_ITERATIONS = 600000;
 const LEGACY_PBKDF2_ITERATIONS = 100000;
 const MIN_IMPORT_ITERATIONS = LEGACY_PBKDF2_ITERATIONS; // 100000 — reject weaker imported KDF params
@@ -72,6 +76,8 @@ const SLASH_COMMANDS = [
   { name: "/wa", description: "Show blocks created or edited in the last 7 days" },
   { name: "/y", description: "Show blocks saved yesterday" },
   { name: "/ya", description: "Show blocks created or edited yesterday" },
+  { name: "/mirror", description: "Show a pairing QR to link an iOS device" },
+  { name: "/sync setup", description: "Set the sync Worker URL and auth token" },
 ];
 
 const state = {
@@ -599,6 +605,18 @@ entryInput.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (event.key === "Enter" && entryInput.value.trim() === "/mirror") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
+  if (event.key === "Enter" && entryInput.value.trim() === "/sync setup") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
   const targetMatch = event.key === "Enter" ? entryInput.value.trim().match(/^\/(\d+)$/) : null;
   if (targetMatch) {
     event.preventDefault();
@@ -833,6 +851,27 @@ function submitComposer() {
     setEditorValue("");
     clearDraft();
     exportEntries();
+    return;
+  }
+
+  if (text === "/sync setup") {
+    setEditorValue("");
+    clearDraft();
+    state.vaultPending = null;
+    state.vaultView = "sync-setup";
+    renderVault();
+    composerHint.textContent = "Configure sync";
+    return;
+  }
+
+  if (text === "/mirror") {
+    if (!state.encryption.enabled) {
+      composerHint.textContent = "Encryption not enabled — run /encrypt first";
+      return;
+    }
+    setEditorValue("");
+    clearDraft();
+    beginMirror();
     return;
   }
 
@@ -1190,6 +1229,7 @@ async function saveEntry(entry) {
     };
   }
   await putEntryRecord(record);
+  scheduleCloudSync();
 }
 
 function putEntryRecord(record) {
@@ -2754,6 +2794,7 @@ function removeEntry(entryId) {
   if (!state.db) {
     return Promise.resolve();
   }
+  scheduleCloudSync();
   return new Promise((resolve, reject) => {
     const transaction = state.db.transaction(ENTRY_STORE, "readwrite");
     transaction.objectStore(ENTRY_STORE).delete(entryId);
@@ -3131,6 +3172,7 @@ function lockVault() {
 
 function renderVault() {
   clearUnlockCountdown();
+  clearMirrorDismiss();
   const view = state.vaultView;
   if (!view) {
     vaultOverlay.hidden = true;
@@ -3189,6 +3231,18 @@ function renderVault() {
     renderWipeCard(false);
   } else if (view === "wipe-confirm-recovery") {
     renderWipeCard(true);
+  } else if (view === "sync-setup") {
+    renderSyncSetupCard();
+  } else if (view === "mirror-confirm") {
+    renderPassphraseConfirmCard({
+      title: "Pair a device",
+      subtitle: "Enter your passphrase to reveal the pairing QR.",
+      buttonText: "Reveal QR",
+      onSubmit: handleMirrorSubmit,
+      onCancel: exitVaultToNormal,
+    });
+  } else if (view === "mirror-display") {
+    renderMirrorDisplayCard();
   }
 }
 
@@ -4206,4 +4260,306 @@ async function handleDisableSubmit(passphrase) {
     renderVault();
     composerHint.textContent = "Disable failed";
   }
+}
+
+// ---------------------------------------------------------------------------
+// Cloud sync (encrypted blocks blob -> Worker) and /mirror device pairing
+// ---------------------------------------------------------------------------
+
+async function getSyncConfig() {
+  const [workerUrl, authToken] = await Promise.all([
+    getMeta(SYNC_WORKER_URL_KEY),
+    getMeta(SYNC_AUTH_TOKEN_KEY),
+  ]);
+  return { workerUrl, authToken };
+}
+
+function normalizeWorkerUrl(value) {
+  const trimmed = (value || "").trim();
+  if (!trimmed) return null;
+  let parsed;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:") return null; // Worker is HTTPS-only
+  return trimmed.replace(/\/+$/, "");
+}
+
+function setSyncStatus(status) {
+  // Local save is canonical; only surface failures (non-blocking). Success is silent
+  // to avoid a toast on every debounced save.
+  if (status === "error") {
+    showStatusToast("Sync failed — saved locally", { isHint: true });
+  } else if (status === "auth") {
+    showStatusToast("Sync auth failed — check /sync setup", { isHint: true });
+  }
+}
+
+let cloudSyncTimer = null;
+let cloudSyncInFlight = false;
+
+function scheduleCloudSync() {
+  // Only encrypted, unlocked vaults sync; iOS decrypts the blob with the master key.
+  if (!(state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey)) {
+    return;
+  }
+  if (cloudSyncTimer !== null) {
+    window.clearTimeout(cloudSyncTimer);
+  }
+  cloudSyncTimer = window.setTimeout(() => {
+    cloudSyncTimer = null;
+    flushCloudSync();
+  }, CLOUD_SYNC_DEBOUNCE_MS);
+}
+
+async function flushCloudSync() {
+  if (cloudSyncInFlight) {
+    // A save landed during an in-flight upload; re-arm so the latest state ships next.
+    scheduleCloudSync();
+    return;
+  }
+  if (!(state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey)) {
+    return;
+  }
+  const { workerUrl, authToken } = await getSyncConfig();
+  if (!workerUrl || !authToken) {
+    return; // sync not configured — nothing to do, no error
+  }
+
+  let body;
+  try {
+    // Reuse the exact AES-GCM path used by encrypted export: base64(IV(12) || ct+tag).
+    // Upload the raw bytes of that blob; iOS splits the 12-byte IV prefix and decrypts.
+    const base64Blob = await encryptPlaintext(
+      JSON.stringify(state.entries),
+      state.encryption.masterKey,
+    );
+    body = base64ToBytes(base64Blob);
+  } catch (error) {
+    console.error("[txtshell] cloud sync encrypt failed", error);
+    setSyncStatus("error");
+    return;
+  }
+
+  cloudSyncInFlight = true;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), CLOUD_SYNC_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${workerUrl}/v1/blocks`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/octet-stream",
+      },
+      body,
+      signal: controller.signal,
+    });
+    if (response.status === 401) {
+      setSyncStatus("auth");
+    } else if (!response.ok) {
+      setSyncStatus("error");
+    } else {
+      setSyncStatus("ok");
+    }
+  } catch (error) {
+    // Network down, aborted, or CSP block — the local save already succeeded.
+    console.warn("[txtshell] cloud sync upload failed", error);
+    setSyncStatus("error");
+  } finally {
+    window.clearTimeout(timeout);
+    cloudSyncInFlight = false;
+  }
+}
+
+function renderSyncSetupCard() {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG}
+      <p class="vault-title">Sync setup</p>
+      <p class="vault-subtitle">Paste your Worker URL and auth token. These are stored on this device only.</p>
+      <p class="vault-error" hidden></p>
+      <input class="vault-input" data-field="url" type="url" placeholder="https://sync.example.com" autocomplete="off" spellcheck="false" />
+      <input class="vault-input" data-field="token" type="text" placeholder="Auth token" autocomplete="off" spellcheck="false" />
+      <button class="vault-button" type="button" data-action="submit">Save</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+
+  const urlInput = vaultOverlay.querySelector('[data-field="url"]');
+  const tokenInput = vaultOverlay.querySelector('[data-field="token"]');
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const submitButton = vaultOverlay.querySelector('[data-action="submit"]');
+  const cancelButton = vaultOverlay.querySelector('[data-action="cancel"]');
+
+  const showError = (message) => {
+    errorLine.textContent = message;
+    errorLine.hidden = !message;
+  };
+
+  // Prefill existing values so editing is easy.
+  getSyncConfig().then(({ workerUrl, authToken }) => {
+    if (workerUrl) urlInput.value = workerUrl;
+    if (authToken) tokenInput.value = authToken;
+  });
+
+  const submit = async () => {
+    const url = normalizeWorkerUrl(urlInput.value);
+    const token = tokenInput.value.trim();
+    if (!url) {
+      showError("Enter a valid https:// Worker URL.");
+      return;
+    }
+    if (!token) {
+      showError("Enter the auth token.");
+      return;
+    }
+    showError("");
+    submitButton.disabled = true;
+    try {
+      await handleSyncSetupSubmit(url, token);
+    } catch (error) {
+      console.error(error);
+      showError("Couldn't save. Try again.");
+      submitButton.disabled = false;
+    }
+  };
+
+  submitButton.addEventListener("click", submit);
+  tokenInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      submit();
+    }
+  });
+  cancelButton.addEventListener("click", exitVaultToNormal);
+  window.requestAnimationFrame(() => urlInput.focus());
+}
+
+async function handleSyncSetupSubmit(workerUrl, authToken) {
+  await saveMetaBatch([
+    [SYNC_WORKER_URL_KEY, workerUrl],
+    [SYNC_AUTH_TOKEN_KEY, authToken],
+  ]);
+  state.vaultView = null;
+  state.vaultPending = null;
+  renderVault();
+  composerHint.textContent = "Sync configured";
+  entryInput.focus();
+}
+
+function beginMirror() {
+  getSyncConfig().then(({ workerUrl, authToken }) => {
+    if (!normalizeWorkerUrl(workerUrl) || !authToken) {
+      state.vaultView = "sync-setup";
+      renderVault();
+      composerHint.textContent = "Configure sync before pairing";
+      return;
+    }
+    state.vaultPending = null;
+    state.vaultView = "mirror-confirm";
+    renderVault();
+    composerHint.textContent = "Pair a device";
+  });
+}
+
+// Transient pairing payload. Holds the base64 master key only while the QR is on
+// screen; cleared on dismiss. Never written to state/IndexedDB.
+let mirrorPayload = null;
+let mirrorDismissTimer = null;
+
+function clearMirrorDismiss() {
+  if (mirrorDismissTimer !== null) {
+    window.clearTimeout(mirrorDismissTimer);
+    mirrorDismissTimer = null;
+  }
+}
+
+async function handleMirrorSubmit(passphrase) {
+  const saltBase64 = await getMeta(ENC_SALT_PASS_KEY);
+  const wrappedBase64 = await getMeta(ENC_WRAPPED_PASS_KEY);
+  if (!saltBase64 || !wrappedBase64) {
+    throw new Error("missing-meta");
+  }
+  const iterations = await readIterations(ENC_ITERATIONS_PASS_KEY);
+  const wrappingKey = await deriveWrappingKey(passphrase, base64ToBytes(saltBase64), iterations);
+
+  // Re-derive an EXTRACTABLE handle from the passphrase (the steady-state session key
+  // is non-extractable; exportKey would throw). Same pattern as handleChangeCurrentSubmit.
+  let extractableMaster;
+  try {
+    extractableMaster = await unwrapMasterKey(wrappedBase64, wrappingKey, true);
+  } catch {
+    throw new Error("wrong-key");
+  }
+
+  // Export raw key bytes, base64-encode for the QR, then discard the raw bytes and handle.
+  const rawBuffer = await crypto.subtle.exportKey("raw", extractableMaster);
+  const rawBytes = new Uint8Array(rawBuffer);
+  const masterKeyB64 = bytesToBase64(rawBytes);
+  rawBytes.fill(0); // zero the plaintext key bytes; extractableMaster handle now goes unused
+
+  const { workerUrl, authToken } = await getSyncConfig();
+  const normalizedUrl = normalizeWorkerUrl(workerUrl);
+  if (!normalizedUrl || !authToken) {
+    throw new Error("missing-meta");
+  }
+
+  // Field names/order match the iOS spec exactly.
+  const payloadJson = JSON.stringify({
+    workerUrl: normalizedUrl,
+    authToken,
+    masterKey: masterKeyB64,
+  });
+
+  const qr = qrcode(0, "M"); // type 0 = auto-fit smallest version, error correction M
+  qr.addData(payloadJson);
+  qr.make();
+  const qrDataUrl = qr.createDataURL(6); // cellSize 6, includes the standard quiet-zone margin
+
+  mirrorPayload = {
+    workerUrl: normalizedUrl,
+    authToken,
+    masterKey: masterKeyB64,
+    qrDataUrl,
+  };
+  state.vaultView = "mirror-display";
+  renderVault();
+}
+
+function closeMirror() {
+  clearMirrorDismiss();
+  mirrorPayload = null; // drop the master key from memory
+  exitVaultToNormal();
+}
+
+function renderMirrorDisplayCard() {
+  if (!mirrorPayload) {
+    exitVaultToNormal();
+    return;
+  }
+  const { workerUrl, authToken, masterKey, qrDataUrl } = mirrorPayload;
+  vaultOverlay.innerHTML = `
+    <div class="vault-card mirror-card">
+      <p class="vault-title">Scan to pair</p>
+      <p class="vault-warning">This QR contains your master key. Pair in a private location.</p>
+      <img class="mirror-qr" alt="Pairing QR code" src="${escapeHtml(qrDataUrl)}" />
+      <p class="vault-subtitle">Or enter manually:</p>
+      <dl class="mirror-fields">
+        <dt>Worker URL</dt><dd>${escapeHtml(workerUrl)}</dd>
+        <dt>Auth token</dt><dd>${escapeHtml(authToken)}</dd>
+        <dt>Master key</dt><dd>${escapeHtml(masterKey)}</dd>
+      </dl>
+      <button class="vault-button" type="button" data-action="close">Done</button>
+    </div>
+  `;
+
+  vaultOverlay
+    .querySelector('[data-action="close"]')
+    .addEventListener("click", closeMirror);
+
+  // Auto-dismiss after 60s of inactivity so the master key isn't left on screen.
+  clearMirrorDismiss();
+  mirrorDismissTimer = window.setTimeout(closeMirror, 60000);
 }
