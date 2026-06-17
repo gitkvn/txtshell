@@ -974,6 +974,15 @@ kbd {
   color: #9a948a;
 }
 
+.vault-textarea {
+  text-align: left;
+  letter-spacing: normal;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  resize: vertical;
+  word-break: break-all;
+}
+
 .vault-strength {
   font-size: 0.85rem;
   text-align: center;

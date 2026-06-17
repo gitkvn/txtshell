@@ -78,6 +78,8 @@ const SLASH_COMMANDS = [
   { name: "/ya", description: "Show blocks created or edited yesterday" },
   { name: "/mirror", description: "Show a pairing QR to link an iOS device" },
   { name: "/sync setup", description: "Set the sync Worker URL and auth token" },
+  { name: "/port", description: "Set up this browser using pairing data from another browser" },
+  { name: "/pull", description: "Fetch the latest blocks from cloud" },
   { name: "/inbox", description: "Triage captures synced from your phone" },
 ];
 
@@ -651,6 +653,18 @@ entryInput.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (event.key === "Enter" && entryInput.value.trim() === "/port") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
+  if (event.key === "Enter" && entryInput.value.trim() === "/pull") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
   if (event.key === "Enter" && entryInput.value.trim() === "/inbox") {
     event.preventDefault();
     submitComposer();
@@ -918,6 +932,28 @@ function submitComposer() {
     setEditorValue("");
     clearDraft();
     beginMirror();
+    return;
+  }
+
+  if (text === "/port") {
+    // Fail closed: never silently overwrite an existing vault or local blocks.
+    if (state.encryption.enabled || state.entries.length > 0) {
+      composerHint.textContent = "This browser already has data. Use /pull to fetch the latest from cloud.";
+      return;
+    }
+    setEditorValue("");
+    clearDraft();
+    state.vaultPending = null;
+    state.vaultView = "port-paste";
+    renderVault();
+    composerHint.textContent = "Pair this browser";
+    return;
+  }
+
+  if (text === "/pull") {
+    setEditorValue("");
+    clearDraft();
+    beginPull();
     return;
   }
 
@@ -3294,6 +3330,19 @@ function renderVault() {
     });
   } else if (view === "mirror-display") {
     renderMirrorDisplayCard();
+  } else if (view === "port-paste") {
+    renderPortPasteCard();
+  } else if (view === "port-passphrase") {
+    renderSetupCard({
+      title: "Set a passphrase for this browser",
+      subtitle: "Use the same passphrase as your other browsers so you only need to remember one.",
+      buttonText: "Continue",
+      skipRecovery: true,
+      onSubmit: handlePortPassphraseSubmit,
+      onCancel: exitVaultToNormal,
+    });
+  } else if (view === "pull-conflict") {
+    renderPullConflictCard();
   }
 }
 
@@ -3482,6 +3531,9 @@ async function renderUnlockCard(isRecovery) {
   const failHint = failCount > 0
     ? `${failCount} failed attempt${failCount === 1 ? "" : "s"}`
     : "";
+  // Browsers set up via /port have no recovery wrap, so the recovery key path is a
+  // dead end there — hide the toggle when no recovery wrap exists in IndexedDB.
+  const hasRecoveryWrap = Boolean(await getMeta(ENC_WRAPPED_RECOVERY_KEY));
 
   vaultOverlay.innerHTML = `
     <div class="vault-card">
@@ -3492,7 +3544,7 @@ async function renderUnlockCard(isRecovery) {
       <input class="vault-input" data-field="pass" type="${isRecovery ? "text" : "password"}" placeholder="${escapeHtml(placeholder)}" autocomplete="off" />
       <p class="vault-subtitle" data-field="failcount" ${failHint ? "" : "hidden"}>${escapeHtml(failHint)}</p>
       <button class="vault-button" type="button" data-action="submit">Unlock</button>
-      <button class="vault-link" type="button" data-action="toggle">${escapeHtml(linkText)}</button>
+      ${hasRecoveryWrap ? `<button class="vault-link" type="button" data-action="toggle">${escapeHtml(linkText)}</button>` : ""}
       <button class="vault-link" type="button" data-action="wipe">Wipe all data</button>
     </div>
   `;
@@ -3552,10 +3604,12 @@ async function renderUnlockCard(isRecovery) {
       submit();
     }
   });
-  toggleButton.addEventListener("click", () => {
-    state.vaultView = isRecovery ? "unlock" : "unlock-recovery";
-    renderVault();
-  });
+  if (toggleButton) {
+    toggleButton.addEventListener("click", () => {
+      state.vaultView = isRecovery ? "unlock" : "unlock-recovery";
+      renderVault();
+    });
+  }
   vaultOverlay.querySelector('[data-action="wipe"]').addEventListener("click", () => {
     state.vaultView = "wipe-confirm";
     renderVault();
@@ -4195,6 +4249,9 @@ async function handleUnlockSubmit(value, isRecovery) {
   entryInput.focus();
   signalReady();
 
+  // Non-blocking: refresh from cloud after unlock; prompts only if cloud differs.
+  void autoPullOnUnlock();
+
   if (iterations < PBKDF2_ITERATIONS) {
     const migrate = unwrapMasterKey(wrappedBase64, wrappingKey, true).then(
       (rewrapKey) =>
@@ -4602,9 +4659,25 @@ function renderMirrorDisplayCard() {
         <dt>Auth token</dt><dd>${escapeHtml(authToken)}</dd>
         <dt>Master key</dt><dd>${escapeHtml(masterKey)}</dd>
       </dl>
-      <button class="vault-button" type="button" data-action="close">Done</button>
+      <button class="vault-button" type="button" data-action="copy">Copy pairing data</button>
+      <button class="vault-button secondary" type="button" data-action="close">Done</button>
     </div>
   `;
+
+  const copyButton = vaultOverlay.querySelector('[data-action="copy"]');
+  copyButton.addEventListener("click", async () => {
+    // Paste target is /port on another browser — same { workerUrl, authToken, masterKey } shape.
+    const pairingJson = JSON.stringify({ workerUrl, authToken, masterKey });
+    try {
+      await navigator.clipboard.writeText(pairingJson);
+      copyButton.textContent = "Copied";
+      window.setTimeout(() => {
+        copyButton.textContent = "Copy pairing data";
+      }, COPY_FLASH_DURATION);
+    } catch {
+      composerHint.textContent = "Copy failed";
+    }
+  });
 
   vaultOverlay
     .querySelector('[data-action="close"]')
@@ -4613,6 +4686,351 @@ function renderMirrorDisplayCard() {
   // Auto-dismiss after 60s of inactivity so the master key isn't left on screen.
   clearMirrorDismiss();
   mirrorDismissTimer = window.setTimeout(closeMirror, 60000);
+}
+
+// ---------------------------------------------------------------------------
+// /port (pair a fresh browser) and /pull (fetch the blocks blob) + auto-pull
+// ---------------------------------------------------------------------------
+
+// Fetch and decrypt the cloud blocks blob with the local master key. The vault must
+// be unlocked. Returns { empty: true } on a 404 (no blob yet) or { empty: false,
+// entries } on success. Throws typed errors so callers can map to clear messages:
+// "not-configured" | "locked" | "auth" | "http-<status>" | "decrypt" | "malformed".
+async function fetchAndDecryptBlocks() {
+  if (!(state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey)) {
+    throw new Error("locked");
+  }
+  const { workerUrl, authToken } = await getSyncConfig();
+  const url = normalizeWorkerUrl(workerUrl);
+  if (!url || !authToken) {
+    throw new Error("not-configured");
+  }
+
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), CLOUD_SYNC_TIMEOUT_MS);
+  let buffer;
+  try {
+    const response = await fetch(`${url}/v1/blocks`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${authToken}` },
+      signal: controller.signal,
+    });
+    if (response.status === 404) {
+      return { empty: true };
+    }
+    if (response.status === 401) {
+      throw new Error("auth");
+    }
+    if (!response.ok) {
+      throw new Error("http-" + response.status);
+    }
+    buffer = await response.arrayBuffer();
+  } finally {
+    window.clearTimeout(timeout);
+  }
+
+  // The Worker stores the raw bytes of base64(IV(12) || ct+tag); re-encode to base64
+  // so decryptCiphertext can split the IV prefix — the exact inverse of flushCloudSync.
+  let blocksJson;
+  try {
+    const base64Blob = bytesToBase64(new Uint8Array(buffer));
+    blocksJson = await decryptCiphertext(base64Blob, state.encryption.masterKey);
+  } catch (error) {
+    console.warn("[txtshell] cloud blocks decrypt failed", error);
+    throw new Error("decrypt");
+  }
+
+  let entries;
+  try {
+    entries = JSON.parse(blocksJson);
+    if (!Array.isArray(entries)) throw new Error("not-array");
+  } catch {
+    throw new Error("malformed");
+  }
+  return { empty: false, entries };
+}
+
+// Stable serialization of the fields that define a block's content, sorted by id.
+// tags/mentions are derived from text, so they're excluded from the comparison.
+function canonicalizeEntries(entries) {
+  const normalized = entries
+    .filter((e) => e && typeof e.id === "string")
+    .map((e) => ({
+      id: e.id,
+      text: typeof e.text === "string" ? e.text : "",
+      createdAt: typeof e.createdAt === "string" ? e.createdAt : "",
+      editedAt: typeof e.editedAt === "string" ? e.editedAt : (e.createdAt || ""),
+      pinned: e.pinned === true,
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  return JSON.stringify(normalized);
+}
+
+function entriesDiffer(cloud, local) {
+  return canonicalizeEntries(cloud) !== canonicalizeEntries(local);
+}
+
+function clearAllEntryRecords() {
+  if (!state.db) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const transaction = state.db.transaction(ENTRY_STORE, "readwrite");
+    transaction.objectStore(ENTRY_STORE).clear();
+    transaction.addEventListener("complete", () => resolve());
+    transaction.addEventListener("error", () => reject(transaction.error));
+  });
+}
+
+// Manual fetch. Requires an unlocked vault. Compares the cloud blob to local and
+// either no-ops ("up to date") or raises the conflict card.
+async function beginPull() {
+  if (!(state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey)) {
+    composerHint.textContent = "Unlock your vault to pull.";
+    return;
+  }
+  composerHint.textContent = "Pulling…";
+  try {
+    const result = await fetchAndDecryptBlocks();
+    if (result.empty) {
+      composerHint.textContent = "Cloud is empty — nothing to pull.";
+      return;
+    }
+    if (entriesDiffer(result.entries, state.entries)) {
+      showPullConflict(result.entries);
+    } else {
+      composerHint.textContent = "Already up to date.";
+    }
+  } catch (error) {
+    composerHint.textContent = pullErrorMessage(error);
+  }
+}
+
+// Non-blocking background fetch fired after a successful unlock. Failures surface as a
+// hint toast and are otherwise ignored; an empty cloud is a silent no-op. Only prompts
+// when the normal view is showing, so it never clobbers an open vault card.
+async function autoPullOnUnlock() {
+  try {
+    const result = await fetchAndDecryptBlocks();
+    if (result.empty) return;
+    if (!state.encryption.unlocked || state.vaultView) return; // user moved on; catch it next time
+    if (entriesDiffer(result.entries, state.entries)) {
+      showPullConflict(result.entries);
+    }
+  } catch (error) {
+    if (error?.message === "not-configured") return; // sync not set up — nothing to fetch
+    showStatusToast("Couldn't fetch updates from cloud", { isHint: true });
+  }
+}
+
+function pullErrorMessage(error) {
+  switch (error?.message) {
+    case "not-configured":
+      return "Sync not configured — run /sync setup.";
+    case "auth":
+      return "Sync auth failed — check /sync setup.";
+    case "decrypt":
+      return "Couldn't decrypt cloud blocks.";
+    case "locked":
+      return "Unlock your vault to pull.";
+    default:
+      return "Couldn't reach cloud. Try again.";
+  }
+}
+
+function showPullConflict(cloudEntries) {
+  state.vaultPending = { pullEntries: cloudEntries };
+  state.vaultView = "pull-conflict";
+  renderVault();
+}
+
+function renderPullConflictCard() {
+  const cloudEntries = state.vaultPending?.pullEntries;
+  if (!Array.isArray(cloudEntries)) {
+    exitVaultToNormal();
+    return;
+  }
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG}
+      <p class="vault-title">Cloud has changes</p>
+      <p class="vault-subtitle">Another device saved changes to the cloud. Replace this browser's blocks with the cloud copy?</p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="replace">Replace with cloud</button>
+      <button class="vault-button secondary" type="button" data-action="keep">Keep local</button>
+    </div>
+  `;
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const replaceButton = vaultOverlay.querySelector('[data-action="replace"]');
+  const keepButton = vaultOverlay.querySelector('[data-action="keep"]');
+  replaceButton.addEventListener("click", async () => {
+    replaceButton.disabled = true;
+    keepButton.disabled = true;
+    try {
+      await applyCloudReplaceLocal(cloudEntries);
+    } catch (error) {
+      console.error(error);
+      errorLine.textContent = "Replace failed. Try again.";
+      errorLine.hidden = false;
+      replaceButton.disabled = false;
+      keepButton.disabled = false;
+    }
+  });
+  keepButton.addEventListener("click", () => {
+    // Last-writer-wins: the next local save overwrites the cloud blob.
+    state.vaultPending = null;
+    exitVaultToNormal();
+    composerHint.textContent = "Kept local — your next save overwrites cloud.";
+  });
+}
+
+async function applyCloudReplaceLocal(cloudEntries) {
+  await clearAllEntryRecords();
+  state.entries = [];
+  const before = state.entries.length;
+  await mergeImportedEntries(cloudEntries); // validates shape, re-encrypts via saveEntry
+  const count = state.entries.length - before;
+  state.vaultView = null;
+  state.vaultPending = null;
+  renderVault();
+  composerHint.textContent = `Replaced local with cloud (${count} block${count === 1 ? "" : "s"}).`;
+}
+
+function renderPortPasteCard() {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG}
+      <p class="vault-title">Pair this browser</p>
+      <p class="vault-subtitle">Paste the pairing data from /mirror on your other browser.</p>
+      <p class="vault-error" hidden></p>
+      <textarea class="vault-input vault-textarea" data-field="pairing" rows="4" placeholder='{"workerUrl":"…","authToken":"…","masterKey":"…"}' autocomplete="off" spellcheck="false"></textarea>
+      <button class="vault-button" type="button" data-action="submit">Continue</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+  const pairingInput = vaultOverlay.querySelector('[data-field="pairing"]');
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const submitButton = vaultOverlay.querySelector('[data-action="submit"]');
+  const cancelButton = vaultOverlay.querySelector('[data-action="cancel"]');
+
+  const showError = (message) => {
+    errorLine.textContent = message;
+    errorLine.hidden = !message;
+  };
+
+  const submit = () => {
+    const raw = pairingInput.value.trim();
+    if (!raw) {
+      showError("Paste the pairing data first.");
+      return;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      showError("That's not valid pairing data.");
+      return;
+    }
+    if (!parsed || typeof parsed !== "object") {
+      showError("That's not valid pairing data.");
+      return;
+    }
+    const workerUrl = normalizeWorkerUrl(parsed.workerUrl);
+    if (!workerUrl) {
+      showError("Pairing data has an invalid Worker URL.");
+      return;
+    }
+    if (typeof parsed.authToken !== "string" || !parsed.authToken.trim()) {
+      showError("Pairing data is missing the auth token.");
+      return;
+    }
+    if (typeof parsed.masterKey !== "string" || !parsed.masterKey) {
+      showError("Pairing data is missing the master key.");
+      return;
+    }
+    let keyBytes;
+    try {
+      keyBytes = base64ToBytes(parsed.masterKey);
+    } catch {
+      showError("Pairing data has a malformed master key.");
+      return;
+    }
+    if (keyBytes.length !== 32) {
+      showError("Pairing data has an invalid master key.");
+      return;
+    }
+    showError("");
+    state.vaultPending = {
+      portPairing: { workerUrl, authToken: parsed.authToken.trim(), masterKey: parsed.masterKey },
+    };
+    state.vaultView = "port-passphrase";
+    renderVault();
+  };
+
+  submitButton.addEventListener("click", submit);
+  cancelButton.addEventListener("click", exitVaultToNormal);
+  window.requestAnimationFrame(() => pairingInput.focus());
+}
+
+async function handlePortPassphraseSubmit(passphrase) {
+  const pairing = state.vaultPending?.portPairing;
+  if (!pairing) {
+    throw new Error("missing-pairing");
+  }
+
+  const saltPass = randomBytes(16);
+  const wrappingPass = await deriveWrappingKey(passphrase, saltPass, PBKDF2_ITERATIONS);
+
+  // Import the raw master key bytes (extractable so wrapKey can wrap them), wrap under
+  // the passphrase, then re-derive a non-extractable session key — same shape as
+  // handleSetupSubmit. The verify blob lets the standard unlock path validate later.
+  const rawBytes = base64ToBytes(pairing.masterKey);
+  const importedMaster = await crypto.subtle.importKey(
+    "raw",
+    rawBytes,
+    { name: "AES-GCM" },
+    true,
+    ["encrypt", "decrypt"],
+  );
+  const wrappedPass = await wrapMasterKey(importedMaster, wrappingPass);
+  const verify = await encryptPlaintext(ENC_VERIFY_PLAINTEXT, importedMaster);
+  const sessionKey = await unwrapMasterKey(wrappedPass, wrappingPass);
+  rawBytes.fill(0); // zero the plaintext key bytes; importedMaster handle now goes unused
+
+  await saveMetaBatch([
+    [ENC_SALT_PASS_KEY, bytesToBase64(saltPass)],
+    [ENC_WRAPPED_PASS_KEY, wrappedPass],
+    [ENC_VERIFY_KEY, verify],
+    [ENC_ITERATIONS_PASS_KEY, String(PBKDF2_ITERATIONS)],
+    [SYNC_WORKER_URL_KEY, pairing.workerUrl],
+    [SYNC_AUTH_TOKEN_KEY, pairing.authToken],
+  ]);
+
+  state.encryption.enabled = true;
+  state.encryption.unlocked = true;
+  state.encryption.masterKey = sessionKey;
+  state.vaultView = null;
+  state.vaultPending = null;
+  renderVault();
+  updateLockButton();
+  entryInput.focus();
+
+  // Initial pull. If it fails the browser is still correctly paired — the next unlock
+  // auto-pulls (decision #7). Never throw here: that would re-enable the setup card.
+  composerHint.textContent = "Pairing…";
+  try {
+    const result = await fetchAndDecryptBlocks();
+    if (result.empty) {
+      composerHint.textContent = "Paired — cloud is empty, nothing to load yet.";
+    } else {
+      await mergeImportedEntries(result.entries);
+      composerHint.textContent = `Paired — ${state.entries.length} block${state.entries.length === 1 ? "" : "s"} loaded.`;
+    }
+  } catch (error) {
+    console.warn("[txtshell] initial port pull failed", error);
+    composerHint.textContent = "Couldn't fetch blocks yet — will retry on unlock.";
+  }
+  signalReady();
 }
 
 // ---------------------------------------------------------------------------
