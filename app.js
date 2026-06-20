@@ -121,6 +121,7 @@ const searchModeLabel = document.querySelector("#searchModeLabel");
 const quickReference = document.querySelector("#quickReference");
 const aboutGuide = document.querySelector("#aboutGuide");
 const savedCount = document.querySelector("#savedCount");
+const syncIndicator = document.querySelector("#syncIndicator");
 const wordCountDisplay = document.querySelector("#wordCountDisplay");
 const exportButton = document.querySelector("#exportButton");
 const shortcutsLink = document.querySelector("#shortcutsLink");
@@ -4395,13 +4396,98 @@ function normalizeWorkerUrl(value) {
   return trimmed.replace(/\/+$/, "");
 }
 
+// Reason codes -> ambient indicator copy. `short` shows inline as the standing
+// signal; `full` is the hover tooltip and the one-shot transition toast.
+const SYNC_STATUS_LABELS = {
+  "push-auth": { short: "Sync: check token", full: "Sync failed — auth rejected, check your token" },
+  "push-blocked": { short: "Sync: can't reach Worker", full: "Sync failed — can't reach Worker (offline or blocked)" },
+  "push-encrypt": { short: "Sync: encrypt error", full: "Sync failed — couldn't encrypt blocks" },
+  "push-server": { short: "Sync: server error", full: "Sync failed — Worker rejected the upload" },
+  "pull-auth": { short: "Pull: check token", full: "Pull failed — auth rejected, check your token" },
+  "pull-blocked": { short: "Pull: can't reach cloud", full: "Pull failed — can't reach cloud (offline or blocked)" },
+  "pull-decrypt": { short: "Pull: decrypt error", full: "Pull failed — couldn't decrypt cloud blocks" },
+};
+
+// Drives the persistent ambient sync indicator in the footer.
+//   "syncing"            -> in-flight (passive pulsing dot)
+//   "ok"                 -> last sync succeeded (passive; clears any failure)
+//   one of SYNC_STATUS_LABELS keys -> standing failure, persists until next "ok"
+// Steady-state success stays SILENT (ambient only) — the existing concern about a
+// toast on every debounced save. A transient toast fires ONLY when sync first
+// transitions into failure (or the failure reason changes) so the user notices.
+//
+// `lastFailureReason` persists ACROSS intermediate "syncing" states and is only
+// cleared by an "ok". That's what stops a persistently-broken sync from re-toasting
+// on every debounced save (failed -> syncing -> failed with the same reason): the
+// in-flight "syncing" flips the visual but does not forget the active failure.
+let syncIndicatorState = "idle"; // "idle" | "syncing" | "ok" | "failed"
+let lastFailureReason = null;
+
 function setSyncStatus(status) {
-  // Local save is canonical; only surface failures (non-blocking). Success is silent
-  // to avoid a toast on every debounced save.
-  if (status === "error") {
-    showStatusToast("Sync failed — saved locally", { isHint: true });
-  } else if (status === "auth") {
-    showStatusToast("Sync auth failed — check /sync setup", { isHint: true });
+  if (status === "syncing") {
+    syncIndicatorState = "syncing";
+    renderSyncIndicator(); // intentionally leaves lastFailureReason intact
+    return;
+  }
+  if (status === "ok") {
+    syncIndicatorState = "ok";
+    lastFailureReason = null;
+    renderSyncIndicator();
+    return;
+  }
+
+  // Anything else is a failure reason code.
+  const reason = SYNC_STATUS_LABELS[status] ? status : "push-server";
+  const isNewFailure = lastFailureReason !== reason;
+  syncIndicatorState = "failed";
+  lastFailureReason = reason;
+  renderSyncIndicator();
+
+  // One-shot toast only when newly broken or the reason changed — never on a repeat
+  // of the same standing failure. The indicator itself carries the persistent signal.
+  if (isNewFailure) {
+    showStatusToast(SYNC_STATUS_LABELS[reason].full, { isHint: true });
+  }
+}
+
+function renderSyncIndicator() {
+  if (!syncIndicator) return;
+  const labelEl = syncIndicator.querySelector(".sync-label");
+  const state = syncIndicatorState;
+
+  syncIndicator.classList.toggle("is-syncing", state === "syncing");
+  syncIndicator.classList.toggle("is-ok", state === "ok");
+  syncIndicator.classList.toggle("is-failed", state === "failed");
+  syncIndicator.hidden = state === "idle";
+
+  if (state === "failed") {
+    const label = SYNC_STATUS_LABELS[lastFailureReason] || SYNC_STATUS_LABELS["push-server"];
+    labelEl.textContent = label.short;
+    syncIndicator.setAttribute("data-tooltip", label.full);
+    syncIndicator.setAttribute("aria-label", label.full);
+  } else if (state === "syncing") {
+    labelEl.textContent = "Syncing…";
+    syncIndicator.removeAttribute("data-tooltip");
+    syncIndicator.setAttribute("aria-label", "Syncing");
+  } else if (state === "ok") {
+    labelEl.textContent = ""; // passive: dot only
+    syncIndicator.removeAttribute("data-tooltip");
+    syncIndicator.setAttribute("aria-label", "Synced");
+  }
+}
+
+// Maps a fetchAndDecryptBlocks() error to the ambient indicator, labelled as a PULL
+// problem (distinct from push). No-ops for non-failures (not configured / locked),
+// which are user state, not a sync fault.
+function setPullStatusFromError(error) {
+  const message = error?.message;
+  if (message === "not-configured" || message === "locked") return;
+  if (message === "auth") {
+    setSyncStatus("pull-auth");
+  } else if (message === "decrypt" || message === "malformed") {
+    setSyncStatus("pull-decrypt");
+  } else {
+    setSyncStatus("pull-blocked");
   }
 }
 
@@ -4440,6 +4526,10 @@ async function flushCloudSync() {
     return { status: "skipped", reason: "not-configured" }; // nothing to do, no error
   }
 
+  // Real work is about to begin — light the ambient "syncing" state. Resolved to
+  // ok/failed at every exit below.
+  setSyncStatus("syncing");
+
   let body;
   try {
     // Reuse the exact AES-GCM path used by encrypted export: base64(IV(12) || ct+tag).
@@ -4451,7 +4541,7 @@ async function flushCloudSync() {
     body = base64ToBytes(base64Blob);
   } catch (error) {
     console.error("[txtshell] cloud sync encrypt failed", error);
-    setSyncStatus("error");
+    setSyncStatus("push-encrypt");
     return { status: "error", reason: "encrypt-failed" };
   }
 
@@ -4469,10 +4559,10 @@ async function flushCloudSync() {
       signal: controller.signal,
     });
     if (response.status === 401) {
-      setSyncStatus("auth");
+      setSyncStatus("push-auth");
       return { status: "auth" };
     } else if (!response.ok) {
-      setSyncStatus("error");
+      setSyncStatus("push-server");
       return { status: "error", reason: "http-" + response.status };
     } else {
       setSyncStatus("ok");
@@ -4481,7 +4571,7 @@ async function flushCloudSync() {
   } catch (error) {
     // Network down, aborted, or CSP block — the local save already succeeded.
     console.warn("[txtshell] cloud sync upload failed", error);
-    setSyncStatus("error");
+    setSyncStatus("push-blocked");
     return { status: "error", reason: error && error.name === "AbortError" ? "timeout" : "network" };
   } finally {
     window.clearTimeout(timeout);
@@ -4850,6 +4940,7 @@ async function beginPull() {
   composerHint.textContent = "Pulling…";
   try {
     const result = await fetchAndDecryptBlocks();
+    setSyncStatus("ok"); // reachable + decrypted: the sync channel is healthy
     if (result.empty) {
       composerHint.textContent = "Cloud is empty — nothing to pull.";
       return;
@@ -4861,6 +4952,7 @@ async function beginPull() {
     }
   } catch (error) {
     composerHint.textContent = pullErrorMessage(error);
+    setPullStatusFromError(error);
   }
 }
 
@@ -4870,6 +4962,7 @@ async function beginPull() {
 async function autoPullOnUnlock() {
   try {
     const result = await fetchAndDecryptBlocks();
+    setSyncStatus("ok"); // reachable + decrypted: the sync channel is healthy
     if (result.empty) return;
     if (!state.encryption.unlocked || state.vaultView) return; // user moved on; catch it next time
     if (entriesDiffer(result.entries, state.entries)) {
@@ -4877,7 +4970,9 @@ async function autoPullOnUnlock() {
     }
   } catch (error) {
     if (error?.message === "not-configured") return; // sync not set up — nothing to fetch
-    showStatusToast("Couldn't fetch updates from cloud", { isHint: true });
+    // Surfaces in the ambient indicator (labelled as a pull problem) and toasts on
+    // the transition into failure — replaces the old standalone toast.
+    setPullStatusFromError(error);
   }
 }
 
@@ -5078,6 +5173,7 @@ async function handlePortPassphraseSubmit(passphrase) {
   composerHint.textContent = "Pairing…";
   try {
     const result = await fetchAndDecryptBlocks();
+    setSyncStatus("ok"); // reachable + decrypted: the sync channel is healthy
     if (result.empty) {
       composerHint.textContent = "Paired — cloud is empty, nothing to load yet.";
     } else {
@@ -5087,6 +5183,7 @@ async function handlePortPassphraseSubmit(passphrase) {
   } catch (error) {
     console.warn("[txtshell] initial port pull failed", error);
     composerHint.textContent = "Couldn't fetch blocks yet — will retry on unlock.";
+    setPullStatusFromError(error);
   }
   signalReady();
 }
