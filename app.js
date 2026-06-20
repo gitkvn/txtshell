@@ -3344,6 +3344,8 @@ function renderVault() {
     });
   } else if (view === "pull-conflict") {
     renderPullConflictCard();
+  } else if (view === "key-mismatch") {
+    renderKeyMismatchCard();
   }
 }
 
@@ -4406,6 +4408,7 @@ const SYNC_STATUS_LABELS = {
   "pull-auth": { short: "Pull: check token", full: "Pull failed — auth rejected, check your token" },
   "pull-blocked": { short: "Pull: can't reach cloud", full: "Pull failed — can't reach cloud (offline or blocked)" },
   "pull-decrypt": { short: "Pull: decrypt error", full: "Pull failed — couldn't decrypt cloud blocks" },
+  "pull-key-mismatch": { short: "Pull: key mismatch", full: "Pull failed — cloud copy doesn't match this device's key" },
 };
 
 // Drives the persistent ambient sync indicator in the footer.
@@ -4484,7 +4487,11 @@ function setPullStatusFromError(error) {
   if (message === "not-configured" || message === "locked") return;
   if (message === "auth") {
     setSyncStatus("pull-auth");
-  } else if (message === "decrypt" || message === "malformed") {
+  } else if (message === "decrypt") {
+    // AES-GCM OperationError: the cloud blob was encrypted under a DIFFERENT master
+    // key than this device holds — a key mismatch, not transient corruption.
+    setSyncStatus("pull-key-mismatch");
+  } else if (message === "malformed") {
     setSyncStatus("pull-decrypt");
   } else {
     setSyncStatus("pull-blocked");
@@ -4951,8 +4958,15 @@ async function beginPull() {
       composerHint.textContent = "Already up to date.";
     }
   } catch (error) {
-    composerHint.textContent = pullErrorMessage(error);
     setPullStatusFromError(error);
+    // A key mismatch can't be resolved by "Replace with cloud" (we can't decrypt the
+    // cloud copy at all), so it gets its own dedicated card rather than the hint or
+    // the pull-conflict card. Only on an EXPLICIT pull — never mid-session.
+    if (error?.message === "decrypt") {
+      showKeyMismatch();
+      return;
+    }
+    composerHint.textContent = pullErrorMessage(error);
   }
 }
 
@@ -4971,7 +4985,11 @@ async function autoPullOnUnlock() {
   } catch (error) {
     if (error?.message === "not-configured") return; // sync not set up — nothing to fetch
     // Surfaces in the ambient indicator (labelled as a pull problem) and toasts on
-    // the transition into failure — replaces the old standalone toast.
+    // the transition into failure — replaces the old standalone toast. Note: a key
+    // mismatch ("decrypt") only flags the persistent failed status here ("cloud copy
+    // doesn't match this device's key") — we deliberately do NOT pop the resolution
+    // card with its destructive overwrite button mid-session. That card surfaces only
+    // on an explicit /pull (beginPull), so an overwrite can never happen by accident.
     setPullStatusFromError(error);
   }
 }
@@ -5047,6 +5065,64 @@ async function applyCloudReplaceLocal(cloudEntries) {
   state.vaultPending = null;
   renderVault();
   composerHint.textContent = `Replaced local with cloud (${count} block${count === 1 ? "" : "s"}).`;
+}
+
+function showKeyMismatch() {
+  state.vaultView = "key-mismatch";
+  renderVault();
+}
+
+// Dedicated resolution card for the key-mismatch dead-end: the cloud blob was encrypted
+// under a different master key than this device holds, so it can't be decrypted at all.
+// Distinct from renderPullConflictCard (cloud decrypts but differs) — "Replace with
+// cloud" is impossible here. The safe "keep this device" option is the default and the
+// only visually primary button; the destructive cloud-overwrite is explicitly warned.
+function renderKeyMismatchCard() {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG}
+      <p class="vault-title">Key mismatch</p>
+      <p class="vault-subtitle">This device's key can't decrypt the cloud copy — they were encrypted with different keys.</p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="keep">Keep this device, leave cloud alone</button>
+      <p class="wipe-warning">Replacing permanently overwrites the cloud copy under this device's key. Any other device encrypted with a different key won't be able to recover its data from the cloud — it keeps only its own local copy.</p>
+      <button class="vault-button secondary" type="button" data-action="replace">Replace cloud with this device's data</button>
+      <p class="vault-subtitle">If instead this device has the wrong key, re-pair it from the device that has your data (/mirror there, /port here).</p>
+    </div>
+  `;
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const keepButton = vaultOverlay.querySelector('[data-action="keep"]');
+  const replaceButton = vaultOverlay.querySelector('[data-action="replace"]');
+
+  keepButton.addEventListener("click", () => {
+    // Safe default: change nothing on either side. The persistent failed sync status
+    // ("cloud copy doesn't match this device's key") stays flagged — we don't clear it.
+    exitVaultToNormal();
+    composerHint.textContent = "Kept this device — cloud left untouched.";
+  });
+
+  replaceButton.addEventListener("click", async () => {
+    keepButton.disabled = true;
+    replaceButton.disabled = true;
+    errorLine.hidden = true;
+    // Overwrite the cloud blob with this device's data, re-encrypted under this
+    // device's key. flushCloudSync drives the ambient indicator on every exit path.
+    const result = await flushCloudSync();
+    if (result.status === "ok") {
+      exitVaultToNormal();
+      composerHint.textContent = "Replaced cloud with this device's data.";
+      return;
+    }
+    errorLine.textContent =
+      result.status === "auth"
+        ? "Couldn't replace cloud — auth rejected. Check /sync setup."
+        : "Couldn't replace cloud. Try again.";
+    errorLine.hidden = false;
+    keepButton.disabled = false;
+    replaceButton.disabled = false;
+  });
+
+  window.requestAnimationFrame(() => keepButton.focus());
 }
 
 function renderPortPasteCard() {
