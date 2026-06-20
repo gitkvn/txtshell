@@ -4422,18 +4422,22 @@ function scheduleCloudSync() {
   }, CLOUD_SYNC_DEBOUNCE_MS);
 }
 
+// Returns an outcome object { status, reason? } so callers that care about the
+// round-trip (e.g. sync setup) can report a concrete result. The debounced
+// scheduleCloudSync caller ignores the return — same single upload path.
+//   status: "ok" | "auth" | "error" | "skipped"
 async function flushCloudSync() {
   if (cloudSyncInFlight) {
     // A save landed during an in-flight upload; re-arm so the latest state ships next.
     scheduleCloudSync();
-    return;
+    return { status: "skipped", reason: "in-flight" };
   }
   if (!(state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey)) {
-    return;
+    return { status: "skipped", reason: "locked" };
   }
   const { workerUrl, authToken } = await getSyncConfig();
   if (!workerUrl || !authToken) {
-    return; // sync not configured — nothing to do, no error
+    return { status: "skipped", reason: "not-configured" }; // nothing to do, no error
   }
 
   let body;
@@ -4448,7 +4452,7 @@ async function flushCloudSync() {
   } catch (error) {
     console.error("[txtshell] cloud sync encrypt failed", error);
     setSyncStatus("error");
-    return;
+    return { status: "error", reason: "encrypt-failed" };
   }
 
   cloudSyncInFlight = true;
@@ -4466,18 +4470,39 @@ async function flushCloudSync() {
     });
     if (response.status === 401) {
       setSyncStatus("auth");
+      return { status: "auth" };
     } else if (!response.ok) {
       setSyncStatus("error");
+      return { status: "error", reason: "http-" + response.status };
     } else {
       setSyncStatus("ok");
+      return { status: "ok" };
     }
   } catch (error) {
     // Network down, aborted, or CSP block — the local save already succeeded.
     console.warn("[txtshell] cloud sync upload failed", error);
     setSyncStatus("error");
+    return { status: "error", reason: error && error.name === "AbortError" ? "timeout" : "network" };
   } finally {
     window.clearTimeout(timeout);
     cloudSyncInFlight = false;
+  }
+}
+
+// Human-readable tail for "Sync failed — …" hints, mapped from flushCloudSync reasons.
+function describeSyncError(reason) {
+  switch (reason) {
+    case "encrypt-failed":
+      return "couldn't encrypt blocks";
+    case "timeout":
+      return "request timed out";
+    case "network":
+      return "network error";
+    default:
+      if (typeof reason === "string" && reason.startsWith("http-")) {
+        return `server error (${reason.slice(5)})`;
+      }
+      return "unknown error";
   }
 }
 
@@ -4553,8 +4578,41 @@ async function handleSyncSetupSubmit(workerUrl, authToken) {
   state.vaultView = null;
   state.vaultPending = null;
   renderVault();
-  composerHint.textContent = "Sync configured";
   entryInput.focus();
+  composerHint.textContent = "Syncing…";
+
+  // Push existing blocks now and confirm the round-trip. A 200 PUT is
+  // authoritative for "configured + uploaded"; the read-back is best-effort.
+  const result = await flushCloudSync();
+
+  if (result.status === "auth") {
+    composerHint.textContent = "Sync auth failed — check your token";
+    return;
+  }
+  if (result.status === "error") {
+    composerHint.textContent = `Sync failed — ${describeSyncError(result.reason)}`;
+    return;
+  }
+  if (result.status === "skipped") {
+    // Vault locked or an upload already in flight — config saved, nothing pushed.
+    composerHint.textContent = "Sync configured — unlock to upload existing blocks";
+    return;
+  }
+
+  // PUT succeeded. Read back for a concrete count, but R2 is read-after-write
+  // lossy right after a PUT — a 404 / stale bytes / decrypt hiccup here is NOT a
+  // failure, so fall back to a soft confirm rather than reporting it as broken.
+  try {
+    const readback = await fetchAndDecryptBlocks();
+    if (readback.empty) {
+      composerHint.textContent = "Uploaded — will confirm on next sync";
+    } else {
+      const n = readback.entries.length;
+      composerHint.textContent = `Synced — ${n} block${n === 1 ? "" : "s"} in the cloud`;
+    }
+  } catch {
+    composerHint.textContent = "Uploaded — will confirm on next sync";
+  }
 }
 
 function beginMirror() {
