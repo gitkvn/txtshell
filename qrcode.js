@@ -1,3 +1,11 @@
+// PINNED 2026-07-03: qrcode-generator v1.4.4 — VERIFIED GENUINE.
+//   Local body proven byte-identical to genuine upstream 1.4.4 (fetched from
+//   unpkg + jsdelivr, both upstream sha256 18ae399f...81bf1780); the only
+//   changes are this provenance header and removal of the UMD wrapper.
+//   As-audited local file sha256 (pre-pin): e7744b1f...aef39008.
+//   Behavioral scan clean (no network/storage/eval/DOM-injection/crypto).
+//   Browser integrity is enforced via the sha384 SRI on the <script> tag in
+//   index.html — if this file ever changes, the browser refuses to run it.
 // ============================================================================
 // VENDORED THIRD-PARTY FILE — qrcode-generator
 //
