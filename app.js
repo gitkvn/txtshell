@@ -278,6 +278,29 @@ shortcutsLink.addEventListener("click", () => {
   render();
 });
 
+// Tapping "Saved (N)" opens the search overlay — the only way to reach it on
+// mobile, where the ⌘K/Ctrl+K shortcut isn't available. Mirrors the ⌘K branch
+// in the keydown handler; reuses the existing openSearchMode().
+function openSavedSearchFromFooter() {
+  if (state.searchMode || state.entries.length === 0) {
+    return;
+  }
+  state.preset = null;
+  openSearchMode();
+  searchInput.value = state.search;
+  composerHint.textContent = "Search saved";
+  window.requestAnimationFrame(() => searchInput.focus());
+  render();
+}
+
+savedCount.addEventListener("click", openSavedSearchFromFooter);
+savedCount.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    openSavedSearchFromFooter();
+  }
+});
+
 upgradeLink.addEventListener("click", () => {
   openInterestCard();
 });

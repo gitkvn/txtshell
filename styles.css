@@ -329,6 +329,28 @@ button {
 .saved-count {
   color: var(--muted);
   letter-spacing: -0.01em;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  /* Horizontal padding enlarges the tap target; negative margin cancels the
+     visual growth so the desktop footer spacing is unchanged. */
+  padding: 4px 8px;
+  margin: -4px -8px;
+  border-radius: 7px;
+  transition: color 120ms ease, background-color 120ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.saved-count:hover,
+.saved-count:focus-visible {
+  color: var(--accent);
+  background: var(--line);
+  outline: none;
+}
+
+.saved-count:active {
+  background: var(--line);
+  filter: brightness(0.96);
 }
 
 /* Persistent ambient sync indicator. Lives next to "Saved (N)". Steady-state
@@ -1487,6 +1509,16 @@ kbd {
   .footer-actions {
     width: 100%;
     justify-content: space-between;
+  }
+
+  /* Finger-friendly tap target for "Saved (N)" on mobile, where ⌘K is
+     unavailable. Desktop stays compact. */
+  .saved-count {
+    min-height: 44px;
+    padding-top: 0;
+    padding-bottom: 0;
+    margin-top: 0;
+    margin-bottom: 0;
   }
 
   .command-palette {
