@@ -2747,7 +2747,10 @@ function escapeRegExp(value) {
 function applyTheme(theme) {
   document.body.dataset.theme = theme;
   window.localStorage.setItem(THEME_KEY, theme);
-  themeToggleButton.textContent = theme === "dark" ? "☾" : "☀";
+  themeToggleButton.innerHTML =
+    theme === "dark"
+      ? '<svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M15 11.5A6.5 6.5 0 0 1 6.5 3a6.5 6.5 0 1 0 8.5 8.5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>'
+      : '<svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="3.25" stroke="currentColor" stroke-width="1.5"/><path d="M9 1.5v2M9 14.5v2M16.5 9h-2M3.5 9h-2M14.3 3.7l-1.4 1.4M5.1 12.9l-1.4 1.4M14.3 14.3l-1.4-1.4M5.1 5.1L3.7 3.7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
   themeToggleButton.setAttribute(
     "aria-label",
     theme === "dark" ? "Switch to light mode" : "Switch to dark mode",

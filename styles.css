@@ -8,6 +8,7 @@
   --accent: #1f6feb;
   --danger: #c2410c;
   --ok: #15803d;
+  --radius: 10px;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "SFMono-Regular", "Menlo", "Consolas", monospace;
 }
@@ -89,6 +90,9 @@ button {
   font-size: 1rem;
   font-family: var(--font-sans);
   border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .theme-toggle:hover,
@@ -303,7 +307,7 @@ button {
   justify-content: space-between;
   align-items: center;
   gap: 16px;
-  padding: 8px 20px;
+  padding: 8px 24px;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   color: var(--muted);
@@ -320,7 +324,7 @@ button {
 .footer-actions {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 20px;
   min-width: 0;
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -470,27 +474,29 @@ button {
 }
 
 .save-block-btn {
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: var(--ink);
-  color: var(--paper);
+  border: 0.5px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink);
   cursor: pointer;
   font-family: var(--font-sans);
   font-size: 0.88rem;
   font-weight: 500;
-  padding: 9px 18px;
-  transition: opacity 120ms ease;
+  padding: 10px 20px;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.02);
+  transition: border-color 120ms ease, background-color 120ms ease;
   -webkit-tap-highlight-color: transparent;
 }
 
 .save-block-btn:hover,
 .save-block-btn:focus-visible {
-  opacity: 0.88;
+  border-color: color-mix(in srgb, var(--line) 45%, var(--muted));
+  background: color-mix(in srgb, var(--paper) 92%, var(--ink));
   outline: none;
 }
 
 .save-block-btn:active {
-  opacity: 0.78;
+  background: color-mix(in srgb, var(--paper) 86%, var(--ink));
 }
 
 /* Floated above the keyboard: the dock becomes a minimal full-width bar pinned
