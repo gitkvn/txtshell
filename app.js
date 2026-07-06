@@ -939,6 +939,10 @@ function submitComposer() {
   }
 
   if (text === "/sync setup") {
+    if (!state.encryption.enabled) {
+      composerHint.textContent = "Encryption not enabled — run /encrypt first";
+      return;
+    }
     setEditorValue("");
     clearDraft();
     state.vaultPending = null;
