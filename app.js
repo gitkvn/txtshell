@@ -948,7 +948,7 @@ function submitComposer() {
     state.vaultPending = null;
     state.vaultView = "sync-setup";
     renderVault();
-    composerHint.textContent = "Configure sync";
+    composerHint.textContent = "Configure sync — need to deploy a Worker? See the linked guide";
     return;
   }
 
@@ -4636,6 +4636,7 @@ function renderSyncSetupCard() {
       ${LOCK_ICON_SVG}
       <p class="vault-title">Sync setup</p>
       <p class="vault-subtitle">Paste your Worker URL and auth token. These are stored on this device only.</p>
+      <p class="vault-subtitle">New to sync? You'll need to deploy your own Cloudflare Worker first — see the guide: <a href="https://github.com/gitkvn/txtshell-sync" target="_blank" rel="noopener noreferrer">github.com/gitkvn/txtshell-sync</a></p>
       <p class="vault-error" hidden></p>
       <input class="vault-input" data-field="url" type="url" placeholder="https://sync.example.com" autocomplete="off" spellcheck="false" />
       <input class="vault-input" data-field="token" type="text" placeholder="Auth token" autocomplete="off" spellcheck="false" />
