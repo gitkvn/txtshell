@@ -459,21 +459,56 @@ button {
   outline: none;
 }
 
-.upgrade-link {
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  cursor: pointer;
-  padding: 0;
-  font-size: 0.84rem;
-  opacity: 0.9;
-  font-family: var(--font-sans);
+/* Persistent "Save block" action. Sits at the right of the footer on every
+   platform; on mobile it detaches to float above the on-screen keyboard (see
+   .save-dock.is-floating below). */
+.save-dock {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
 }
 
-.upgrade-link:hover,
-.upgrade-link:focus-visible {
-  text-decoration: underline;
+.save-block-btn {
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--ink);
+  color: var(--paper);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 0.88rem;
+  font-weight: 500;
+  padding: 9px 18px;
+  transition: opacity 120ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.save-block-btn:hover,
+.save-block-btn:focus-visible {
+  opacity: 0.88;
   outline: none;
+}
+
+.save-block-btn:active {
+  opacity: 0.78;
+}
+
+/* Floated above the keyboard: the dock becomes a minimal full-width bar pinned
+   to the bottom of the layout viewport, then translated up onto the keyboard's
+   top edge by JS. Opaque app surface + top border so editor text never shows
+   through. Only the Save button floats — the status cluster stays in the footer
+   (off-screen behind the keyboard, which is fine). */
+.save-dock.is-floating {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  padding: 8px 14px;
+  padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  background: var(--paper);
+  border-top: 1px solid var(--line);
+  will-change: transform;
 }
 
 .more-link {
@@ -1509,6 +1544,29 @@ kbd {
   .footer-actions {
     width: 100%;
     justify-content: space-between;
+  }
+
+  /* Docked in the footer (keyboard closed): full-width, finger-friendly. */
+  .save-dock {
+    width: 100%;
+  }
+
+  .save-block-btn {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  /* Floated above the keyboard: shrink back to an auto-width, right-aligned
+     button on the minimal bar. */
+  .save-dock.is-floating .save-block-btn {
+    width: auto;
+    min-width: 120px;
+  }
+
+  /* Keep the last editor line clear of the floating Save bar. */
+  body.keyboard-open #entryInput {
+    padding-bottom: 64px;
+    scroll-padding-bottom: 64px;
   }
 
   /* Finger-friendly tap target for "Saved (N)" on mobile, where ⌘K is

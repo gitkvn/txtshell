@@ -139,7 +139,8 @@ const inboxList = document.querySelector("#inboxList");
 const inboxViewSubtitle = document.querySelector("#inboxViewSubtitle");
 const inboxCloseButton = document.querySelector("#inboxCloseButton");
 const lockButton = document.querySelector("#lockButton");
-const upgradeLink = document.querySelector("#upgradeLink");
+const saveDock = document.querySelector("#saveDock");
+const saveBlockBtn = document.querySelector("#saveBlockBtn");
 const interestOverlay = document.querySelector("#interestOverlay");
 const interestBackdrop = document.querySelector("#interestBackdrop");
 const interestForm = document.querySelector("#interestForm");
@@ -301,9 +302,106 @@ savedCount.addEventListener("keydown", (event) => {
   }
 });
 
-upgradeLink.addEventListener("click", () => {
-  openInterestCard();
+// The persistent "Save block" control. It's a native <button>, so Enter/Space
+// activation is handled by the browser for free — no extra keydown wiring needed.
+// submitComposer() itself enforces the empty-block and vault-locked guards.
+saveBlockBtn.addEventListener("click", () => {
+  submitComposer();
+  entryInput.focus();
 });
+
+// ---------------------------------------------------------------------------
+// Shared on-screen-keyboard observer (window.visualViewport).
+//
+// This single observer powers two mobile behaviours: floating the Save button
+// above the keyboard, and Enter-to-save. We treat the keyboard as "open" when
+// the visual viewport is meaningfully shorter than the layout viewport — i.e.
+// something (the soft keyboard) is occupying screen space. A hardware/Bluetooth
+// keyboard does NOT shrink the visual viewport, so those users keep Enter =
+// newline and the button stays in the footer. On desktop the viewport never
+// shrinks, so keyboardOpen stays false and nothing changes.
+//
+// Feature-detect visualViewport: if absent (old browsers), fall back cleanly to
+// current behaviour — button lives in the footer, no float, no Enter-save.
+const KEYBOARD_OPEN_THRESHOLD = 150; // px of viewport shrinkage before we call it "open"
+const visualViewportApi =
+  typeof window !== "undefined" && window.visualViewport ? window.visualViewport : null;
+
+let keyboardOpen = false;
+
+function isKeyboardOpen() {
+  return keyboardOpen;
+}
+
+// Belt-and-suspenders gate: only a touch device gets the mobile behaviours. This
+// makes desktop bulletproof — desktop reports a fine pointer, so even pinch-zoom
+// (which ALSO shrinks the visual viewport) can never float the button or arm
+// Enter-to-save. A tablet + Bluetooth keyboard is coarse but still excluded by
+// the viewport check below (a hardware keyboard doesn't shrink the viewport).
+// Evaluated live so a plugged/unplugged pointer is reflected.
+function hasCoarsePointer() {
+  return Boolean(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+}
+
+// How many px the keyboard (and any browser offset) covers at the bottom of the
+// layout viewport. Positive only when a soft keyboard is up.
+function keyboardOverlapPx() {
+  if (!visualViewportApi) {
+    return 0;
+  }
+  const overlap =
+    window.innerHeight - (visualViewportApi.height + visualViewportApi.offsetTop);
+  return overlap > 0 ? overlap : 0;
+}
+
+function applySaveDockState() {
+  const overlap = keyboardOverlapPx();
+  keyboardOpen = hasCoarsePointer() && overlap > KEYBOARD_OPEN_THRESHOLD;
+
+  if (keyboardOpen) {
+    // Float the Save bar so its bottom edge rides the top of the keyboard. The
+    // dock is `position: fixed; bottom: 0` (bottom of the layout viewport, which
+    // sits behind the keyboard), and we translate it up by the overlap so it
+    // lands exactly at the visible viewport's bottom edge — the standard
+    // visualViewport technique that works on both iOS Safari and mobile Chrome.
+    saveDock.classList.add("is-floating");
+    saveDock.style.transform = `translateY(-${Math.round(overlap)}px)`;
+    document.body.classList.add("keyboard-open");
+    // Hint the soft keyboard's return key toward "save" while in mobile mode.
+    entryInput.setAttribute("enterkeyhint", "send");
+  } else {
+    saveDock.classList.remove("is-floating");
+    saveDock.style.transform = "";
+    document.body.classList.remove("keyboard-open");
+    entryInput.removeAttribute("enterkeyhint");
+  }
+}
+
+// Coalesce the (potentially rapid) resize/scroll bursts during a keyboard
+// show/hide animation or orientation change into one paint-aligned update, so
+// the dock repositions smoothly without flicker or getting stuck mid-screen.
+let saveDockRafPending = false;
+function scheduleSaveDockUpdate() {
+  if (saveDockRafPending) {
+    return;
+  }
+  saveDockRafPending = true;
+  window.requestAnimationFrame(() => {
+    saveDockRafPending = false;
+    applySaveDockState();
+  });
+}
+
+if (visualViewportApi) {
+  visualViewportApi.addEventListener("resize", scheduleSaveDockUpdate);
+  visualViewportApi.addEventListener("scroll", scheduleSaveDockUpdate);
+  window.addEventListener("orientationchange", scheduleSaveDockUpdate);
+  // Also settle after the input gains/loses focus, in case the keyboard's open
+  // state lands before a resize fires.
+  entryInput.addEventListener("focus", scheduleSaveDockUpdate);
+  entryInput.addEventListener("blur", scheduleSaveDockUpdate);
+  applySaveDockState();
+}
 
 interestForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -714,6 +812,28 @@ entryInput.addEventListener("keydown", (event) => {
   }
 
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
+  // Mobile accelerator: with the soft keyboard open, plain Enter saves. This is
+  // LAST so every /command branch above still runs as a command. Shift/meta/ctrl/
+  // alt+Enter are excluded (newline / existing shortcuts stay intact), and on
+  // desktop isKeyboardOpen() is always false so Enter remains a newline.
+  if (
+    event.key === "Enter" &&
+    !event.shiftKey &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    isKeyboardOpen()
+  ) {
+    // Critical IME/autocorrect guard: an Enter that commits a composition or an
+    // autocorrect suggestion must NOT save the block.
+    if (event.isComposing || event.keyCode === 229) {
+      return;
+    }
     event.preventDefault();
     submitComposer();
   }
