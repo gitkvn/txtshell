@@ -67,6 +67,7 @@ const SLASH_COMMANDS = [
   { name: "/encrypt off", description: "Remove encryption and restore plaintext" },
   { name: "/wipe", description: "Delete all blocks and vault metadata" },
   { name: "/export", description: "Download an encrypted backup of your blocks" },
+  { name: "/export plain", description: "Download an unencrypted plaintext backup" },
   { name: "/import", description: "Restore blocks from a JSON export" },
   { name: "/lock", description: "Lock the vault" },
   { name: "/pin", description: "Show only pinned blocks" },
@@ -763,6 +764,12 @@ entryInput.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (event.key === "Enter" && entryInput.value.trim() === "/export plain") {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+
   if (event.key === "Enter" && entryInput.value.trim() === "/mirror") {
     event.preventDefault();
     submitComposer();
@@ -1055,6 +1062,13 @@ function submitComposer() {
     setEditorValue("");
     clearDraft();
     exportEntries();
+    return;
+  }
+
+  if (text === "/export plain") {
+    setEditorValue("");
+    clearDraft();
+    exportEntries({ plain: true });
     return;
   }
 
@@ -2843,7 +2857,7 @@ function showHint(id, message) {
   }, HINT_DELAY);
 }
 
-async function exportEntries() {
+async function exportEntries({ plain = false } = {}) {
   if (state.encryption.enabled && !state.encryption.unlocked) {
     composerHint.textContent = "Unlock your vault to export.";
     return;
@@ -2854,18 +2868,22 @@ async function exportEntries() {
     return;
   }
 
-  if (state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey) {
+  if (!plain && state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey) {
     const saltPass = await getMeta(ENC_SALT_PASS_KEY);
-    const saltRecovery = await getMeta(ENC_SALT_RECOVERY_KEY);
     const wrappedPass = await getMeta(ENC_WRAPPED_PASS_KEY);
-    const wrappedRecovery = await getMeta(ENC_WRAPPED_RECOVERY_KEY);
     const verify = await getMeta(ENC_VERIFY_KEY);
-    if (!saltPass || !saltRecovery || !wrappedPass || !wrappedRecovery || !verify) {
-      composerHint.textContent = "Vault metadata missing — cannot export.";
+    if (!saltPass || !wrappedPass || !verify) {
+      // The in-memory session key is non-extractable, so an encrypted export is
+      // impossible without the stored wrapped-key blobs — but the blocks are
+      // readable, so a deliberate plaintext export must always remain available.
+      composerHint.textContent = "Vault metadata unavailable — run /export plain to save an unencrypted copy.";
       return;
     }
+    // Recovery metadata is optional: a /port-paired browser wraps the master key
+    // under the passphrase only. The export stays importable via passphrase alone.
+    const saltRecovery = await getMeta(ENC_SALT_RECOVERY_KEY);
+    const wrappedRecovery = await getMeta(ENC_WRAPPED_RECOVERY_KEY);
     const iterationsPass = await readIterations(ENC_ITERATIONS_PASS_KEY);
-    const iterationsRecovery = await readIterations(ENC_ITERATIONS_RECOVERY_KEY);
 
     const combined = await encryptPlaintext(
       JSON.stringify(state.entries),
@@ -2879,15 +2897,17 @@ async function exportEntries() {
       format: "txtshell-encrypted-v1",
       createdAt: new Date().toISOString(),
       saltPass,
-      saltRecovery,
       iterationsPass,
-      iterationsRecovery,
       wrappedPass,
-      wrappedRecovery,
       verify,
       iv,
       ciphertext,
     };
+    if (saltRecovery && wrappedRecovery) {
+      fileObj.saltRecovery = saltRecovery;
+      fileObj.wrappedRecovery = wrappedRecovery;
+      fileObj.iterationsRecovery = await readIterations(ENC_ITERATIONS_RECOVERY_KEY);
+    }
 
     const timestamp = new Date().toISOString().slice(0, 10);
     const blob = new Blob([JSON.stringify(fileObj, null, 2)], {
@@ -2912,7 +2932,9 @@ async function exportEntries() {
   link.download = `txtshell-${timestamp}.json`;
   link.click();
   URL.revokeObjectURL(url);
-  composerHint.textContent = `Exported ${state.entries.length} blocks (plaintext)`;
+  composerHint.textContent = state.encryption.enabled
+    ? `Exported ${state.entries.length} blocks (plaintext — this file is NOT encrypted)`
+    : `Exported ${state.entries.length} blocks (plaintext)`;
 }
 
 function importEntries() {
@@ -4235,15 +4257,21 @@ async function handleImportAdoptVault() {
     throw new Error("missing-import-data");
   }
   const file = pending.importFileData;
-  await saveMetaBatch([
+  const metaRows = [
     [ENC_SALT_PASS_KEY, file.saltPass],
-    [ENC_SALT_RECOVERY_KEY, file.saltRecovery],
     [ENC_WRAPPED_PASS_KEY, file.wrappedPass],
-    [ENC_WRAPPED_RECOVERY_KEY, file.wrappedRecovery],
     [ENC_VERIFY_KEY, file.verify],
     [ENC_ITERATIONS_PASS_KEY, String(Math.max(file.iterationsPass || file.iterations || PBKDF2_ITERATIONS, MIN_IMPORT_ITERATIONS))],
-    [ENC_ITERATIONS_RECOVERY_KEY, String(Math.max(file.iterationsRecovery || file.iterations || PBKDF2_ITERATIONS, MIN_IMPORT_ITERATIONS))],
-  ]);
+  ];
+  // Exports from a /port-paired browser carry no recovery wrap — adopt what exists.
+  if (file.saltRecovery && file.wrappedRecovery) {
+    metaRows.push(
+      [ENC_SALT_RECOVERY_KEY, file.saltRecovery],
+      [ENC_WRAPPED_RECOVERY_KEY, file.wrappedRecovery],
+      [ENC_ITERATIONS_RECOVERY_KEY, String(Math.max(file.iterationsRecovery || file.iterations || PBKDF2_ITERATIONS, MIN_IMPORT_ITERATIONS))],
+    );
+  }
+  await saveMetaBatch(metaRows);
   state.encryption.enabled = true;
   state.encryption.unlocked = true;
   state.encryption.masterKey = pending.importMasterKey;

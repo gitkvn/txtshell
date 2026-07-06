@@ -5,7 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Txtshell</title>
     <link rel="icon" type="image/svg+xml" href="./logo-shell.svg" />
-    <link rel="stylesheet" href="./styles.css" />
+    <!-- Bump ?v= on every deploy that changes the file — index.html is no-cache,
+         so a new URL forces browsers past any stale cached copy. -->
+    <link rel="stylesheet" href="./styles.css?v=20260706" />
   </head>
   <body>
     <main class="app-shell">
@@ -183,6 +185,7 @@
             <p><strong>Optional features</strong></p>
             <p><code>/encrypt</code> encrypts your blocks locally with a passphrase</p>
             <p><code>/export</code> downloads an encrypted backup of your blocks</p>
+            <p><code>/export plain</code> downloads an unencrypted plaintext backup</p>
             <p><code>/import</code> restores from an export file</p>
           </div>
         </section>
@@ -277,6 +280,6 @@
     </template>
 
     <script src="./qrcode.js" integrity="sha384-74+AUd6tbAWrmm+GTFCXAWWFlqfuBEui1i9+CR7l70syLHvWFw8UwtK7zdW19BZI" crossorigin="anonymous"></script>
-    <script src="./app.js"></script>
+    <script src="./app.js?v=20260706"></script>
   </body>
 </html>
