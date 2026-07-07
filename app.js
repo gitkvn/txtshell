@@ -43,13 +43,6 @@ const RE_ESCAPE = /[.*+?^${}()|[\]\\]/g;
 const HINTS_KEY = "txtshell-hints-v1";
 const HINT_DELAY = 800;
 
-const INTEREST_KEY = "txtshell-interest-v1";
-// Formspree endpoint — accepts a JSON POST of { email, clickedAt, userAgent, referrer }.
-// Any response is ignored. Set to null to record interest only in the visitor's own
-// localStorage (per-device, no aggregation).
-const INTEREST_ENDPOINT = "https://formspree.io/f/meepyaww";
-const RE_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 const DRAFT_SAVE_DELAY = 180;
 const DELETE_UNDO_TIMEOUT = 10000;
 const COPY_FLASH_DURATION = 900;
@@ -142,14 +135,6 @@ const inboxCloseButton = document.querySelector("#inboxCloseButton");
 const lockButton = document.querySelector("#lockButton");
 const saveDock = document.querySelector("#saveDock");
 const saveBlockBtn = document.querySelector("#saveBlockBtn");
-const interestOverlay = document.querySelector("#interestOverlay");
-const interestBackdrop = document.querySelector("#interestBackdrop");
-const interestForm = document.querySelector("#interestForm");
-const interestThanks = document.querySelector("#interestThanks");
-const interestEmailInput = document.querySelector("#interestEmail");
-const interestErrorEl = document.querySelector("#interestError");
-const interestSkipButton = document.querySelector("#interestSkipButton");
-const interestDoneButton = document.querySelector("#interestDoneButton");
 const findReplaceBar = document.querySelector("#findReplaceBar");
 const findInput = document.querySelector("#findInput");
 const replaceInput = document.querySelector("#replaceInput");
@@ -214,11 +199,7 @@ window.addEventListener("pointerdown", (event) => {
     return;
   }
 
-  if (target.closest("#searchMode, .copy-button, #searchInput, #editorSuggestions, #commandPalette, #vaultOverlay, #lockButton, #interestOverlay, #findReplaceBar, #mergeModal, #deleteModal")) {
-    return;
-  }
-
-  if (!interestOverlay.hidden) {
+  if (target.closest("#searchMode, .copy-button, #searchInput, #editorSuggestions, #commandPalette, #vaultOverlay, #lockButton, #findReplaceBar, #mergeModal, #deleteModal")) {
     return;
   }
 
@@ -404,66 +385,6 @@ if (visualViewportApi) {
   applySaveDockState();
 }
 
-interestForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const email = interestEmailInput.value.trim();
-  if (email && !RE_EMAIL.test(email)) {
-    interestErrorEl.textContent = "That doesn't look like a valid email.";
-    interestErrorEl.hidden = false;
-    interestEmailInput.focus();
-    return;
-  }
-  interestErrorEl.hidden = true;
-  interestErrorEl.textContent = "";
-
-  const submitButton = interestForm.querySelector(".interest-submit");
-  submitButton.disabled = true;
-
-  const record = {
-    email: email || null,
-    clickedAt: new Date().toISOString(),
-    userAgent: navigator.userAgent,
-    referrer: document.referrer || null,
-  };
-
-  try {
-    window.localStorage.setItem(INTEREST_KEY, JSON.stringify(record));
-  } catch {
-    // localStorage may be unavailable (private mode); submission still proceeds
-  }
-
-  if (INTEREST_ENDPOINT) {
-    try {
-      await fetch(INTEREST_ENDPOINT, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(record),
-        keepalive: true,
-      });
-    } catch {
-      // silent — local record still counts as a signal
-    }
-  }
-
-  submitButton.disabled = false;
-  showInterestThanks();
-});
-
-interestSkipButton.addEventListener("click", () => {
-  closeInterestCard();
-});
-
-interestDoneButton.addEventListener("click", () => {
-  closeInterestCard();
-});
-
-interestBackdrop.addEventListener("click", () => {
-  closeInterestCard();
-});
-
 exportButton.addEventListener("click", () => {
   exportEntries();
 });
@@ -581,10 +502,6 @@ function escapeToComposer() {
   // composer.
   if (!mergeModal.hidden || !deleteModal.hidden) {
     dismissMultiSelectModalToSearch();
-    return;
-  }
-  if (!interestOverlay.hidden) {
-    closeInterestCard();
     return;
   }
   if (!findReplaceBar.hidden) {
@@ -1327,7 +1244,10 @@ function reopenEntryInEditor(entryId) {
 
   state.editingEntryId = entry.id;
   setEditorValue(entry.text);
-  saveMeta(DRAFT_KEY, entry.text);
+  // Same rule as queueDraftSave: never persist plaintext drafts while encrypted.
+  if (!state.encryption.enabled) {
+    saveMeta(DRAFT_KEY, entry.text);
+  }
   window.clearTimeout(inlineResultsTimer);
   inlineResults.innerHTML = "";
   inlineResults.hidden = true;
@@ -2784,51 +2704,6 @@ function showStatusToast(message, options = {}) {
   statusToastTimer = window.setTimeout(() => {
     statusToast.classList.remove("is-visible", "is-hint");
   }, duration);
-}
-
-function openInterestCard() {
-  let alreadyRegistered = false;
-  try {
-    alreadyRegistered = Boolean(window.localStorage.getItem(INTEREST_KEY));
-  } catch {
-    alreadyRegistered = false;
-  }
-
-  if (alreadyRegistered) {
-    showInterestThanks();
-  } else {
-    showInterestForm();
-  }
-
-  interestOverlay.hidden = false;
-
-  window.requestAnimationFrame(() => {
-    if (alreadyRegistered) {
-      interestDoneButton.focus();
-    } else {
-      interestEmailInput.focus();
-    }
-  });
-}
-
-function closeInterestCard() {
-  interestOverlay.hidden = true;
-  interestErrorEl.hidden = true;
-  interestErrorEl.textContent = "";
-  interestEmailInput.value = "";
-  if (!state.vaultView) {
-    entryInput.focus();
-  }
-}
-
-function showInterestForm() {
-  interestForm.hidden = false;
-  interestThanks.hidden = true;
-}
-
-function showInterestThanks() {
-  interestForm.hidden = true;
-  interestThanks.hidden = false;
 }
 
 function getShownHints() {

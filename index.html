@@ -7,7 +7,7 @@
     <link rel="icon" type="image/svg+xml" href="./logo-shell.svg" />
     <!-- Bump ?v= on every deploy that changes the file — index.html is no-cache,
          so a new URL forces browsers past any stale cached copy. -->
-    <link rel="stylesheet" href="./styles.css?v=20260706" />
+    <link rel="stylesheet" href="./styles.css?v=20260707" />
   </head>
   <body>
     <main class="app-shell">
@@ -109,39 +109,6 @@
             <button id="deleteConfirmButton" class="modal-button modal-button-primary" type="submit">Delete</button>
           </div>
         </form>
-      </section>
-
-      <section id="interestOverlay" class="interest-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="interestTitle">
-        <div id="interestBackdrop" class="interest-backdrop"></div>
-        <div class="interest-card">
-          <form id="interestForm" class="interest-form">
-            <p id="interestTitle" class="interest-title">Back up &amp; sync isn't built yet</p>
-            <p class="interest-subtitle">
-              This feature doesn't exist today. If enough people want it, it gets built.
-              Leave your email below to register interest — you'll only hear back once, if the feature ships.
-              No newsletter, no other emails.
-            </p>
-            <label class="sr-only" for="interestEmail">Email (optional)</label>
-            <input
-              id="interestEmail"
-              class="interest-input"
-              type="email"
-              placeholder="you@example.com (optional)"
-              autocomplete="email"
-              spellcheck="false"
-            />
-            <p id="interestError" class="interest-error" hidden></p>
-            <button class="interest-submit" type="submit">Register interest</button>
-            <button id="interestSkipButton" class="interest-skip" type="button">No thanks</button>
-          </form>
-          <div id="interestThanks" class="interest-thanks" hidden>
-            <p class="interest-title">Got it — interest noted.</p>
-            <p class="interest-subtitle">
-              You'll only hear back once, if the feature ships. Thanks for the signal.
-            </p>
-            <button id="interestDoneButton" class="interest-submit" type="button">Close</button>
-          </div>
-        </div>
       </section>
 
       <section id="searchMode" class="search-mode" hidden>
@@ -280,6 +247,6 @@
     </template>
 
     <script src="./qrcode.js" integrity="sha384-74+AUd6tbAWrmm+GTFCXAWWFlqfuBEui1i9+CR7l70syLHvWFw8UwtK7zdW19BZI" crossorigin="anonymous"></script>
-    <script src="./app.js?v=20260706"></script>
+    <script src="./app.js?v=20260707"></script>
   </body>
 </html>
