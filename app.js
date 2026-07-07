@@ -21,6 +21,7 @@ const SYNC_WORKER_URL_KEY = "sync-worker-url";
 const SYNC_AUTH_TOKEN_KEY = "sync-auth-token";
 const CLOUD_SYNC_DEBOUNCE_MS = 1000; // coalesce rapid sequential saves into one upload
 const CLOUD_SYNC_TIMEOUT_MS = 15000; // abort a stuck upload; local save is already canonical
+const CLOUD_MAX_RESPONSE_BYTES = 64 * 1024 * 1024; // refuse absurd payloads from a misbehaving server
 const PBKDF2_ITERATIONS = 600000;
 const LEGACY_PBKDF2_ITERATIONS = 100000;
 const MIN_IMPORT_ITERATIONS = LEGACY_PBKDF2_ITERATIONS; // 100000 — reject weaker imported KDF params
@@ -240,6 +241,10 @@ window.addEventListener("message", (event) => {
     parts.push(url);
   }
   const text = parts.join("\n");
+  if (text.length > MAX_IMPORT_ENTRY_TEXT) {
+    console.warn("[txtshell] capture dropped: too large");
+    return;
+  }
   const entry = createEntryFromText(text);
   console.log("[txtshell] captured block from postMessage", entry.id);
   render();
@@ -3297,6 +3302,14 @@ function lockVault() {
   if (state.searchMode) {
     closeSearchMode();
   }
+  // Locked means no decrypted content reachable: drop rendered blocks from the
+  // hidden search view, close inbox triage, and release any pairing payload.
+  entryList.innerHTML = "";
+  if (inboxState) {
+    endInbox();
+  }
+  clearMirrorDismiss();
+  mirrorPayload = null;
   state.vaultView = "unlock";
   state.vaultPending = null;
   renderVault();
@@ -3828,7 +3841,9 @@ async function handleWipeSubmit(value, isRecovery, confirmPhrase) {
         throw new Error("wrong-key");
       }
     } catch (error) {
-      if (!isRecovery) {
+      // Only wrong guesses escalate lockout — infrastructure errors
+      // (missing metadata, IndexedDB failures) are not attempts.
+      if (!isRecovery && error?.message === "wrong-key") {
         await recordUnlockFailure();
       }
       throw error;
@@ -3838,13 +3853,16 @@ async function handleWipeSubmit(value, isRecovery, confirmPhrase) {
   await performWipe();
 }
 
-function deleteDatabase(name) {
+function deleteDatabase(name, onBlocked) {
   return new Promise((resolve, reject) => {
     const request = window.indexedDB.deleteDatabase(name);
     request.addEventListener("success", () => resolve());
     request.addEventListener("error", () => reject(request.error));
     request.addEventListener("blocked", () => {
       console.warn("[txtshell] deleteDatabase blocked — another tab may still have it open");
+      if (onBlocked) {
+        onBlocked();
+      }
     });
   });
 }
@@ -3854,8 +3872,11 @@ async function performWipe() {
     state.db.close();
     state.db = null;
   }
-  await deleteDatabase(DB_NAME);
+  clearMirrorDismiss();
+  mirrorPayload = null;
 
+  // localStorage first — it can't block, so it's cleaned even if the DB delete
+  // stalls below on another open tab.
   try {
     const keys = [];
     for (let i = 0; i < window.localStorage.length; i++) {
@@ -3868,6 +3889,16 @@ async function performWipe() {
   } catch {
     // localStorage may be unavailable (private mode); DB deletion is the essential step
   }
+
+  // The delete blocks while another txtshell tab holds the DB open, and resumes
+  // when that tab closes — tell the user what it's waiting on.
+  await deleteDatabase(DB_NAME, () => {
+    const errorLine = vaultOverlay.querySelector(".vault-error");
+    if (errorLine) {
+      errorLine.textContent = "Waiting — close other txtshell tabs to finish wiping.";
+      errorLine.hidden = false;
+    }
+  });
 
   state.entries = [];
   state.encryption = { enabled: false, unlocked: false, masterKey: null };
@@ -4151,6 +4182,11 @@ async function handleImportAdoptVault() {
   state.encryption.unlocked = true;
   state.encryption.masterKey = pending.importMasterKey;
   updateLockButton();
+  // Re-save any blocks that existed before adoption so they're encrypted at rest —
+  // without this they'd stay plaintext records and fail decryption after relock.
+  for (const entry of state.entries) {
+    await saveEntry(entry);
+  }
   await mergeImportedEntries(pending.importEntries);
   state.vaultView = null;
   state.vaultPending = null;
@@ -4218,13 +4254,17 @@ async function handleRecoveryConfirm() {
   renderVault();
 
   try {
-    await saveMeta(ENC_SALT_PASS_KEY, bytesToBase64(pending.saltPass));
-    await saveMeta(ENC_SALT_RECOVERY_KEY, bytesToBase64(pending.saltRecovery));
-    await saveMeta(ENC_WRAPPED_PASS_KEY, pending.wrappedPass);
-    await saveMeta(ENC_WRAPPED_RECOVERY_KEY, pending.wrappedRecovery);
-    await saveMeta(ENC_VERIFY_KEY, pending.verify);
-    await saveMeta(ENC_ITERATIONS_PASS_KEY, String(PBKDF2_ITERATIONS));
-    await saveMeta(ENC_ITERATIONS_RECOVERY_KEY, String(PBKDF2_ITERATIONS));
+    // One IndexedDB transaction: a partial write (e.g. salt without wrapped key)
+    // would present an unlock gate that no credential can ever open.
+    await saveMetaBatch([
+      [ENC_SALT_PASS_KEY, bytesToBase64(pending.saltPass)],
+      [ENC_SALT_RECOVERY_KEY, bytesToBase64(pending.saltRecovery)],
+      [ENC_WRAPPED_PASS_KEY, pending.wrappedPass],
+      [ENC_WRAPPED_RECOVERY_KEY, pending.wrappedRecovery],
+      [ENC_VERIFY_KEY, pending.verify],
+      [ENC_ITERATIONS_PASS_KEY, String(PBKDF2_ITERATIONS)],
+      [ENC_ITERATIONS_RECOVERY_KEY, String(PBKDF2_ITERATIONS)],
+    ]);
 
     state.encryption.enabled = true;
     state.encryption.unlocked = true;
@@ -4283,7 +4323,9 @@ async function handleUnlockSubmit(value, isRecovery) {
       throw new Error("wrong-key");
     }
   } catch (error) {
-    if (!isRecovery) {
+    // Only wrong guesses escalate lockout — infrastructure errors
+    // (missing metadata, IndexedDB failures) are not attempts.
+    if (!isRecovery && error?.message === "wrong-key") {
       await recordUnlockFailure();
     }
     throw error;
@@ -4582,7 +4624,8 @@ async function flushCloudSync() {
     return { status: "skipped", reason: "locked" };
   }
   const { workerUrl, authToken } = await getSyncConfig();
-  if (!workerUrl || !authToken) {
+  const url = normalizeWorkerUrl(workerUrl);
+  if (!url || !authToken) {
     return { status: "skipped", reason: "not-configured" }; // nothing to do, no error
   }
 
@@ -4609,7 +4652,7 @@ async function flushCloudSync() {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), CLOUD_SYNC_TIMEOUT_MS);
   try {
-    const response = await fetch(`${workerUrl}/v1/blocks`, {
+    const response = await fetch(`${url}/v1/blocks`, {
       method: "PUT",
       headers: {
         Authorization: `Bearer ${authToken}`,
@@ -4933,7 +4976,13 @@ async function fetchAndDecryptBlocks() {
     if (!response.ok) {
       throw new Error("http-" + response.status);
     }
+    if (Number(response.headers.get("content-length") || 0) > CLOUD_MAX_RESPONSE_BYTES) {
+      throw new Error("too-large");
+    }
     buffer = await response.arrayBuffer();
+    if (buffer.byteLength > CLOUD_MAX_RESPONSE_BYTES) {
+      throw new Error("too-large"); // header was absent or lied
+    }
   } finally {
     window.clearTimeout(timeout);
   }
@@ -4977,6 +5026,21 @@ function canonicalizeEntries(entries) {
 
 function entriesDiffer(cloud, local) {
   return canonicalizeEntries(cloud) !== canonicalizeEntries(local);
+}
+
+// Newest content timestamp across entries (ISO strings compare lexicographically).
+// These live inside the GCM-authenticated payload, so a hostile server can't forge
+// them — they're the trustworthy freshness signal for the pull-conflict card.
+function newestEntryStamp(entries) {
+  let newest = "";
+  for (const e of entries) {
+    const stamp = (typeof e?.editedAt === "string" && e.editedAt) ||
+      (typeof e?.createdAt === "string" && e.createdAt) || "";
+    if (stamp > newest) {
+      newest = stamp;
+    }
+  }
+  return newest;
 }
 
 function clearAllEntryRecords() {
@@ -5058,6 +5122,10 @@ function pullErrorMessage(error) {
       return "Couldn't decrypt cloud blocks.";
     case "locked":
       return "Unlock your vault to pull.";
+    case "malformed":
+      return "Cloud data decrypted but looks corrupt — the server may be misbehaving.";
+    case "too-large":
+      return "Cloud response is unreasonably large — refusing to load it.";
     default:
       return "Couldn't reach cloud. Try again.";
   }
@@ -5075,14 +5143,30 @@ function renderPullConflictCard() {
     exitVaultToNormal();
     return;
   }
+  // Freshness check: if the cloud's newest entry predates ours, this is NOT
+  // "another device saved changes" — it's a stale (or replayed) copy. Say so,
+  // and flip the button emphasis so Keep local is the primary action.
+  const cloudNewest = newestEntryStamp(cloudEntries);
+  const localNewest = newestEntryStamp(state.entries);
+  const cloudIsOlder = Boolean(localNewest) && cloudNewest < localNewest;
+  const fmtStamp = (stamp) => {
+    const t = new Date(stamp);
+    return stamp && !Number.isNaN(t.getTime()) ? t.toLocaleString() : "unknown";
+  };
+  const detail = `Cloud: ${cloudEntries.length} block${cloudEntries.length === 1 ? "" : "s"}, newest ${fmtStamp(cloudNewest)} · This browser: ${state.entries.length} block${state.entries.length === 1 ? "" : "s"}, newest ${fmtStamp(localNewest)}`;
+  const title = cloudIsOlder ? "Cloud copy is older" : "Cloud has changes";
+  const subtitle = cloudIsOlder
+    ? "The cloud copy is OLDER than this browser's blocks — it may be stale or replayed. Replacing would revert your recent changes."
+    : "Another device saved changes to the cloud. Replace this browser's blocks with the cloud copy?";
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG}
-      <p class="vault-title">Cloud has changes</p>
-      <p class="vault-subtitle">Another device saved changes to the cloud. Replace this browser's blocks with the cloud copy?</p>
+      <p class="vault-title">${escapeHtml(title)}</p>
+      <p class="vault-subtitle">${escapeHtml(subtitle)}</p>
+      <p class="vault-subtitle">${escapeHtml(detail)}</p>
       <p class="vault-error" hidden></p>
-      <button class="vault-button" type="button" data-action="replace">Replace with cloud</button>
-      <button class="vault-button secondary" type="button" data-action="keep">Keep local</button>
+      <button class="vault-button${cloudIsOlder ? " secondary" : ""}" type="button" data-action="replace">Replace with cloud</button>
+      <button class="vault-button${cloudIsOlder ? "" : " secondary"}" type="button" data-action="keep">Keep local</button>
     </div>
   `;
   const errorLine = vaultOverlay.querySelector(".vault-error");
@@ -5110,11 +5194,21 @@ function renderPullConflictCard() {
 }
 
 async function applyCloudReplaceLocal(cloudEntries) {
+  // Validate BEFORE wiping local: a payload the merge would reject (oversized,
+  // malformed items) must abort here, not after the store is already cleared.
+  if (!Array.isArray(cloudEntries) || cloudEntries.length > MAX_IMPORT_ENTRIES) {
+    throw new Error("invalid-cloud-payload");
+  }
+  const valid = cloudEntries.filter((item) =>
+    item && typeof item.id === "string" && typeof item.text === "string" &&
+    typeof item.createdAt === "string" && item.text.length <= MAX_IMPORT_ENTRY_TEXT);
+  if (valid.length === 0 && cloudEntries.length > 0) {
+    throw new Error("invalid-cloud-payload");
+  }
   await clearAllEntryRecords();
   state.entries = [];
-  const before = state.entries.length;
-  await mergeImportedEntries(cloudEntries); // validates shape, re-encrypts via saveEntry
-  const count = state.entries.length - before;
+  await mergeImportedEntries(valid); // re-encrypts via saveEntry
+  const count = state.entries.length;
   state.vaultView = null;
   state.vaultPending = null;
   renderVault();
@@ -5387,6 +5481,9 @@ async function fetchAndDecryptInbox() {
     if (!response.ok) {
       throw new Error("http-" + response.status);
     }
+    if (Number(response.headers.get("content-length") || 0) > CLOUD_MAX_RESPONSE_BYTES) {
+      throw new Error("malformed");
+    }
     raw = await response.json();
     if (!Array.isArray(raw)) {
       throw new Error("malformed");
@@ -5407,7 +5504,10 @@ async function fetchAndDecryptInbox() {
 
   // Drop entries already triaged in a prior session whose DELETE hasn't landed yet,
   // and retry that DELETE so the Worker self-heals.
-  const visible = raw.filter((e) => e && e.id && !inboxPendingDeleteIds.has(e.id));
+  // The listing JSON is server-controlled (only the payloads are E2E) — require
+  // sane string ids so a hostile response can't crash the render.
+  const visible = raw.filter((e) =>
+    e && typeof e.id === "string" && e.id.length <= 256 && !inboxPendingDeleteIds.has(e.id));
   if (inboxPendingDeleteIds.size > 0) {
     flushInboxDelete();
   }
@@ -5422,7 +5522,7 @@ async function fetchAndDecryptInbox() {
     } catch (error) {
       console.warn("[txtshell] inbox entry decrypt failed", e.id, error);
     }
-    entries.push({ id: e.id, createdAt: e.createdAt || "", text, decryptOk });
+    entries.push({ id: e.id, createdAt: typeof e.createdAt === "string" ? e.createdAt : "", text, decryptOk });
   }
   inboxState.loading = false;
   inboxState.entries = entries;
@@ -5438,6 +5538,10 @@ function markInboxProcessed(id) {
 function inboxSave(id) {
   const entry = inboxState?.entries.find((e) => e.id === id);
   if (!entry || !entry.decryptOk) return;
+  if (typeof entry.text !== "string" || entry.text.length > MAX_IMPORT_ENTRY_TEXT) {
+    composerHint.textContent = "Capture too large to save.";
+    return; // left untriaged — not deleted from the Worker
+  }
   createEntryFromText(entry.text); // existing path -> saveEntry -> auto-export
   markInboxProcessed(id);
   render();
