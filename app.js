@@ -22,6 +22,7 @@ const SYNC_AUTH_TOKEN_KEY = "sync-auth-token";
 const CLOUD_SYNC_DEBOUNCE_MS = 1000; // coalesce rapid sequential saves into one upload
 const CLOUD_SYNC_TIMEOUT_MS = 15000; // abort a stuck upload; local save is already canonical
 const CLOUD_MAX_RESPONSE_BYTES = 64 * 1024 * 1024; // refuse absurd payloads from a misbehaving server
+const PULL_CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000; // wall-clock gaps below this can't distinguish stale-cloud from device clock skew
 const PBKDF2_ITERATIONS = 600000;
 const LEGACY_PBKDF2_ITERATIONS = 100000;
 const MIN_IMPORT_ITERATIONS = LEGACY_PBKDF2_ITERATIONS; // 100000 — reject weaker imported KDF params
@@ -2054,6 +2055,7 @@ function renderEntries(container, entries, options = {}) {
     pinButton.addEventListener("click", (event) => {
       event.stopPropagation();
       entry.pinned = !entry.pinned;
+      entry.editedAt = new Date().toISOString();
       saveEntry(entry);
       applyPinState();
       composerHint.textContent = entry.pinned ? "Pinned" : "Unpinned";
@@ -2845,6 +2847,23 @@ function importEntries() {
   fileInput.click();
 }
 
+// Freshness of an entry for same-id merge decisions: editedAt when present and
+// parseable, else createdAt, else oldest-possible. A missing or malformed stamp
+// must never throw and must never beat a valid one.
+function entryFreshness(entry) {
+  for (const value of [entry?.editedAt, entry?.createdAt]) {
+    // Shape check before parsing: Date.parse is lenient ("9999junk" parses as
+    // year 9999), and a garbage stamp must never outrank a real one.
+    if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) {
+      const time = Date.parse(value);
+      if (!Number.isNaN(time)) {
+        return time;
+      }
+    }
+  }
+  return -Infinity;
+}
+
 async function mergeImportedEntries(items) {
   if (!Array.isArray(items)) {
     composerHint.textContent = "Invalid import file";
@@ -2877,7 +2896,10 @@ async function mergeImportedEntries(items) {
     };
     const existing = state.entries.find((e) => e.id === entry.id);
     if (existing) {
-      if (new Date(entry.createdAt) > new Date(existing.createdAt)) {
+      // Same id on both sides: the newer edit wins (createdAt never changes, so
+      // comparing it would always tie and silently drop imported edits). Ties
+      // keep the local copy — an identical re-import stays a no-op.
+      if (entryFreshness(entry) > entryFreshness(existing)) {
         Object.assign(existing, entry);
         await saveEntry(existing);
         updated++;
@@ -5143,21 +5165,38 @@ function renderPullConflictCard() {
     exitVaultToNormal();
     return;
   }
-  // Freshness check: if the cloud's newest entry predates ours, this is NOT
-  // "another device saved changes" — it's a stale (or replayed) copy. Say so,
-  // and flip the button emphasis so Keep local is the primary action.
+  // Freshness heuristic, skew-tolerant: these stamps come from two different
+  // device clocks, so a small difference proves nothing — ordinary clock skew
+  // could invert it. Only claim one side is newer when the gap exceeds the
+  // tolerance; inside it, present both sides neutrally and let the user decide.
+  // Whenever we aren't confident the cloud is newer, the non-destructive
+  // "Keep local" gets the primary emphasis.
   const cloudNewest = newestEntryStamp(cloudEntries);
   const localNewest = newestEntryStamp(state.entries);
-  const cloudIsOlder = Boolean(localNewest) && cloudNewest < localNewest;
+  const cloudTime = Date.parse(cloudNewest);
+  const localTime = Date.parse(localNewest);
+  const comparable = !Number.isNaN(cloudTime) && !Number.isNaN(localTime);
+  const cloudIsOlder = comparable && localTime - cloudTime > PULL_CLOCK_SKEW_TOLERANCE_MS;
+  // An empty local store has nothing to lose, so replacing is safe to suggest.
+  const cloudIsNewer = state.entries.length === 0 ||
+    (comparable && cloudTime - localTime > PULL_CLOCK_SKEW_TOLERANCE_MS);
   const fmtStamp = (stamp) => {
     const t = new Date(stamp);
     return stamp && !Number.isNaN(t.getTime()) ? t.toLocaleString() : "unknown";
   };
   const detail = `Cloud: ${cloudEntries.length} block${cloudEntries.length === 1 ? "" : "s"}, newest ${fmtStamp(cloudNewest)} · This browser: ${state.entries.length} block${state.entries.length === 1 ? "" : "s"}, newest ${fmtStamp(localNewest)}`;
-  const title = cloudIsOlder ? "Cloud copy is older" : "Cloud has changes";
-  const subtitle = cloudIsOlder
-    ? "The cloud copy is OLDER than this browser's blocks — it may be stale or replayed. Replacing would revert your recent changes."
-    : "Another device saved changes to the cloud. Replace this browser's blocks with the cloud copy?";
+  let title;
+  let subtitle;
+  if (cloudIsOlder) {
+    title = "Cloud copy is older";
+    subtitle = "The cloud copy is OLDER than this browser's blocks — it may be stale or replayed. Replacing would revert your recent changes.";
+  } else if (cloudIsNewer) {
+    title = "Cloud has changes";
+    subtitle = "Another device saved changes to the cloud. Replace this browser's blocks with the cloud copy?";
+  } else {
+    title = "Cloud and local differ";
+    subtitle = "The two copies differ, but their timestamps are too close to tell which is newer. Compare the details below before choosing — replacing discards this browser's copy.";
+  }
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG}
@@ -5165,8 +5204,8 @@ function renderPullConflictCard() {
       <p class="vault-subtitle">${escapeHtml(subtitle)}</p>
       <p class="vault-subtitle">${escapeHtml(detail)}</p>
       <p class="vault-error" hidden></p>
-      <button class="vault-button${cloudIsOlder ? " secondary" : ""}" type="button" data-action="replace">Replace with cloud</button>
-      <button class="vault-button${cloudIsOlder ? "" : " secondary"}" type="button" data-action="keep">Keep local</button>
+      <button class="vault-button${cloudIsNewer ? "" : " secondary"}" type="button" data-action="replace">Replace with cloud</button>
+      <button class="vault-button${cloudIsNewer ? " secondary" : ""}" type="button" data-action="keep">Keep local</button>
     </div>
   `;
   const errorLine = vaultOverlay.querySelector(".vault-error");
