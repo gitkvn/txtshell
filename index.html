@@ -7,7 +7,10 @@
     <link rel="icon" type="image/svg+xml" href="./logo-shell.svg" />
     <!-- Bump ?v= on every deploy that changes the file — index.html is no-cache,
          so a new URL forces browsers past any stale cached copy. -->
-    <link rel="stylesheet" href="./styles.css?v=20260707" />
+    <link rel="stylesheet" href="./styles.css?v=20260817" />
+    <!-- Decides before first paint whether the first-visit intro overlay shows,
+         so neither first-timers nor returning users see a flash. -->
+    <script src="./intro-boot.js?v=20260817"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -155,6 +158,10 @@
             <p><code>/export plain</code> downloads an unencrypted plaintext backup</p>
             <p><code>/import</code> restores from an export file</p>
           </div>
+          <div class="qr-group">
+            <p><strong>The pitch</strong></p>
+            <p><button id="introReplayButton" class="intro-replay-link" type="button">Replay the intro</button> — the first-visit screen on why your notes are unreadable to anyone but you.</p>
+          </div>
         </section>
         <section id="quickReference" class="quick-reference" hidden>
           <div class="qr-group">
@@ -221,6 +228,76 @@
       </section>
     </main>
 
+    <!-- First-visit intro. intro-boot.js (in <head>) shows it before first paint
+         via the html.show-intro class; the /about guide's "Replay the intro"
+         button reopens it as .is-open. app.js owns dismissal. -->
+    <div id="introOverlay" class="intro-overlay" role="dialog" aria-modal="true" aria-labelledby="introHeadline">
+      <div class="intro-inner">
+        <header class="intro-brand">
+          <img src="./logo-shell.svg" alt="" width="26" height="26" />
+          txtshell
+        </header>
+
+        <section class="intro-hero">
+          <h1 id="introHeadline" class="intro-headline">A fast, local-first notes app that encrypts everything on your device<span class="intro-caret"></span></h1>
+          <p class="intro-proof">The key never leaves your device. Most apps say they <em class="intro-wont">won't</em> read your notes — Txtshell <strong>can't.</strong></p>
+          <div class="intro-cta-row">
+            <button id="introStartButton" class="intro-start" type="button">Start writing <span class="intro-arr">→</span></button>
+            <span class="intro-ghost">free · no account</span>
+          </div>
+        </section>
+
+        <div class="intro-strip">
+          <div class="intro-strip-cell">
+            <p class="intro-k">where notes live</p>
+            <p class="intro-v">In your browser, encrypted. Not on a server first — so every keystroke, search, and save is instant.</p>
+          </div>
+          <div class="intro-strip-cell">
+            <p class="intro-k">who holds the key</p>
+            <p class="intro-v">Only your device. Derived from your passphrase or passkey, never uploaded, never ours to hold.</p>
+          </div>
+          <div class="intro-strip-cell">
+            <p class="intro-k">what a server sees</p>
+            <p class="intro-v">Encrypted bytes with no key attached. Nothing to read, breach, or hand over — including for us.</p>
+          </div>
+        </div>
+
+        <section class="intro-how">
+          <p class="intro-sec-eyebrow">how it works</p>
+          <h2 class="intro-sec-title">Three ways to use it.</h2>
+          <p class="intro-sec-lead">Pick how involved you want us to be. It never changes the math — your notes stay unreadable to us.</p>
+          <div class="intro-tiers">
+            <div class="intro-tier">
+              <div class="intro-tier-num">01</div>
+              <h3>Free &amp; local</h3>
+              <p>Open it and write. Encrypted, stored in your browser, nothing sent anywhere.</p>
+              <div class="intro-tier-price">Free forever</div>
+            </div>
+            <div class="intro-tier">
+              <div class="intro-tier-num">02</div>
+              <h3>Self-host sync</h3>
+              <p>Sync across devices on your own cloud account. You don't trust us with anything.</p>
+              <div class="intro-tier-price">Free · your infrastructure</div>
+            </div>
+            <div class="intro-tier">
+              <div class="intro-tier-num">03</div>
+              <h3>Cloud sync</h3>
+              <p>We handle sync across your devices — still end-to-end encrypted, still unreadable to us.</p>
+              <div class="intro-tier-price">$4/mo <span class="intro-soon">· coming soon</span></div>
+            </div>
+          </div>
+        </section>
+
+        <footer class="intro-footer">
+          <span class="intro-footer-brand">txtshell · notes only you can read</span>
+          <nav class="intro-links">
+            <a href="https://github.com/gitkvn/txtshell" target="_blank" rel="noopener noreferrer">Source</a>
+            <a href="https://github.com/gitkvn/txtshell-sync" target="_blank" rel="noopener noreferrer">Self-host</a>
+          </nav>
+        </footer>
+      </div>
+    </div>
+
     <template id="entryTemplate">
       <article class="entry-card collapsed">
         <header class="entry-meta">
@@ -247,6 +324,6 @@
     </template>
 
     <script src="./qrcode.js" integrity="sha384-74+AUd6tbAWrmm+GTFCXAWWFlqfuBEui1i9+CR7l70syLHvWFw8UwtK7zdW19BZI" crossorigin="anonymous"></script>
-    <script src="./app.js?v=20260807"></script>
+    <script src="./app.js?v=20260817"></script>
   </body>
 </html>

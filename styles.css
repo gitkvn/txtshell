@@ -1536,3 +1536,318 @@ kbd {
   font-family: var(--font-mono);
   word-break: break-all;
 }
+
+/* First-visit intro overlay. intro-boot.js (in <head>) adds .show-intro to
+   <html> before first paint when the intro flag is unset; .is-open is the
+   JS-driven /about replay path. Sits above every other surface (max z
+   elsewhere is 40). */
+.intro-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: none;
+  overflow-y: auto;
+  background: var(--bg);
+  color: var(--ink);
+  line-height: 1.6;
+  transition: opacity 0.22s ease;
+}
+
+html.show-intro .intro-overlay,
+.intro-overlay.is-open {
+  display: block;
+}
+
+.intro-overlay.is-closing {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.intro-inner {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 28px 28px 48px;
+}
+
+.intro-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+
+.intro-brand img {
+  border-radius: 7px;
+}
+
+.intro-hero {
+  padding: 44px 0 8px;
+}
+
+.intro-headline {
+  margin: 0;
+  max-width: 30ch;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: clamp(1.3rem, 2.4vw, 1.7rem);
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+
+.intro-caret {
+  display: inline-block;
+  width: 2px;
+  height: 0.82em;
+  margin-left: 3px;
+  vertical-align: -0.06em;
+  border-radius: 1px;
+  background: var(--accent);
+  animation: intro-blink 1.15s steps(1) infinite;
+}
+
+@keyframes intro-blink {
+  0%, 50% { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+
+.intro-proof {
+  margin: 22px 0 0;
+  max-width: 48ch;
+  font-size: clamp(0.98rem, 1.4vw, 1.1rem);
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.intro-proof strong {
+  color: var(--accent);
+}
+
+.intro-wont {
+  font-style: normal;
+  text-decoration: line-through;
+}
+
+.intro-cta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-top: 34px;
+}
+
+.intro-start {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 13px 22px;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+
+.intro-start:hover {
+  transform: translateY(-1px);
+}
+
+.intro-arr {
+  transition: transform 0.15s ease;
+}
+
+.intro-start:hover .intro-arr {
+  transform: translateX(3px);
+}
+
+.intro-ghost {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.intro-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  margin-top: 46px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.intro-strip-cell {
+  padding: 26px 24px;
+}
+
+.intro-strip-cell:not(:last-child) {
+  border-right: 1px solid var(--line);
+}
+
+.intro-k {
+  margin: 0 0 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+
+.intro-v {
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+
+.intro-how {
+  padding: 52px 0 0;
+}
+
+.intro-sec-eyebrow {
+  margin: 0 0 14px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+.intro-sec-title {
+  margin: 0;
+  max-width: 28ch;
+  font-family: var(--font-mono);
+  font-size: clamp(1.15rem, 2vw, 1.45rem);
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+
+.intro-sec-lead {
+  margin: 14px 0 0;
+  max-width: 58ch;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.intro-tiers {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-top: 30px;
+}
+
+.intro-tier {
+  display: flex;
+  flex-direction: column;
+  padding: 22px 20px 24px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.intro-tier-num {
+  margin-bottom: 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.intro-tier h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.intro-tier p {
+  margin: 8px 0 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.intro-tier-price {
+  margin-top: auto;
+  padding-top: 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.intro-soon {
+  color: var(--muted);
+}
+
+.intro-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 56px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.intro-footer-brand {
+  font-family: var(--font-mono);
+}
+
+.intro-links {
+  display: flex;
+  gap: 20px;
+}
+
+.intro-links a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.intro-links a:hover {
+  color: var(--ink);
+}
+
+.intro-replay-link {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+@media (max-width: 680px) {
+  .intro-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .intro-strip-cell:not(:last-child) {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+}
+
+@media (max-width: 760px) {
+  .intro-tiers {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .intro-overlay,
+  .intro-start,
+  .intro-arr {
+    transition: none;
+  }
+
+  .intro-caret {
+    animation: none;
+  }
+}

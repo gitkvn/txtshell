@@ -14,3 +14,6 @@
 
 /styles.css
   Cache-Control: no-cache
+
+/intro-boot.js
+  Cache-Control: no-cache

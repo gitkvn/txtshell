@@ -45,6 +45,9 @@ const RE_ESCAPE = /[.*+?^${}()|[\]\\]/g;
 const HINTS_KEY = "txtshell-hints-v1";
 const HINT_DELAY = 800;
 
+const INTRO_KEY = "txtshell-intro-seen-v1"; // must match intro-boot.js
+const INTRO_FADE_MS = 220; // must match the .intro-overlay opacity transition
+
 const DRAFT_SAVE_DELAY = 180;
 const DELETE_UNDO_TIMEOUT = 10000;
 const COPY_FLASH_DURATION = 900;
@@ -116,6 +119,9 @@ const searchMode = document.querySelector("#searchMode");
 const searchModeLabel = document.querySelector("#searchModeLabel");
 const quickReference = document.querySelector("#quickReference");
 const aboutGuide = document.querySelector("#aboutGuide");
+const introOverlay = document.querySelector("#introOverlay");
+const introStartButton = document.querySelector("#introStartButton");
+const introReplayButton = document.querySelector("#introReplayButton");
 const savedCount = document.querySelector("#savedCount");
 const syncIndicator = document.querySelector("#syncIndicator");
 const wordCountDisplay = document.querySelector("#wordCountDisplay");
@@ -502,6 +508,12 @@ function focusComposer() {
 // time; otherwise sweep the composer's transient UI in one pass. No lingering
 // pickers, suggestions, overlays, or stale view states after one press.
 function escapeToComposer() {
+  // The intro overlay sits above every other surface, so Esc dismisses it first.
+  if (isIntroOpen()) {
+    dismissIntroOverlay();
+    return;
+  }
+
   // Multi-select confirmation modals live inside search-mode. Esc closes the modal
   // and returns to the search view with the selection intact (Cancel/backdrop clear
   // it; Esc preserves it), so the user lands back on their multi-select — not the
@@ -781,6 +793,48 @@ entryInput.addEventListener("input", () => {
   renderEditorSuggestions();
   render();
 });
+
+// First-visit intro overlay. intro-boot.js (loaded in <head>) decides
+// visibility before first paint by adding .show-intro to <html> when
+// INTRO_KEY is unset — that, not this file, is what prevents a flash of the
+// editor on first visit. This side owns dismissal and the /about replay path.
+function isIntroOpen() {
+  return (
+    (document.documentElement.classList.contains("show-intro") ||
+      introOverlay.classList.contains("is-open")) &&
+    !introOverlay.classList.contains("is-closing")
+  );
+}
+
+function showIntroOverlay() {
+  introOverlay.classList.remove("is-closing");
+  introOverlay.classList.add("is-open");
+  introOverlay.scrollTop = 0;
+  window.requestAnimationFrame(() => introStartButton.focus());
+}
+
+function dismissIntroOverlay() {
+  window.localStorage.setItem(INTRO_KEY, "1");
+  introOverlay.classList.add("is-closing");
+  window.setTimeout(() => {
+    document.documentElement.classList.remove("show-intro");
+    introOverlay.classList.remove("is-open", "is-closing");
+  }, INTRO_FADE_MS);
+  if (state.searchMode) {
+    // Replayed from the /about guide -> land in the composer, per the Esc contract.
+    closeSearchMode();
+  } else {
+    focusComposer();
+  }
+}
+
+introStartButton.addEventListener("click", dismissIntroOverlay);
+introReplayButton.addEventListener("click", showIntroOverlay);
+
+if (isIntroOpen()) {
+  // Beat the textarea's autofocus so keyboard users start on the CTA.
+  window.requestAnimationFrame(() => introStartButton.focus());
+}
 
 updateClock();
 window.setInterval(updateClock, 1000);
