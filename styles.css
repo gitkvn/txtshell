@@ -1621,15 +1621,6 @@ html.show-intro .intro-overlay,
   color: var(--muted);
 }
 
-.intro-proof strong {
-  color: var(--accent);
-}
-
-.intro-wont {
-  font-style: normal;
-  text-decoration: line-through;
-}
-
 .intro-cta-row {
   display: flex;
   align-items: center;
