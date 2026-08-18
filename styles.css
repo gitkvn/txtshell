@@ -296,11 +296,6 @@ button {
   color: color-mix(in srgb, var(--accent) 70%, var(--muted));
 }
 
-.inline-results {
-  padding: 0 20px 14px;
-  overflow: auto;
-}
-
 .command-bar {
   grid-row: 4;
   display: flex;
@@ -854,10 +849,6 @@ kbd {
 
 .editor-wrap.is-inbox .inbox-view {
   display: flex;
-}
-
-.editor-wrap.is-inbox .inline-results {
-  display: none;
 }
 
 .inbox-view-header {

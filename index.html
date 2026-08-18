@@ -8,7 +8,7 @@
     <link rel="icon" type="image/svg+xml" href="./logo-shell.svg" />
     <!-- Bump ?v= on every deploy that changes the file — index.html is no-cache,
          so a new URL forces browsers past any stale cached copy. -->
-    <link rel="stylesheet" href="./styles.css?v=20260817-2" />
+    <link rel="stylesheet" href="./styles.css?v=20260818" />
     <!-- Decides before first paint whether the first-visit intro overlay shows,
          so neither first-timers nor returning users see a flash. -->
     <script src="./intro-boot.js?v=20260817"></script>
@@ -52,7 +52,6 @@
         ></textarea>
         <section id="commandPalette" class="command-palette" hidden role="listbox" aria-label="Slash commands"></section>
         <section id="editorSuggestions" class="editor-suggestions" hidden aria-label="Editor suggestions"></section>
-        <section id="inlineResults" class="inline-results" hidden aria-live="polite"></section>
         <section id="vaultOverlay" class="vault-overlay" hidden aria-live="polite"></section>
         <section id="inboxView" class="inbox-view" hidden aria-live="polite">
           <div class="inbox-view-header">
@@ -142,7 +141,7 @@
           </div>
           <div class="qr-group">
             <p><strong>Finding your blocks</strong></p>
-            <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>K</kbd> opens search. Type to filter, use <code>#tags</code> and <code>@mentions</code> to organise. Or type a word followed by <code>//</code> in the editor to search inline without leaving your writing.</p>
+            <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>K</kbd> opens search. Type to filter, use <code>#tags</code> and <code>@mentions</code> to organise. Or type a word followed by <code>//</code> in the editor and press <kbd>⏎</kbd> to search it.</p>
           </div>
           <div class="qr-group">
             <p><strong>Useful commands</strong></p>
@@ -167,9 +166,9 @@
         <section id="quickReference" class="quick-reference" hidden>
           <div class="qr-group">
             <p><strong>Quick Retrieval</strong></p>
-            <p><code>term //</code> -> show matching blocks under the editor</p>
-            <p><code>#tag //</code> -> show blocks with that tag under the editor</p>
-            <p><code>@name //</code> -> show blocks with that mention under the editor</p>
+            <p><code>term //</code> + <kbd>⏎</kbd> -> open search with that term</p>
+            <p><code>#tag //</code> + <kbd>⏎</kbd> -> open search filtered to that tag</p>
+            <p><code>@name //</code> + <kbd>⏎</kbd> -> open search filtered to that mention</p>
             <p><kbd>Shift</kbd> + <kbd>⏎</kbd> after <code>term //</code> -> edit the first matching block</p>
             <p><code>/-</code> -> pick from your tags; <code>/-tag</code> opens most recently edited block tagged #tag</p>
           </div>
@@ -325,6 +324,6 @@
     </template>
 
     <script src="./qrcode.js" integrity="sha384-74+AUd6tbAWrmm+GTFCXAWWFlqfuBEui1i9+CR7l70syLHvWFw8UwtK7zdW19BZI" crossorigin="anonymous"></script>
-    <script src="./app.js?v=20260817"></script>
+    <script src="./app.js?v=20260818-2"></script>
   </body>
 </html>

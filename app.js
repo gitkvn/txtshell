@@ -110,7 +110,6 @@ const composerForm = document.querySelector("#composerForm");
 const entryInput = document.querySelector("#entryInput");
 const editorSuggestions = document.querySelector("#editorSuggestions");
 const commandPalette = document.querySelector("#commandPalette");
-const inlineResults = document.querySelector("#inlineResults");
 const entryList = document.querySelector("#entryList");
 const searchInput = document.querySelector("#searchInput");
 const searchInputLabel = document.querySelector("#searchInputLabel");
@@ -171,9 +170,6 @@ function setEditorValue(value) {
 let draftSaveTimer = null;
 let deleteUndoTimer = null;
 let statusToastTimer = null;
-let inlineResultsTimer = null;
-
-const INLINE_RESULTS_DELAY = 150;
 
 window.addEventListener("load", () => {
   if (state.vaultView) {
@@ -550,9 +546,6 @@ function escapeToComposer() {
   }
 
   // Plain composer: sweep all transient UI in one pass.
-  if (getInlineQuery()) {
-    clearInlineQuery();
-  }
   if (state.targetCount !== null) {
     state.targetCount = null;
     updateWordCount();
@@ -753,6 +746,29 @@ entryInput.addEventListener("keydown", (event) => {
     return;
   }
 
+  // Plain Enter on "term//" jumps to full search mode. Desktop plain Enter
+  // never reaches submitComposer (it inserts a newline), so like the /command
+  // branches above this needs its own keydown intercept. Shift+Enter stays
+  // with the edit-top-match branch above; Cmd/Ctrl+Enter falls through to
+  // save, where submitComposer runs the same redirect.
+  if (
+    event.key === "Enter" &&
+    !event.shiftKey &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    getInlineQuery()
+  ) {
+    // Same IME/autocorrect guard as Enter-to-save below: an Enter that commits
+    // a composition must not trigger the redirect.
+    if (event.isComposing || event.keyCode === 229) {
+      return;
+    }
+    event.preventDefault();
+    openSearchFromQueryMarker();
+    return;
+  }
+
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
     submitComposer();
@@ -880,8 +896,7 @@ function submitComposer() {
     endInbox();
   }
 
-  if (getInlineQuery()) {
-    composerHint.textContent = "Inline retrieval is active";
+  if (openSearchFromQueryMarker()) {
     return;
   }
 
@@ -1152,7 +1167,7 @@ function submitComposer() {
   if (state.entries.length === 1) {
     showHint("first-save", "Press Cmd/Ctrl + K to search your saved blocks");
   } else if (state.entries.length === 3) {
-    showHint("inline-retrieval", "Type a word then // to search inline without leaving the editor");
+    showHint("inline-retrieval", "Type a word then // and press Enter to search it");
   } else if (state.entries.length === 5) {
     showHint("five-blocks", "Try /y for yesterday's blocks or /w for last week");
   }
@@ -1206,7 +1221,6 @@ function render() {
   entryInput.placeholder = state.entries.length
     ? COMPOSER_PLACEHOLDER_HAS_BLOCKS
     : COMPOSER_PLACEHOLDER_EMPTY;
-  scheduleInlineResults();
   renderCommandPalette();
 
   if (!state.searchMode) {
@@ -1308,9 +1322,6 @@ function reopenEntryInEditor(entryId) {
   if (!state.encryption.enabled) {
     saveMeta(DRAFT_KEY, entry.text);
   }
-  window.clearTimeout(inlineResultsTimer);
-  inlineResults.innerHTML = "";
-  inlineResults.hidden = true;
   closeSearchMode();
   composerHint.textContent = "Editing block -> save updates";
   entryInput.focus();
@@ -1923,34 +1934,6 @@ function updateWordCount() {
   }
 }
 
-function scheduleInlineResults() {
-  window.clearTimeout(inlineResultsTimer);
-  if (!getInlineQuery()) {
-    inlineResults.innerHTML = "";
-    inlineResults.hidden = true;
-    return;
-  }
-  inlineResultsTimer = window.setTimeout(renderInlineResults, INLINE_RESULTS_DELAY);
-}
-
-function renderInlineResults() {
-  const inlineQuery = getInlineQuery();
-  inlineResults.innerHTML = "";
-  inlineResults.hidden = !inlineQuery;
-
-  if (!inlineQuery) {
-    return;
-  }
-
-  const entries = getEntriesForQuery({ search: inlineQuery.query });
-  if (!entries.length) {
-    inlineResults.innerHTML = '<p class="empty-state">No matching blocks.</p>';
-    return;
-  }
-
-  renderEntries(inlineResults, entries, { highlightTerm: inlineQuery.query, mode: "inline" });
-}
-
 function getDateGroup(dateString) {
   const date = new Date(dateString);
   const now = new Date();
@@ -2174,20 +2157,26 @@ function getInlineQuery() {
   return { query };
 }
 
-function clearInlineQuery() {
-  const trimmed = entryInput.value.trimEnd();
-  if (!trimmed.endsWith("//")) {
-    return;
+// "term//" + Enter jumps into full search mode with the query pre-filled.
+// Mirrors openSavedSearchFromFooter; the trailing "//" is stripped so the
+// composer keeps just the draft text when search closes. Returns true when
+// a query marker was present and the redirect ran.
+function openSearchFromQueryMarker() {
+  const inlineQuery = getInlineQuery();
+  if (!inlineQuery) {
+    return false;
   }
-
-  const withoutQueryMarker = trimmed.slice(0, -2).trimEnd();
-  setEditorValue(withoutQueryMarker);
-  entryInput.focus();
-  entryInput.setSelectionRange(entryInput.value.length, entryInput.value.length);
+  setEditorValue(entryInput.value.trimEnd().slice(0, -2).trimEnd());
   queueDraftSave();
   updateWordCount();
-  renderEditorSuggestions();
+  state.search = inlineQuery.query;
+  state.preset = null;
+  openSearchMode();
+  searchInput.value = state.search;
+  composerHint.textContent = "Search saved";
+  window.requestAnimationFrame(() => searchInput.focus());
   render();
+  return true;
 }
 
 function indentSelection(mode) {
