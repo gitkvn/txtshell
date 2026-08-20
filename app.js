@@ -83,7 +83,7 @@ const SLASH_COMMANDS = [
   { name: "/port", description: "Set up this browser using pairing data from another browser" },
   { name: "/pull", description: "Fetch the latest blocks from cloud" },
   { name: "/inbox", description: "Triage captures synced from your phone" },
-  { name: "/font", description: "Set editor font size in px (11–24, default 14); /font reset restores default" },
+  { name: "/font", description: "Set note font size in px (11–24, default 14); /font reset restores default" },
 ];
 const SLASH_COMMAND_NAMES = new Set(SLASH_COMMANDS.map((cmd) => cmd.name));
 // Commands that accept an argument after a space ("/font 12"). Their Enter
@@ -1833,8 +1833,9 @@ function getSearchModeLabel(count) {
   return `Search saved blocks${suffix}`;
 }
 
-// Editor font size (/font <n>). Stored as an integer px value; null means
-// "use the stylesheet default" (--editor-font-size on :root).
+// Note font size (/font <n>): composer + saved block bodies. Stored as an
+// integer px value; null means "use the stylesheet default" (--note-font-size
+// on :root).
 function parseEditorFontSize(raw) {
   if (raw === null || raw === undefined) {
     return null;
@@ -1849,11 +1850,11 @@ function clampEditorFontSize(value) {
 
 function applyEditorFontSize(size) {
   if (size === null) {
-    document.documentElement.style.removeProperty("--editor-font-size");
+    document.documentElement.style.removeProperty("--note-font-size");
     window.localStorage.removeItem(EDITOR_FONT_SIZE_KEY);
     return;
   }
-  document.documentElement.style.setProperty("--editor-font-size", `${size}px`);
+  document.documentElement.style.setProperty("--note-font-size", `${size}px`);
   window.localStorage.setItem(EDITOR_FONT_SIZE_KEY, String(size));
 }
 
