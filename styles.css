@@ -650,7 +650,8 @@ kbd {
 .search-mode-label {
   margin: 0;
   color: var(--muted);
-  font-size: 0.9rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem; /* 13px chrome baseline; fixed, not --note-font-size */
   letter-spacing: -0.01em;
 }
 
@@ -660,7 +661,8 @@ kbd {
   color: var(--muted);
   cursor: pointer;
   padding: 0;
-  font-family: var(--font-sans);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem; /* 13px chrome baseline; fixed, not --note-font-size */
 }
 
 .search-close:hover,
@@ -681,8 +683,8 @@ kbd {
   border-radius: 10px;
   padding: 14px 16px;
   outline: none;
-  font-size: 1rem;
-  font-family: var(--font-sans);
+  font-size: 0.875rem; /* 14px — matches the editor's default typing size; 1rem mono read oversized next to 13px chrome */
+  font-family: var(--font-mono);
 }
 
 .search-input:focus {
@@ -703,8 +705,8 @@ kbd {
   border-radius: 999px;
   padding: 4px 10px;
   cursor: pointer;
-  font-size: 0.8rem;
-  font-family: var(--font-sans);
+  font-size: 0.8125rem; /* 13px chrome baseline; fixed, not --note-font-size */
+  font-family: var(--font-mono);
 }
 
 .search-suggestion:hover,
