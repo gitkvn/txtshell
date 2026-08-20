@@ -5,6 +5,9 @@ const META_STORE = "meta";
 const DRAFT_KEY = "draft";
 const THEME_KEY = "txtshell-theme-v1";
 const WORD_COUNT_KEY = "txtshell-word-count-v1";
+const EDITOR_FONT_SIZE_KEY = "txtshell-editor-font-size";
+const EDITOR_FONT_SIZE_MIN = 11;
+const EDITOR_FONT_SIZE_MAX = 24;
 
 const ENC_SALT_PASS_KEY = "enc-salt-pass";
 const ENC_SALT_RECOVERY_KEY = "enc-salt-recovery";
@@ -80,7 +83,12 @@ const SLASH_COMMANDS = [
   { name: "/port", description: "Set up this browser using pairing data from another browser" },
   { name: "/pull", description: "Fetch the latest blocks from cloud" },
   { name: "/inbox", description: "Triage captures synced from your phone" },
+  { name: "/font", description: "Set editor font size in px (11–24, default 14); /font reset restores default" },
 ];
+const SLASH_COMMAND_NAMES = new Set(SLASH_COMMANDS.map((cmd) => cmd.name));
+// Commands that accept an argument after a space ("/font 12"). Their Enter
+// handling matches on the first token instead of the whole value.
+const ARG_COMMANDS = new Set(["/font"]);
 
 const state = {
   db: null,
@@ -602,130 +610,31 @@ entryInput.addEventListener("keydown", (event) => {
     }
   }
 
-  if (event.key === "Enter" && entryInput.value.trim() === "/y") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/ya") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/w") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/wa") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/re") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/q") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/about") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/pin") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/encrypt") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/encrypt change") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/encrypt off") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/wipe") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/lock") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/import") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/export") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/export plain") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/mirror") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/sync setup") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/port") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/pull") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  if (event.key === "Enter" && entryInput.value.trim() === "/inbox") {
-    event.preventDefault();
-    submitComposer();
-    return;
+  // Desktop plain Enter inserts a newline, so every /command needs an explicit
+  // keydown intercept to reach submitComposer. Exact-name commands are taken
+  // straight from SLASH_COMMANDS; ARG_COMMANDS ("/font 12") match on their
+  // first token and, because they carry free text, get the same modifier/IME
+  // guards as Enter-to-save so a composition commit can't fire them.
+  if (event.key === "Enter") {
+    const trimmed = entryInput.value.trim();
+    if (SLASH_COMMAND_NAMES.has(trimmed)) {
+      event.preventDefault();
+      submitComposer();
+      return;
+    }
+    const firstToken = trimmed.split(/\s+/, 1)[0].toLowerCase();
+    if (
+      ARG_COMMANDS.has(firstToken) &&
+      !event.shiftKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !(event.isComposing || event.keyCode === 229)
+    ) {
+      event.preventDefault();
+      submitComposer();
+      return;
+    }
   }
 
   const targetMatch = event.key === "Enter" ? entryInput.value.trim().match(/^\/(\d+)$/) : null;
@@ -855,6 +764,12 @@ if (isIntroOpen()) {
 updateClock();
 window.setInterval(updateClock, 1000);
 applyTheme(window.localStorage.getItem(THEME_KEY) || "light");
+{
+  const savedFontSize = parseEditorFontSize(window.localStorage.getItem(EDITOR_FONT_SIZE_KEY));
+  if (savedFontSize !== null) {
+    applyEditorFontSize(clampEditorFontSize(savedFontSize));
+  }
+}
 const savedCountMode = window.localStorage.getItem(WORD_COUNT_KEY);
 applyCountMode(
   savedCountMode === "true" ? "words"
@@ -1119,6 +1034,32 @@ function submitComposer() {
     setEditorValue("");
     clearDraft();
     beginInbox();
+    return;
+  }
+
+  const fontMatch = text.match(/^\/font(?:\s+(\S+))?$/i);
+  if (fontMatch) {
+    const arg = (fontMatch[1] || "").toLowerCase();
+    if (!arg || arg === "reset") {
+      applyEditorFontSize(null);
+      setEditorValue("");
+      clearDraft();
+      composerHint.textContent = "Font size reset to default";
+      return;
+    }
+    const requested = parseEditorFontSize(arg);
+    if (requested === null) {
+      composerHint.textContent = `Usage: /font <${EDITOR_FONT_SIZE_MIN}-${EDITOR_FONT_SIZE_MAX}>`;
+      return;
+    }
+    const size = clampEditorFontSize(requested);
+    applyEditorFontSize(size);
+    setEditorValue("");
+    clearDraft();
+    composerHint.textContent =
+      requested < size ? `Font size set to ${size}px (min)`
+      : requested > size ? `Font size set to ${size}px (max)`
+      : `Font size set to ${size}px`;
     return;
   }
 
@@ -1890,6 +1831,30 @@ function getSearchModeLabel(count) {
     return `Results${suffix}`;
   }
   return `Search saved blocks${suffix}`;
+}
+
+// Editor font size (/font <n>). Stored as an integer px value; null means
+// "use the stylesheet default" (--editor-font-size on :root).
+function parseEditorFontSize(raw) {
+  if (raw === null || raw === undefined) {
+    return null;
+  }
+  const match = String(raw).trim().match(/^(\d+(?:\.\d+)?)(?:px)?$/);
+  return match ? Math.round(Number(match[1])) : null;
+}
+
+function clampEditorFontSize(value) {
+  return Math.min(EDITOR_FONT_SIZE_MAX, Math.max(EDITOR_FONT_SIZE_MIN, value));
+}
+
+function applyEditorFontSize(size) {
+  if (size === null) {
+    document.documentElement.style.removeProperty("--editor-font-size");
+    window.localStorage.removeItem(EDITOR_FONT_SIZE_KEY);
+    return;
+  }
+  document.documentElement.style.setProperty("--editor-font-size", `${size}px`);
+  window.localStorage.setItem(EDITOR_FONT_SIZE_KEY, String(size));
 }
 
 function applyCountMode(mode) {
