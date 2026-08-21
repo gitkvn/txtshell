@@ -1281,13 +1281,18 @@ kbd {
   50% { opacity: 1; }
 }
 
-.entry-card.is-multi-selected {
-  background: color-mix(in srgb, var(--paper) 86%, var(--accent) 14%);
-  box-shadow: inset 3px 0 0 var(--accent);
+/* Search-result cards are shift-click multi-selectable. Without this, a
+   shift-click extends the browser's native text selection on mousedown
+   (before our click handler can preventDefault), painting ragged highlight
+   runs over the card on top of .is-multi-selected. Blocks are the selection
+   unit here; users expand/copy a block to get at its text. */
+.search-mode .entry-card {
+  -webkit-user-select: none;
+  user-select: none;
 }
 
-.entry-card.is-multi-selected.is-selected {
-  background: color-mix(in srgb, var(--paper) 80%, var(--accent) 20%);
+.entry-card.is-multi-selected {
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .modal-overlay {
