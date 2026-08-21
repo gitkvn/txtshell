@@ -43,6 +43,7 @@ const RE_TAGS = /(^|\s)#([a-z0-9_-]+)/g;
 const RE_MENTIONS = /(^|\s)@([a-z0-9_-]+)/g;
 const RE_EDITOR_TOKEN = /(^|\s)([#@][a-z0-9_-]*)$/i;
 const RE_WHITESPACE = /\s+/;
+const RE_URL = /(?:https?:\/\/|www\.)[^\s<>"']+/gi;
 const RE_ESCAPE = /[.*+?^${}()|[\]\\]/g;
 
 const HINTS_KEY = "txtshell-hints-v1";
@@ -76,6 +77,7 @@ const SLASH_COMMANDS = [
   { name: "/re", description: "Reopen your most recent block" },
   { name: "/t", description: "Show blocks saved today" },
   { name: "/ta", description: "Show blocks created or edited today" },
+  { name: "/otd", description: "On this day: blocks from today's date in earlier months and years" },
   { name: "/w", description: "Show blocks saved during the last week" },
   { name: "/wa", description: "Show blocks created or edited in the last 7 days" },
   { name: "/y", description: "Show blocks saved yesterday" },
@@ -851,6 +853,17 @@ function submitComposer() {
     return;
   }
 
+  if (text === "/otd") {
+    state.search = "";
+    state.preset = "otd";
+    openSearchMode();
+    setEditorValue("");
+    clearDraft();
+    composerHint.textContent = "On this day";
+    render();
+    return;
+  }
+
   if (text === "/y") {
     state.search = "";
     state.preset = "yesterday";
@@ -1236,6 +1249,8 @@ function render() {
       entryList.innerHTML = '<p class="empty-state">Nothing saved yet. Write something and press <kbd>\u2318</kbd>/<kbd>Ctrl</kbd> + <kbd>Enter</kbd> to save your first block.</p>';
     } else if (state.preset === "pinned") {
       entryList.innerHTML = '<p class="empty-state">Nothing pinned yet. Use ☆ on a block to pin it.</p>';
+    } else if (state.preset === "otd") {
+      entryList.innerHTML = '<p class="empty-state">Nothing saved on this day of an earlier month or year yet. Check back as your notebook grows.</p>';
     } else {
       entryList.innerHTML = '<p class="empty-state">No blocks in this view.</p>';
     }
@@ -1246,6 +1261,8 @@ function render() {
     selectResults: true,
     highlightTerm: getActiveHighlightTerm(),
     mode: "search",
+    // "On this day" spans months, so group by month instead of recency.
+    groupLabel: state.preset === "otd" ? getMonthYearLabel : getDateGroup,
   });
 }
 
@@ -1513,6 +1530,9 @@ function getEntriesForQuery({ preset = null, search = "" } = {}) {
     }
     if (preset === "today") {
       return isToday(entry.createdAt);
+    }
+    if (preset === "otd") {
+      return isOnThisDay(entry.createdAt);
     }
     if (preset === "today-all") {
       return isToday(entry.createdAt) || (entry.editedAt && isToday(entry.editedAt));
@@ -1933,6 +1953,9 @@ function getSearchModeLabel(count) {
   if (state.preset === "today") {
     return `Today${suffix}`;
   }
+  if (state.preset === "otd") {
+    return `On this day${suffix}`;
+  }
   if (state.preset === "today-all") {
     return `Today (all activity)${suffix}`;
   }
@@ -2024,6 +2047,10 @@ function updateWordCount() {
   }
 }
 
+function getMonthYearLabel(dateString) {
+  return new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(new Date(dateString));
+}
+
 function getDateGroup(dateString) {
   const date = new Date(dateString);
   const now = new Date();
@@ -2040,11 +2067,11 @@ function getDateGroup(dateString) {
 }
 
 function renderEntries(container, entries, options = {}) {
-  const { selectResults = false, highlightTerm = "", mode = "search" } = options;
+  const { selectResults = false, highlightTerm = "", mode = "search", groupLabel = getDateGroup } = options;
   let lastGroup = null;
 
   entries.forEach((entry) => {
-    const group = getDateGroup(entry.createdAt);
+    const group = groupLabel(entry.createdAt);
     if (group !== lastGroup) {
       const divider = document.createElement("p");
       divider.className = "date-group-label";
@@ -2059,7 +2086,7 @@ function renderEntries(container, entries, options = {}) {
     const tagsContainer = fragment.querySelector(".entry-tags");
     const expandButton = fragment.querySelector(".expand-button");
     fragment.querySelector(".entry-timestamp").textContent = formatTimestamp(entry.createdAt);
-    body.innerHTML = highlightMatches(entry.text, highlightTerm);
+    body.innerHTML = renderBlockHtml(entry.text, highlightTerm);
     card.dataset.entryId = entry.id;
 
     if (selectResults && entry.id === state.selectedEntryId) {
@@ -2075,6 +2102,8 @@ function renderEntries(container, entries, options = {}) {
         if (!event.shiftKey) {
           return;
         }
+        // Links are deliberately not excluded: Shift+click on one selects the
+        // block (preventDefault below also stops Safari's "Add to Reading List").
         if (event.target.closest(".pin-button, .edit-button, .copy-button, .delete-button, .expand-button, .tag-chip")) {
           return;
         }
@@ -2160,6 +2189,9 @@ function renderEntries(container, entries, options = {}) {
 
       if (selectResults) {
         card.addEventListener("click", (event) => {
+          if (event.target.closest("a")) {
+            return;
+          }
           if (window.getSelection().toString()) {
             return;
           }
@@ -2794,6 +2826,38 @@ function getActiveHighlightTerm() {
   return state.search.trim();
 }
 
+// Escapes block text, highlights search terms, and turns http(s):// and
+// www. URLs into links. URLs are split out before escaping/highlighting so
+// <mark> tags and entities inside them can't corrupt the href.
+function renderBlockHtml(text, highlightTerm) {
+  let html = "";
+  let last = 0;
+  for (const match of text.matchAll(RE_URL)) {
+    let url = match[0];
+    // Trailing punctuation belongs to the sentence, not the URL; a closing
+    // paren is kept only when the URL itself opened one (Wikipedia-style).
+    while (url.length) {
+      const lastChar = url[url.length - 1];
+      if (".,;:!?'\"".includes(lastChar)) {
+        url = url.slice(0, -1);
+        continue;
+      }
+      if (lastChar === ")" && url.split("(").length < url.split(")").length) {
+        url = url.slice(0, -1);
+        continue;
+      }
+      break;
+    }
+    const start = match.index;
+    html += highlightMatches(text.slice(last, start), highlightTerm);
+    const href = url.toLowerCase().startsWith("www.") ? `https://${url}` : url;
+    html += `<a class="entry-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${highlightMatches(url, highlightTerm)}</a>`;
+    last = start + url.length;
+  }
+  html += highlightMatches(text.slice(last), highlightTerm);
+  return html;
+}
+
 function highlightMatches(text, term) {
   // Longest terms first so "notebook" wins over "note" in the alternation.
   const terms = parseSearchTerms(term).sort((a, b) => b.length - a.length);
@@ -3065,6 +3129,16 @@ function beginEncryptedImport(fileData) {
   state.vaultPending = { importFileData: fileData };
   state.vaultView = "import-unlock";
   renderVault();
+}
+
+// Same day of the month as today, in any earlier month or year.
+function isOnThisDay(value) {
+  const date = new Date(value);
+  const now = new Date();
+  if (date.getDate() !== now.getDate()) {
+    return false;
+  }
+  return date.getFullYear() < now.getFullYear() || date.getMonth() < now.getMonth();
 }
 
 function isToday(value) {

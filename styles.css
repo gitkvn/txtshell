@@ -823,6 +823,18 @@ kbd {
   opacity: 0.96;
 }
 
+.entry-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+.entry-link:hover,
+.entry-link:focus-visible {
+  text-decoration-color: var(--accent);
+}
+
 .entry-body mark {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
   color: inherit;
@@ -992,6 +1004,7 @@ kbd {
 .entry-card.collapsed .entry-body::after {
   content: "";
   display: block;
+  pointer-events: none;
   height: 1.8em;
   margin-top: -1.8em;
   background: linear-gradient(to bottom, color-mix(in srgb, var(--bg) 0%, transparent), color-mix(in srgb, var(--bg) 86%, transparent));

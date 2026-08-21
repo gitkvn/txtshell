@@ -8,7 +8,7 @@
     <link rel="icon" type="image/svg+xml" href="./logo-shell.svg" />
     <!-- Bump ?v= on every deploy that changes the file — index.html is no-cache,
          so a new URL forces browsers past any stale cached copy. -->
-    <link rel="stylesheet" href="./styles.css?v=20260821-4" />
+    <link rel="stylesheet" href="./styles.css?v=20260821-5" />
     <!-- Decides before first paint whether the first-visit intro overlay shows,
          so neither first-timers nor returning users see a flash. -->
     <script src="./intro-boot.js?v=20260817"></script>
@@ -178,6 +178,7 @@
             <p><code>/re</code> -> reopen your most recent saved block in the editor</p>
             <p><code>/t</code> -> show blocks saved today</p>
             <p><code>/ta</code> -> show blocks created or edited today</p>
+            <p><code>/otd</code> -> on this day: blocks from today's date in earlier months and years</p>
             <p><code>/y</code> -> show blocks saved yesterday</p>
             <p><code>/ya</code> -> show blocks created or edited yesterday</p>
             <p><code>/w</code> -> show blocks saved during the last week</p>
@@ -212,6 +213,7 @@
             <p>Several words -> only blocks containing all of them; mix in <code>#tag</code> or <code>@name</code> to narrow further</p>
             <p><kbd>↑</kbd>/<kbd>↓</kbd> -> move through results</p>
             <p><kbd>Enter</kbd> -> expand or collapse the selected result</p>
+            <p>Links in blocks are clickable -> they open in a new tab</p>
             <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⌫</kbd> -> delete the selected block</p>
             <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>C</kbd> -> copy the selected block (or the whole multi-selection)</p>
             <p><kbd>Shift</kbd> + <kbd>⏎</kbd> -> edit the selected block</p>
@@ -333,6 +335,6 @@
     </template>
 
     <script src="./qrcode.js" integrity="sha384-74+AUd6tbAWrmm+GTFCXAWWFlqfuBEui1i9+CR7l70syLHvWFw8UwtK7zdW19BZI" crossorigin="anonymous"></script>
-    <script src="./app.js?v=20260821-2"></script>
+    <script src="./app.js?v=20260821-3"></script>
   </body>
 </html>
