@@ -2556,7 +2556,25 @@ function getPaletteItems() {
     return getTagPaletteItems(value);
   }
   const lowered = value.toLowerCase();
-  return SLASH_COMMANDS.filter((cmd) => cmd.name.startsWith(lowered));
+  // Bare "/" keeps declaration order (/about first for newcomers).
+  if (lowered === "/") {
+    return SLASH_COMMANDS.slice();
+  }
+  // With a prefix, rank by closeness to it, not declaration order: exact
+  // match first, then shorter names, then alphabetical. Otherwise "/w"
+  // would pre-select /wipe (declared before /w) and Enter would fill the
+  // composer with the destructive command instead of the one typed.
+  return SLASH_COMMANDS.filter((cmd) => cmd.name.startsWith(lowered)).sort((a, b) => {
+    const aExact = a.name === lowered;
+    const bExact = b.name === lowered;
+    if (aExact !== bExact) {
+      return aExact ? -1 : 1;
+    }
+    if (a.name.length !== b.name.length) {
+      return a.name.length - b.name.length;
+    }
+    return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+  });
 }
 
 function getTagPaletteItems(value) {
