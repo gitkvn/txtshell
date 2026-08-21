@@ -8,7 +8,7 @@
     <link rel="icon" type="image/svg+xml" href="./logo-shell.svg" />
     <!-- Bump ?v= on every deploy that changes the file — index.html is no-cache,
          so a new URL forces browsers past any stale cached copy. -->
-    <link rel="stylesheet" href="./styles.css?v=20260821-3" />
+    <link rel="stylesheet" href="./styles.css?v=20260821-4" />
     <!-- Decides before first paint whether the first-visit intro overlay shows,
          so neither first-timers nor returning users see a flash. -->
     <script src="./intro-boot.js?v=20260817"></script>
@@ -118,6 +118,7 @@
         <div class="search-mode-header">
           <p id="searchModeLabel" class="search-mode-label">Search saved blocks</p>
           <div class="search-mode-actions">
+            <button id="copySelectedButton" class="undo-button" type="button" hidden></button>
             <button id="mergeSelectedButton" class="undo-button" type="button" hidden></button>
             <button id="deleteSelectedButton" class="undo-button" type="button" hidden></button>
             <button id="searchUndoDeleteButton" class="undo-button" type="button" hidden>Undo delete</button>
@@ -146,7 +147,7 @@
           <div class="qr-group">
             <p><strong>Useful commands</strong></p>
             <p><code>/re</code> reopens your latest block for editing</p>
-            <p><code>/y</code> shows yesterday's blocks</p>
+            <p><code>/t</code> shows today's blocks, <code>/y</code> yesterday's</p>
             <p><code>/w</code> shows last week</p>
             <p><code>/pin</code> shows pinned blocks</p>
             <p><code>/q</code> opens the full shortcut reference</p>
@@ -175,6 +176,8 @@
           <div class="qr-group">
             <p><strong>Commands</strong></p>
             <p><code>/re</code> -> reopen your most recent saved block in the editor</p>
+            <p><code>/t</code> -> show blocks saved today</p>
+            <p><code>/ta</code> -> show blocks created or edited today</p>
             <p><code>/y</code> -> show blocks saved yesterday</p>
             <p><code>/ya</code> -> show blocks created or edited yesterday</p>
             <p><code>/w</code> -> show blocks saved during the last week</p>
@@ -206,12 +209,14 @@
             <p><strong>Search</strong></p>
             <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>K</kbd> -> open search</p>
             <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>H</kbd> -> open this reference sheet</p>
+            <p>Several words -> only blocks containing all of them; mix in <code>#tag</code> or <code>@name</code> to narrow further</p>
             <p><kbd>↑</kbd>/<kbd>↓</kbd> -> move through results</p>
             <p><kbd>Enter</kbd> -> expand or collapse the selected result</p>
             <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⌫</kbd> -> delete the selected block</p>
+            <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>C</kbd> -> copy the selected block (or the whole multi-selection)</p>
             <p><kbd>Shift</kbd> + <kbd>⏎</kbd> -> edit the selected block</p>
-            <p><kbd>Shift</kbd> + click on a result -> select multiple (for merge or delete)</p>
-            <p><kbd>Esc</kbd> -> close search</p>
+            <p><kbd>Shift</kbd> + click or <kbd>Shift</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd> -> select multiple (for copy, merge or delete)</p>
+            <p><kbd>Esc</kbd> -> clear the multi-selection, then close search</p>
           </div>
           <div class="qr-group">
             <p><strong>Toolbar</strong></p>
@@ -302,7 +307,10 @@
     <template id="entryTemplate">
       <article class="entry-card collapsed">
         <header class="entry-meta">
-          <span class="entry-timestamp"></span>
+          <span class="entry-meta-left">
+            <span class="entry-timestamp"></span>
+            <span class="entry-stats" hidden></span>
+          </span>
           <div class="entry-actions">
             <button class="pin-button" type="button" aria-label="Pin block" aria-pressed="false" title="Pin block">
               ☆
@@ -325,6 +333,6 @@
     </template>
 
     <script src="./qrcode.js" integrity="sha384-74+AUd6tbAWrmm+GTFCXAWWFlqfuBEui1i9+CR7l70syLHvWFw8UwtK7zdW19BZI" crossorigin="anonymous"></script>
-    <script src="./app.js?v=20260821-1"></script>
+    <script src="./app.js?v=20260821-2"></script>
   </body>
 </html>

@@ -74,6 +74,8 @@ const SLASH_COMMANDS = [
   { name: "/pin", description: "Show only pinned blocks" },
   { name: "/q", description: "Open the full shortcut reference" },
   { name: "/re", description: "Reopen your most recent block" },
+  { name: "/t", description: "Show blocks saved today" },
+  { name: "/ta", description: "Show blocks created or edited today" },
   { name: "/w", description: "Show blocks saved during the last week" },
   { name: "/wa", description: "Show blocks created or edited in the last 7 days" },
   { name: "/y", description: "Show blocks saved yesterday" },
@@ -157,6 +159,7 @@ const findReplaceCount = document.querySelector("#findReplaceCount");
 const findReplaceReplaceButton = document.querySelector("#findReplaceReplaceButton");
 const findReplaceReplaceAllButton = document.querySelector("#findReplaceReplaceAllButton");
 const findReplaceCloseButton = document.querySelector("#findReplaceCloseButton");
+const copySelectedButton = document.querySelector("#copySelectedButton");
 const mergeSelectedButton = document.querySelector("#mergeSelectedButton");
 const mergeModal = document.querySelector("#mergeModal");
 const mergeModalBackdrop = document.querySelector("#mergeModalBackdrop");
@@ -409,6 +412,10 @@ searchUndoDeleteButton.addEventListener("click", () => {
   undoDelete();
 });
 
+copySelectedButton.addEventListener("click", () => {
+  copySelectedEntries();
+});
+
 mergeSelectedButton.addEventListener("click", () => {
   openMergeModal();
 });
@@ -549,6 +556,13 @@ function escapeToComposer() {
     return;
   }
   if (state.searchMode) {
+    // A live multi-selection is cleared first; the next Esc closes search.
+    if (state.selectedEntries.size) {
+      state.selectedEntries.clear();
+      composerHint.textContent = "Selection cleared";
+      render();
+      return;
+    }
     closeSearchMode();
     return;
   }
@@ -812,6 +826,28 @@ function submitComposer() {
   }
 
   if (openSearchFromQueryMarker()) {
+    return;
+  }
+
+  if (text === "/t") {
+    state.search = "";
+    state.preset = "today";
+    openSearchMode();
+    setEditorValue("");
+    clearDraft();
+    composerHint.textContent = "Today";
+    render();
+    return;
+  }
+
+  if (text === "/ta") {
+    state.search = "";
+    state.preset = "today-all";
+    openSearchMode();
+    setEditorValue("");
+    clearDraft();
+    composerHint.textContent = "Today (all activity)";
+    render();
     return;
   }
 
@@ -1172,11 +1208,14 @@ function render() {
   pruneStaleSelections();
   const selectionCount = state.selectedEntries.size;
   if (selectionCount >= 2) {
+    copySelectedButton.hidden = false;
+    copySelectedButton.textContent = `Copy selected (${selectionCount})`;
     mergeSelectedButton.hidden = false;
     mergeSelectedButton.textContent = `Merge selected (${selectionCount})`;
     deleteSelectedButton.hidden = false;
     deleteSelectedButton.textContent = `Delete selected (${selectionCount})`;
   } else {
+    copySelectedButton.hidden = true;
     mergeSelectedButton.hidden = true;
     deleteSelectedButton.hidden = true;
   }
@@ -1195,6 +1234,8 @@ function render() {
       entryList.innerHTML = '<p class="empty-state">No matching blocks.</p>';
     } else if (!state.entries.length) {
       entryList.innerHTML = '<p class="empty-state">Nothing saved yet. Write something and press <kbd>\u2318</kbd>/<kbd>Ctrl</kbd> + <kbd>Enter</kbd> to save your first block.</p>';
+    } else if (state.preset === "pinned") {
+      entryList.innerHTML = '<p class="empty-state">Nothing pinned yet. Use ☆ on a block to pin it.</p>';
     } else {
       entryList.innerHTML = '<p class="empty-state">No blocks in this view.</p>';
     }
@@ -1458,10 +1499,23 @@ function getFilteredEntries() {
   return getEntriesForQuery({ preset: state.preset, search: state.search });
 }
 
+// Split a query into whitespace-separated terms; a block must match every
+// term (AND). "#tag" / "@name" terms match tags/mentions exactly, anything
+// else is a case-insensitive substring of the block text.
+function parseSearchTerms(search) {
+  return (search || "").toLowerCase().trim().split(RE_WHITESPACE).filter(Boolean);
+}
+
 function getEntriesForQuery({ preset = null, search = "" } = {}) {
   const filtered = state.entries.filter((entry) => {
     if (preset === "quickref" || preset === "about") {
       return false;
+    }
+    if (preset === "today") {
+      return isToday(entry.createdAt);
+    }
+    if (preset === "today-all") {
+      return isToday(entry.createdAt) || (entry.editedAt && isToday(entry.editedAt));
     }
     if (preset === "yesterday") {
       return isYesterday(entry.createdAt);
@@ -1481,20 +1535,23 @@ function getEntriesForQuery({ preset = null, search = "" } = {}) {
     if (preset === "recent") {
       return entry.id === state.entries[0]?.id;
     }
-    if (!search) {
+    const terms = parseSearchTerms(search);
+    if (!terms.length) {
       return true;
     }
-    const normalizedSearch = search.toLowerCase();
-    if (normalizedSearch.startsWith("#")) {
-      return (entry.tags || []).includes(normalizedSearch.slice(1));
-    }
-    if (normalizedSearch.startsWith("@")) {
-      return (entry.mentions || []).includes(normalizedSearch.slice(1));
-    }
-    return entry.text.toLowerCase().includes(normalizedSearch);
+    const loweredText = entry.text.toLowerCase();
+    return terms.every((term) => {
+      if (term.startsWith("#")) {
+        return (entry.tags || []).includes(term.slice(1));
+      }
+      if (term.startsWith("@")) {
+        return (entry.mentions || []).includes(term.slice(1));
+      }
+      return loweredText.includes(term);
+    });
   });
 
-  if (preset === "yesterday-all" || preset === "week-all") {
+  if (preset === "today-all" || preset === "yesterday-all" || preset === "week-all") {
     filtered.sort((a, b) => {
       const aMax = a.editedAt || a.createdAt;
       const bMax = b.editedAt || b.createdAt;
@@ -1518,6 +1575,12 @@ function syncSelection(entries) {
 }
 
 function handleSearchKeyboard(event) {
+  if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && (event.key === "c" || event.key === "C")) {
+    if (copySelectionViaKeyboard(event)) {
+      return;
+    }
+  }
+
   if ((event.metaKey || event.ctrlKey) && event.shiftKey && (event.key === "e" || event.key === "E") && state.selectedEntryId) {
     event.preventDefault();
     reopenEntryInEditor(state.selectedEntryId);
@@ -1566,15 +1629,15 @@ function handleSearchKeyboard(event) {
     entries.findIndex((entry) => entry.id === state.selectedEntryId),
   );
 
-  if (event.key === "ArrowDown") {
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     event.preventDefault();
-    moveSelection(entries[Math.min(currentIndex + 1, entries.length - 1)].id);
-    return;
-  }
-
-  if (event.key === "ArrowUp") {
-    event.preventDefault();
-    moveSelection(entries[Math.max(currentIndex - 1, 0)].id);
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    const nextIndex = Math.min(Math.max(currentIndex + step, 0), entries.length - 1);
+    if (event.shiftKey) {
+      extendMultiSelect(entries[currentIndex].id, entries[nextIndex].id);
+      return;
+    }
+    moveSelection(entries[nextIndex].id);
     return;
   }
 
@@ -1619,6 +1682,60 @@ function moveSelection(newId) {
 function scrollSelectedIntoView() {
   const selectedCard = entryList.querySelector(".entry-card.is-selected");
   selectedCard?.scrollIntoView({ block: "nearest" });
+}
+
+// Shift+↑/↓ grows the multi-selection from the keyboard: the focused block and
+// the one moved to both join the set, mirroring Shift+click.
+function extendMultiSelect(fromId, toId) {
+  state.selectedEntries.add(fromId);
+  state.selectedEntries.add(toId);
+  state.selectedEntryId = toId;
+  render();
+  scrollSelectedIntoView();
+}
+
+// Cmd/Ctrl+C in search copies the multi-selection, or else the focused block,
+// but only when there's no text selection — drag-selected text keeps native copy.
+function copySelectionViaKeyboard(event) {
+  if (event.target === searchInput && searchInput.selectionStart !== searchInput.selectionEnd) {
+    return false;
+  }
+  if (window.getSelection().toString()) {
+    return false;
+  }
+  if (state.selectedEntries.size >= 2) {
+    event.preventDefault();
+    copySelectedEntries();
+    return true;
+  }
+  const entry = state.entries.find((item) => item.id === state.selectedEntryId);
+  if (!entry) {
+    return false;
+  }
+  event.preventDefault();
+  copyBlockText(entry.text, "Block copied", entryList.querySelector(".entry-card.is-selected .copy-button"));
+  return true;
+}
+
+async function copyBlockText(text, hint, button) {
+  try {
+    await navigator.clipboard.writeText(text);
+    composerHint.textContent = hint;
+    flashCopied(button);
+  } catch {
+    composerHint.textContent = "Copy failed";
+  }
+}
+
+// Joins the multi-selected blocks (in list order) with a blank line between.
+function copySelectedEntries() {
+  pruneStaleSelections();
+  const selected = state.entries.filter((entry) => state.selectedEntries.has(entry.id));
+  if (!selected.length) {
+    return;
+  }
+  const text = selected.map((entry) => entry.text).join("\n\n");
+  copyBlockText(text, `Copied ${selected.length} blocks`, copySelectedButton);
 }
 
 function flashCopied(button) {
@@ -1813,6 +1930,12 @@ function getSearchModeLabel(count) {
   if (state.preset === "quickref") {
     return "Quick reference";
   }
+  if (state.preset === "today") {
+    return `Today${suffix}`;
+  }
+  if (state.preset === "today-all") {
+    return `Today (all activity)${suffix}`;
+  }
   if (state.preset === "yesterday") {
     return `Yesterday${suffix}`;
   }
@@ -1998,6 +2121,13 @@ function renderEntries(container, entries, options = {}) {
     }
 
     const isLongEntry = entry.text.length > 280 || entry.text.split("\n").length > 6;
+    if (isLongEntry) {
+      // Shown only while expanded (CSS hides it on .collapsed cards).
+      const words = entry.text.trim() ? entry.text.trim().split(RE_WHITESPACE).length : 0;
+      const stats = fragment.querySelector(".entry-stats");
+      stats.textContent = `${words} ${words === 1 ? "word" : "words"}`;
+      stats.hidden = false;
+    }
     if (!isLongEntry) {
       card.classList.remove("collapsed");
       expandButton.hidden = true;
@@ -2068,16 +2198,9 @@ function renderEntries(container, entries, options = {}) {
       }
     });
 
-    fragment.querySelector(".copy-button").addEventListener("click", async (event) => {
+    fragment.querySelector(".copy-button").addEventListener("click", (event) => {
       event.stopPropagation();
-      const button = event.currentTarget;
-      try {
-        await navigator.clipboard.writeText(entry.text);
-        composerHint.textContent = "Block copied";
-        flashCopied(button);
-      } catch {
-        composerHint.textContent = "Copy failed";
-      }
+      copyBlockText(entry.text, "Block copied", event.currentTarget);
     });
     fragment.querySelector(".edit-button").addEventListener("click", (event) => {
       event.stopPropagation();
@@ -2522,18 +2645,24 @@ function applyCommand(name) {
   renderCommandPalette();
 }
 
+// Suggestions complete the term being typed (the last one), so a multi-term
+// query like "#work @ja" still offers mentions starting with "ja".
 function getSearchSuggestions() {
   if (!state.search) {
     return [];
   }
 
-  return getStructuredSuggestions(state.search);
+  const terms = state.search.split(RE_WHITESPACE);
+  return getStructuredSuggestions(terms[terms.length - 1]);
 }
 
 function applySuggestion(suggestion) {
-  state.search = suggestion;
+  const terms = state.search.split(RE_WHITESPACE);
+  terms[terms.length - 1] = suggestion;
+  const nextSearch = terms.join(" ");
+  state.search = nextSearch;
   state.selectedSuggestionIndex = 0;
-  searchInput.value = suggestion;
+  searchInput.value = nextSearch;
   render();
 }
 
@@ -2666,18 +2795,15 @@ function getActiveHighlightTerm() {
 }
 
 function highlightMatches(text, term) {
-  if (!term) {
+  // Longest terms first so "notebook" wins over "note" in the alternation.
+  const terms = parseSearchTerms(term).sort((a, b) => b.length - a.length);
+  if (!terms.length) {
     return escapeHtml(text);
   }
 
-  const normalizedTerm = term.startsWith("#") ? term : term;
-  const escapedTerm = escapeRegExp(normalizedTerm);
-  if (!escapedTerm) {
-    return escapeHtml(text);
-  }
-
+  const pattern = terms.map(escapeRegExp).join("|");
   return escapeHtml(text).replace(
-    new RegExp(`(${escapedTerm})`, "gi"),
+    new RegExp(`(${pattern})`, "gi"),
     "<mark>$1</mark>",
   );
 }
@@ -2939,6 +3065,17 @@ function beginEncryptedImport(fileData) {
   state.vaultPending = { importFileData: fileData };
   state.vaultView = "import-unlock";
   renderVault();
+}
+
+function isToday(value) {
+  const date = new Date(value);
+  const now = new Date();
+
+  return (
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  );
 }
 
 function isYesterday(value) {
