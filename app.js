@@ -1226,6 +1226,7 @@ function closeSearchMode() {
   searchMode.hidden = true;
   composerForm.hidden = false;
   state.preset = null;
+  state.selectedEntryId = null;
   state.selectedEntries.clear();
   closeMergeModal();
   closeDeleteModal();
