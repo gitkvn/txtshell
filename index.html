@@ -8,7 +8,7 @@
     <link rel="icon" type="image/svg+xml" href="./logo-shell.svg" />
     <!-- Bump ?v= on every deploy that changes the file — index.html is no-cache,
          so a new URL forces browsers past any stale cached copy. -->
-    <link rel="stylesheet" href="./styles.css?v=20260821-5" />
+    <link rel="stylesheet" href="./styles.css?v=20260821-9" />
     <!-- Decides before first paint whether the first-visit intro overlay shows,
          so neither first-timers nor returning users see a flash. -->
     <script src="./intro-boot.js?v=20260817"></script>
@@ -51,6 +51,7 @@
           placeholder="Type /about and press enter to get started"
         ></textarea>
         <section id="commandPalette" class="command-palette" hidden role="listbox" aria-label="Slash commands"></section>
+        <section id="symPalette" class="sym-palette" hidden aria-label="Symbol palette"></section>
         <section id="editorSuggestions" class="editor-suggestions" hidden aria-label="Editor suggestions"></section>
         <section id="vaultOverlay" class="vault-overlay" hidden aria-live="polite"></section>
         <section id="inboxView" class="inbox-view" hidden aria-live="polite">
@@ -188,6 +189,7 @@
             <p><code>/import</code> -> import blocks from an export file</p>
             <p><code>/500</code> -> set a word/char/line count target (Esc to clear)</p>
             <p><code>/font 12</code> -> set note font size for the editor and saved blocks (11–24px); <code>/font reset</code> restores the 14px default</p>
+            <p><code>/sym</code> -> chemistry &amp; math symbol palette: click to insert ₂ → Δ ²⁺ as plain text; <code>H_2O</code> → H₂O, <code>Ca^2+</code> → Ca²⁺, <code>∫_0^1</code> → ∫₀¹, <code>∫_a^b</code> → ∫ₐᵇ, <code>∑_{n=1}^{2n}</code>, <code>e^{-x}</code> → e⁻ˣ via its convert button (∞ and π have no small glyph and stay as typed). Type <code>;;</code> (after a space or at a line start) or press <kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>.</kbd> to toggle it mid-note</p>
             <p><code>/q</code> -> open this help sheet</p>
           </div>
           <div class="qr-group">
@@ -335,6 +337,6 @@
     </template>
 
     <script src="./qrcode.js" integrity="sha384-74+AUd6tbAWrmm+GTFCXAWWFlqfuBEui1i9+CR7l70syLHvWFw8UwtK7zdW19BZI" crossorigin="anonymous"></script>
-    <script src="./app.js?v=20260821-5"></script>
+    <script src="./app.js?v=20260821-9"></script>
   </body>
 </html>

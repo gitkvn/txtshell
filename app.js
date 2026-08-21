@@ -6,6 +6,8 @@ const DRAFT_KEY = "draft";
 const THEME_KEY = "txtshell-theme-v1";
 const WORD_COUNT_KEY = "txtshell-word-count-v1";
 const EDITOR_FONT_SIZE_KEY = "txtshell-editor-font-size";
+const SYM_RECENT_KEY = "txtshell-sym-recent-v1";
+const SYM_RECENT_MAX = 10;
 const EDITOR_FONT_SIZE_MIN = 11;
 const EDITOR_FONT_SIZE_MAX = 24;
 
@@ -88,6 +90,7 @@ const SLASH_COMMANDS = [
   { name: "/pull", description: "Fetch the latest blocks from cloud" },
   { name: "/inbox", description: "Triage captures synced from your phone" },
   { name: "/font", description: "Set note font size in px (11–24, default 14); /font reset restores default" },
+  { name: "/sym", description: "Chemistry & math symbol palette (₂ → Δ ²⁺); ;; or ⌘. toggles it anywhere" },
 ];
 const SLASH_COMMAND_NAMES = new Set(SLASH_COMMANDS.map((cmd) => cmd.name));
 // Commands that accept an argument after a space ("/font 12"). Their Enter
@@ -122,6 +125,7 @@ const composerForm = document.querySelector("#composerForm");
 const entryInput = document.querySelector("#entryInput");
 const editorSuggestions = document.querySelector("#editorSuggestions");
 const commandPalette = document.querySelector("#commandPalette");
+const symPalette = document.querySelector("#symPalette");
 const entryList = document.querySelector("#entryList");
 const searchInput = document.querySelector("#searchInput");
 const searchInputLabel = document.querySelector("#searchInputLabel");
@@ -539,6 +543,10 @@ function escapeToComposer() {
     closeFindReplace();
     return;
   }
+  if (!symPalette.hidden) {
+    closeSymPalette();
+    return;
+  }
 
   // Vault cards: dismiss the sync/pairing cards introduced for this flow. The unlock
   // gate and other explicit flows keep their own controls. While any vault card is
@@ -594,6 +602,13 @@ function escapeToComposer() {
 }
 
 entryInput.addEventListener("keydown", (event) => {
+  // Formula shorthand is opt-in: only while /sym is open does a space convert
+  // the token before the caret (H_2O -> H₂O). Never preventDefault — the
+  // space still lands after the converted token.
+  if (event.key === " " && !symPalette.hidden && !(event.isComposing || event.keyCode === 229)) {
+    convertMarkerTokenBeforeCaret();
+  }
+
   if (handleEditorSuggestionKeyboard(event)) {
     return;
   }
@@ -722,7 +737,10 @@ entryInput.addEventListener("keydown", (event) => {
   }
 });
 
-entryInput.addEventListener("input", () => {
+entryInput.addEventListener("input", (event) => {
+  if (consumeSymPaletteSigil(event)) {
+    return;
+  }
   composerHint.textContent = state.editingEntryId ? "Editing block -> save updates" : "Ready";
   queueDraftSave();
   updateWordCount();
@@ -910,6 +928,14 @@ function submitComposer() {
 
   if (text === "/re") {
     reopenEntryInEditor(getMostRecentlyEditedEntryId());
+    return;
+  }
+
+  if (text === "/sym") {
+    setEditorValue("");
+    clearDraft();
+    render();
+    openSymPalette();
     return;
   }
 
@@ -1191,6 +1217,12 @@ function handleGlobalShortcut(event) {
       return;
     }
     openFindReplace();
+    return;
+  }
+
+  if (key === "." && !event.shiftKey) {
+    event.preventDefault();
+    toggleSymPalette();
     return;
   }
 
@@ -5960,3 +5992,298 @@ function renderInboxView() {
     });
   });
 }
+
+// ---------------------------------------------------------------------------
+// /sym — chemistry & math symbol palette. Everything it inserts is a literal
+// Unicode character, so blocks stay plain text: they save, encrypt, search,
+// and export exactly like typed text. No markup, no renderer.
+// ---------------------------------------------------------------------------
+
+const SYMBOL_GROUPS = [
+  { label: "Subscripts", symbols: ["₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉", "ₙ", "ₓ"] },
+  { label: "Superscripts", symbols: ["⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹", "⁺", "⁻", "ⁿ"] },
+  { label: "Arrows", symbols: ["→", "⇌", "↑", "↓", "⇋", "⟶"] },
+  { label: "Greek", symbols: ["α", "β", "γ", "Δ", "δ", "ε", "θ", "λ", "μ", "π", "ρ", "σ", "Ω", "φ"] },
+  { label: "Math / misc", symbols: ["°", "·", "×", "÷", "±", "≈", "≤", "≥", "≠", "√", "∞", "∴"] },
+  // Multi-character keys ("lim", "dy/dx") are plain text too — there's no
+  // single glyph for them, so they insert as the literal string.
+  { label: "Calculus", symbols: ["∫", "∬", "∭", "∮", "∂", "∇", "∑", "∏", "′", "″", "∝", "lim", "→∞", "dy/dx"] },
+];
+
+// Every sub/superscript glyph Unicode actually has. Subscript letters are
+// sparse (no b c d f g q w y z), and neither row has ∞, π, or →, which is why
+// conversion is all-or-nothing per group below: a limit we can't fully render
+// stays exactly as typed rather than half-rendered.
+const SUBSCRIPT_CHARS = {
+  0: "₀", 1: "₁", 2: "₂", 3: "₃", 4: "₄", 5: "₅", 6: "₆", 7: "₇", 8: "₈", 9: "₉",
+  "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎",
+  a: "ₐ", e: "ₑ", h: "ₕ", i: "ᵢ", j: "ⱼ", k: "ₖ", l: "ₗ", m: "ₘ", n: "ₙ", o: "ₒ", p: "ₚ",
+  r: "ᵣ", s: "ₛ", t: "ₜ", u: "ᵤ", v: "ᵥ", x: "ₓ",
+};
+const SUPERSCRIPT_CHARS = {
+  0: "⁰", 1: "¹", 2: "²", 3: "³", 4: "⁴", 5: "⁵", 6: "⁶", 7: "⁷", 8: "⁸", 9: "⁹",
+  "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾",
+  a: "ᵃ", b: "ᵇ", c: "ᶜ", d: "ᵈ", e: "ᵉ", f: "ᶠ", g: "ᵍ", h: "ʰ", i: "ⁱ", j: "ʲ", k: "ᵏ", l: "ˡ",
+  m: "ᵐ", n: "ⁿ", o: "ᵒ", p: "ᵖ", r: "ʳ", s: "ˢ", t: "ᵗ", u: "ᵘ", v: "ᵛ", w: "ʷ", x: "ˣ", y: "ʸ", z: "ᶻ",
+};
+const BIG_OPERATORS = "∫∬∭∮∑∏";
+
+// Map every character of `group`, or return null if any has no glyph.
+function mapScript(group, marker) {
+  const table = marker === "_" ? SUBSCRIPT_CHARS : SUPERSCRIPT_CHARS;
+  let out = "";
+  for (const ch of group) {
+    if (!(ch in table)) {
+      return null;
+    }
+    out += table[ch];
+  }
+  return out;
+}
+
+// Explicit markers only, LaTeX-shaped, three tiers from most to least permissive:
+//   1. After a big operator (∫ ∑ …): _ or ^ takes a brace group, a digit/sign
+//      run, or a single letter  →  ∫_0^1 ⇒ ∫₀¹, ∫_a^b ⇒ ∫ₐᵇ, ∑_{n=1}^{2n}.
+//   2. Anywhere: a brace group  →  e^{-x} ⇒ e⁻ˣ, x_{ij} ⇒ xᵢⱼ.
+//   3. Anywhere: _ + digits, ^ + digits/signs  →  H_2O ⇒ H₂O, Ca^2+ ⇒ Ca²⁺.
+// Letters outside braces or operators never convert, so some_variable, a^b and
+// e^x stay as typed. Each group converts all-or-nothing (∫_0^∞ ⇒ ∫₀^∞).
+function convertSymbolMarkers(text) {
+  const convertGroup = (whole, marker, group) => {
+    const inner = group.startsWith("{") ? group.slice(1, -1) : group;
+    const mapped = mapScript(inner, marker);
+    return mapped === null ? whole : mapped;
+  };
+  return text
+    .replace(new RegExp(`([${BIG_OPERATORS}])((?:[_^](?:\\{[^{}]+\\}|[0-9+\\-=]+|[A-Za-z]))+)`, "g"),
+      (_, op, markers) => op + markers.replace(/([_^])(\{[^{}]+\}|[0-9+\-=]+|[A-Za-z])/g, convertGroup))
+    .replace(/([_^])(\{[^{}]+\})/g, convertGroup)
+    .replace(/(_)(\d+)/g, convertGroup)
+    .replace(/(\^)([0-9+\-]+)/g, convertGroup);
+}
+
+function loadRecentSymbols() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SYM_RECENT_KEY));
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter((item) => typeof item === "string" && item.length > 0).slice(0, SYM_RECENT_MAX);
+  } catch {
+    return [];
+  }
+}
+
+function rememberRecentSymbol(symbol) {
+  const recent = [symbol, ...loadRecentSymbols().filter((item) => item !== symbol)].slice(0, SYM_RECENT_MAX);
+  try {
+    window.localStorage.setItem(SYM_RECENT_KEY, JSON.stringify(recent));
+  } catch {
+    // localStorage may be unavailable (private mode); the palette still works
+  }
+  return recent;
+}
+
+function symbolKeyHtml(symbol) {
+  const safe = escapeHtml(symbol);
+  return `<button class="sym-key" type="button" data-sym="${safe}" aria-label="Insert ${safe}">${safe}</button>`;
+}
+
+function renderSymRecent(recent = loadRecentSymbols()) {
+  const container = symPalette.querySelector('[data-sym-recent]');
+  if (!container) {
+    return;
+  }
+  container.innerHTML = recent.length
+    ? recent.map(symbolKeyHtml).join("")
+    : '<span class="sym-recent-empty">symbols you use will appear here</span>';
+}
+
+function renderSymPalette() {
+  const sections = SYMBOL_GROUPS.map((group) => `
+    <div class="sym-section">
+      <p class="sym-section-label">${escapeHtml(group.label)}</p>
+      <div class="sym-grid">${group.symbols.map(symbolKeyHtml).join("")}</div>
+    </div>`).join("");
+
+  symPalette.innerHTML = `
+    <div class="sym-palette-header">
+      <span class="sym-palette-title">Symbols</span>
+      <span class="sym-palette-hint">click to insert at the cursor · Esc closes · type ;; or ⌘/Ctrl+. to toggle anytime</span>
+      <button class="sym-palette-close" type="button" data-action="close" aria-label="Close symbol palette">Close</button>
+    </div>
+    <div class="sym-section sym-section-recent">
+      <p class="sym-section-label">Recently used</p>
+      <div class="sym-grid" data-sym-recent></div>
+    </div>
+    ${sections}
+    <div class="sym-palette-footer">
+      <button class="sym-convert" type="button" data-action="convert">Convert _ / ^ markers in this block</button>
+      <span class="sym-palette-status" data-sym-status aria-live="polite"></span>
+      <span class="sym-palette-hint">H_2O → H₂O · Ca^2+ → Ca²⁺ · ∫_0^1 → ∫₀¹ · ∫_a^b → ∫ₐᵇ · ∑_{n=1}^{2n} · e^{-x} → e⁻ˣ · ∞ and π have no small glyph, so ∫_0^∞ → ∫₀^∞ · while open, a space after the token converts it</span>
+    </div>
+  `;
+  renderSymRecent();
+}
+
+function openSymPalette() {
+  renderSymPalette();
+  symPalette.hidden = false;
+  // Feedback stays inside the palette (see setSymStatus): the bottom status
+  // toast is fixed-position and would sit over the lowest row of keys.
+  composerHint.textContent = "Ready";
+  focusComposer();
+}
+
+let symStatusTimer = null;
+function setSymStatus(message) {
+  const status = symPalette.querySelector("[data-sym-status]");
+  if (!status) {
+    return;
+  }
+  status.textContent = message;
+  window.clearTimeout(symStatusTimer);
+  symStatusTimer = window.setTimeout(() => {
+    status.textContent = "";
+  }, 4000);
+}
+
+function closeSymPalette() {
+  symPalette.hidden = true;
+  composerHint.textContent = "Ready";
+  focusComposer();
+}
+
+// Toggle from anywhere the composer is usable (Cmd/Ctrl+. and the ";;" sigil).
+// Search mode, the inbox, and the vault gate own the screen then; do nothing.
+function toggleSymPalette() {
+  if (isVaultLocked() || state.searchMode || isInboxOpen() || state.vaultView || !findReplaceBar.hidden) {
+    return;
+  }
+  if (symPalette.hidden) {
+    openSymPalette();
+  } else {
+    closeSymPalette();
+  }
+}
+
+// ";;" typed at the start of a line or after whitespace toggles the palette
+// mid-note, without clearing the composer the way /sym does. The sigil is
+// consumed so it never lands in the block; "x;;y" (no boundary) and pasted
+// text are left alone. Returns true when it fired so the caller can bail —
+// the removal dispatches its own input event for the normal bookkeeping.
+const SYM_SIGIL = ";;";
+function consumeSymPaletteSigil(event) {
+  const type = event?.inputType;
+  if (type && type !== "insertText" && type !== "insertCompositionText") {
+    return false;
+  }
+  const caret = entryInput.selectionStart;
+  if (caret === null || caret !== entryInput.selectionEnd || caret < SYM_SIGIL.length) {
+    return false;
+  }
+  const value = entryInput.value;
+  if (value.slice(caret - SYM_SIGIL.length, caret) !== SYM_SIGIL) {
+    return false;
+  }
+  const before = value[caret - SYM_SIGIL.length - 1];
+  if (before !== undefined && !/\s/.test(before)) {
+    return false;
+  }
+  replaceComposerRange(caret - SYM_SIGIL.length, caret, "");
+  toggleSymPalette();
+  return true;
+}
+
+// Replace [start, end) in the composer with `text`, leaving the caret after it.
+// execCommand keeps the edit on the native undo stack and fires the composer's
+// own input event; the setRangeText fallback dispatches one so draft save,
+// word count, and palette state update exactly as if the text were typed.
+function replaceComposerRange(start, end, text) {
+  const expected = entryInput.value.slice(0, start) + text + entryInput.value.slice(end);
+  entryInput.focus();
+  entryInput.setSelectionRange(start, end);
+  let done = false;
+  try {
+    done = text ? document.execCommand("insertText", false, text) : document.execCommand("delete");
+  } catch {
+    done = false;
+  }
+  if (!done || entryInput.value !== expected) {
+    entryInput.value = expected;
+    entryInput.setSelectionRange(start + text.length, start + text.length);
+    entryInput.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  const caret = start + text.length;
+  entryInput.setSelectionRange(caret, caret);
+}
+
+function insertSymbol(symbol) {
+  if (entryInput.disabled) {
+    return;
+  }
+  const start = entryInput.selectionStart ?? entryInput.value.length;
+  const end = entryInput.selectionEnd ?? start;
+  replaceComposerRange(start, end, symbol);
+  renderSymRecent(rememberRecentSymbol(symbol));
+}
+
+function convertMarkersInComposer() {
+  const text = entryInput.value;
+  const converted = convertSymbolMarkers(text);
+  if (converted === text) {
+    entryInput.focus();
+    setSymStatus("No _ or ^ markers to convert");
+    return;
+  }
+  const caret = entryInput.selectionStart ?? text.length;
+  replaceComposerRange(0, text.length, converted);
+  const newCaret = convertSymbolMarkers(text.slice(0, caret)).length;
+  entryInput.setSelectionRange(newCaret, newCaret);
+  setSymStatus("Converted _ / ^ markers");
+}
+
+function convertMarkerTokenBeforeCaret() {
+  const start = entryInput.selectionStart;
+  if (start === null || start !== entryInput.selectionEnd) {
+    return;
+  }
+  const before = entryInput.value.slice(0, start);
+  const tokenStart = before.search(/\S+$/);
+  if (tokenStart === -1) {
+    return;
+  }
+  const token = before.slice(tokenStart);
+  if (!/[_^]/.test(token)) {
+    return;
+  }
+  const converted = convertSymbolMarkers(token);
+  if (converted !== token) {
+    replaceComposerRange(tokenStart, start, converted);
+  }
+}
+
+// Keep focus (and the caret) in the composer when a palette key is pressed:
+// cancelling pointerdown/mousedown stops the button from taking focus, while
+// the click still fires. This is what makes building "2H₂ + O₂ → 2H₂O" fluid.
+["pointerdown", "mousedown"].forEach((type) => {
+  symPalette.addEventListener(type, (event) => {
+    if (event.target.closest("button")) {
+      event.preventDefault();
+    }
+  });
+});
+
+symPalette.addEventListener("click", (event) => {
+  const key = event.target.closest(".sym-key");
+  if (key) {
+    insertSymbol(key.dataset.sym);
+    return;
+  }
+  const action = event.target.closest("[data-action]")?.dataset.action;
+  if (action === "close") {
+    closeSymPalette();
+  } else if (action === "convert") {
+    convertMarkersInComposer();
+  }
+});
