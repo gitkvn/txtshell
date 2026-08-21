@@ -1291,6 +1291,13 @@ kbd {
   user-select: none;
 }
 
+/* ...but the note text itself stays selectable so a word or line can be
+   drag-selected and copied without opening the block in the editor. */
+.search-mode .entry-card .entry-body {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .entry-card.is-multi-selected {
   box-shadow: inset 3px 0 0 var(--accent);
 }
