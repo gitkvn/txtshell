@@ -1322,6 +1322,11 @@ function reopenEntryInEditor(entryId) {
   if (!state.encryption.enabled) {
     saveMeta(DRAFT_KEY, entry.text);
   }
+  // Reopen paths (/re, /-tag, Shift+Enter, Edit) replace the editor value
+  // without going through render(), so the command palette and #/@ popover
+  // would otherwise keep showing whatever was matched before the reopen.
+  commandPalette.hidden = true;
+  editorSuggestions.hidden = true;
   closeSearchMode();
   composerHint.textContent = "Editing block -> save updates";
   entryInput.focus();
