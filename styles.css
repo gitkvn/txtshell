@@ -1588,11 +1588,37 @@ kbd {
   word-break: break-all;
 }
 
-/* First-visit intro overlay. intro-boot.js (in <head>) adds .show-intro to
-   <html> before first paint when the intro flag is unset; .is-open is the
-   JS-driven /about replay path. Sits above every other surface (max z
-   elsewhere is 40). */
+/* ============================================================
+   FIRST-VISIT INTRO OVERLAY — redesigned with a consistent
+   type scale and spacing rhythm. All sizes/spaces derive from
+   the scales below so nothing is arbitrary.
+
+   TYPE SCALE (mono display + sans body):
+     --intro-display : clamp(1.35rem,2.4vw,1.7rem)  headline / section title
+     --intro-lead    : 1.0625rem (17px)   proof + section lead (one step above body)
+     --intro-body    : 0.9375rem (15px)   descriptive copy (strip values, tier copy)
+     --intro-label   : 0.8125rem (13px)   mono eyebrows / kickers / prices / footer
+     --intro-tiny    : 0.75rem (12px)      tier numbers
+
+   SPACING RHYTHM (vertical):
+     --intro-s1: 8px  --intro-s2: 16px  --intro-s3: 24px
+     --intro-s4: 40px --intro-s5: 64px
+   Sections separate by s5, elements within by s2/s3, tight pairs by s1.
+   ============================================================ */
+
 .intro-overlay {
+  --intro-display: clamp(1.35rem, 2.4vw, 1.7rem);
+  --intro-lead: 1.0625rem;
+  --intro-body: 0.9375rem;
+  --intro-label: 0.8125rem;
+  --intro-tiny: 0.75rem;
+
+  --intro-s1: 8px;
+  --intro-s2: 16px;
+  --intro-s3: 24px;
+  --intro-s4: 40px;
+  --intro-s5: 64px;
+
   position: fixed;
   inset: 0;
   z-index: 60;
@@ -1615,27 +1641,31 @@ html.show-intro .intro-overlay,
 }
 
 .intro-inner {
-  max-width: 860px;
+  max-width: 780px;
   margin: 0 auto;
-  padding: 28px 28px 48px;
+  padding: var(--intro-s3) var(--intro-s3) var(--intro-s5);
 }
 
+/* --- brand --- */
 .intro-brand {
   display: flex;
   align-items: center;
   gap: 10px;
   font-family: var(--font-mono);
   font-weight: 600;
-  font-size: 15px;
+  font-size: var(--intro-lead);
   letter-spacing: -0.01em;
 }
 
 .intro-brand img {
+  width: 26px;
+  height: 26px;
   border-radius: 7px;
 }
 
+/* --- hero --- */
 .intro-hero {
-  padding: 44px 0 8px;
+  padding-top: var(--intro-s5);
 }
 
 .intro-headline {
@@ -1643,7 +1673,7 @@ html.show-intro .intro-overlay,
   max-width: 30ch;
   font-family: var(--font-mono);
   font-weight: 500;
-  font-size: clamp(1.3rem, 2.4vw, 1.7rem);
+  font-size: var(--intro-display);
   line-height: 1.35;
   letter-spacing: -0.01em;
 }
@@ -1665,9 +1695,9 @@ html.show-intro .intro-overlay,
 }
 
 .intro-proof {
-  margin: 22px 0 0;
-  max-width: 48ch;
-  font-size: clamp(0.98rem, 1.4vw, 1.1rem);
+  margin: var(--intro-s2) 0 0;
+  max-width: 52ch;
+  font-size: var(--intro-lead);
   line-height: 1.5;
   color: var(--muted);
 }
@@ -1676,21 +1706,21 @@ html.show-intro .intro-overlay,
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 18px;
-  margin-top: 34px;
+  gap: var(--intro-s2);
+  margin-top: var(--intro-s3);
 }
 
 .intro-start {
   display: inline-flex;
   align-items: center;
   gap: 9px;
-  padding: 13px 22px;
+  padding: 12px 20px;
   border: none;
   border-radius: var(--radius);
   background: var(--ink);
   color: var(--paper);
   font-family: var(--font-mono);
-  font-size: 15px;
+  font-size: var(--intro-body);
   font-weight: 500;
   cursor: pointer;
   transition: transform 0.12s ease;
@@ -1709,14 +1739,16 @@ html.show-intro .intro-overlay,
 }
 
 .intro-ghost {
-  font-size: 14px;
+  font-family: var(--font-mono);
+  font-size: var(--intro-label);
   color: var(--muted);
 }
 
+/* --- proof strip --- */
 .intro-strip {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  margin-top: 46px;
+  margin-top: var(--intro-s5);
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -1724,7 +1756,7 @@ html.show-intro .intro-overlay,
 }
 
 .intro-strip-cell {
-  padding: 26px 24px;
+  padding: var(--intro-s3);
 }
 
 .intro-strip-cell:not(:last-child) {
@@ -1732,27 +1764,29 @@ html.show-intro .intro-overlay,
 }
 
 .intro-k {
-  margin: 0 0 8px;
+  margin: 0 0 var(--intro-s1);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--intro-label);
   letter-spacing: 0.03em;
   color: var(--muted);
 }
 
 .intro-v {
   margin: 0;
-  font-size: 14.5px;
-  line-height: 1.5;
+  font-size: var(--intro-body);
+  line-height: 1.55;
+  color: var(--ink);
 }
 
+/* --- how it works --- */
 .intro-how {
-  padding: 52px 0 0;
+  padding-top: var(--intro-s5);
 }
 
 .intro-sec-eyebrow {
-  margin: 0 0 14px;
+  margin: 0 0 var(--intro-s2);
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--intro-label);
   letter-spacing: 0.04em;
   color: var(--accent);
 }
@@ -1761,39 +1795,40 @@ html.show-intro .intro-overlay,
   margin: 0;
   max-width: 28ch;
   font-family: var(--font-mono);
-  font-size: clamp(1.15rem, 2vw, 1.45rem);
+  font-size: var(--intro-display);
   font-weight: 500;
   line-height: 1.35;
   letter-spacing: -0.01em;
 }
 
 .intro-sec-lead {
-  margin: 14px 0 0;
-  max-width: 58ch;
-  font-size: 16px;
+  margin: var(--intro-s2) 0 0;
+  max-width: 56ch;
+  font-size: var(--intro-lead);
+  line-height: 1.5;
   color: var(--muted);
 }
 
 .intro-tiers {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-  margin-top: 30px;
+  gap: var(--intro-s2);
+  margin-top: var(--intro-s3);
 }
 
 .intro-tier {
   display: flex;
   flex-direction: column;
-  padding: 22px 20px 24px;
+  padding: var(--intro-s3);
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 14px;
 }
 
 .intro-tier-num {
-  margin-bottom: 12px;
+  margin-bottom: var(--intro-s2);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--intro-tiny);
   color: var(--muted);
 }
 
@@ -1802,38 +1837,42 @@ html.show-intro .intro-overlay,
   align-items: baseline;
   gap: 8px;
   margin: 0;
-  font-size: 16px;
+  font-family: var(--font-mono);
+  font-size: var(--intro-body);
   font-weight: 600;
 }
 
 .intro-tier p {
-  margin: 8px 0 0;
-  font-size: 14px;
+  margin: var(--intro-s1) 0 0;
+  font-size: var(--intro-body);
   line-height: 1.55;
   color: var(--muted);
 }
 
 .intro-tier-price {
   margin-top: auto;
-  padding-top: 16px;
+  padding-top: var(--intro-s2);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--intro-label);
+  color: var(--ink);
 }
 
 .intro-soon {
   color: var(--muted);
 }
 
+/* --- footer --- */
 .intro-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
-  margin-top: 56px;
-  padding-top: 24px;
+  margin-top: var(--intro-s5);
+  padding-top: var(--intro-s3);
   border-top: 1px solid var(--line);
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-size: var(--intro-label);
   color: var(--muted);
 }
 
@@ -1869,7 +1908,6 @@ html.show-intro .intro-overlay,
   .intro-strip {
     grid-template-columns: 1fr;
   }
-
   .intro-strip-cell:not(:last-child) {
     border-right: none;
     border-bottom: 1px solid var(--line);
@@ -1888,7 +1926,6 @@ html.show-intro .intro-overlay,
   .intro-arr {
     transition: none;
   }
-
   .intro-caret {
     animation: none;
   }

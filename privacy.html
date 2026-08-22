@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Privacy Policy — Txtshell</title>
+<meta name="description" content="How Txtshell handles your data — which is to say, as little as cryptographically possible." />
+<style>
+  :root {
+    --bg: #f5f3ee; --paper: #fffdf8; --ink: #171717; --muted: #68635b;
+    --line: #ddd6ca; --accent: #1f6feb; --radius: 10px;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "SFMono-Regular", "Menlo", "Consolas", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--ink); font-family: var(--font-sans); line-height: 1.65; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 32px 24px 80px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-family: var(--font-mono); font-weight: 600; font-size: 1.0625rem; letter-spacing: -0.01em; margin-bottom: 48px; text-decoration: none; color: var(--ink); }
+  .brand img { width: 26px; height: 26px; border-radius: 7px; }
+  h1 { font-family: var(--font-mono); font-weight: 500; font-size: clamp(1.35rem, 2.4vw, 1.7rem); letter-spacing: -0.01em; margin-bottom: 8px; }
+  .updated { font-family: var(--font-mono); font-size: 0.8125rem; color: var(--muted); margin-bottom: 40px; }
+  h2 { font-family: var(--font-mono); font-weight: 500; font-size: 1.0625rem; margin: 40px 0 12px; letter-spacing: -0.01em; }
+  p { margin: 0 0 16px; font-size: 0.9375rem; }
+  ul { margin: 0 0 16px; padding-left: 22px; }
+  li { font-size: 0.9375rem; margin-bottom: 8px; }
+  strong { font-weight: 600; }
+  a { color: var(--accent); }
+  .lead { font-size: 1.0625rem; color: var(--muted); margin-bottom: 8px; }
+  .note { font-family: var(--font-mono); font-size: 0.8125rem; color: var(--muted); background: var(--paper); border: 1px solid var(--line); border-left: 2px solid var(--accent); border-radius: var(--radius); padding: 16px 18px; margin: 24px 0; }
+  footer { margin-top: 56px; padding-top: 24px; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.8125rem; color: var(--muted); display: flex; gap: 20px; flex-wrap: wrap; }
+  footer a { color: var(--muted); text-decoration: none; }
+  footer a:hover { color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="brand" href="/">
+    <img src="/logo-shell.svg" alt="" />
+    txtshell
+  </a>
+
+  <h1>Privacy Policy</h1>
+  <p class="updated">Last updated: 22 August 2026</p>
+
+  <p class="lead">Txtshell is built so that we handle as little of your data as cryptographically possible. This policy explains what that means in practice.</p>
+
+  <div class="note">Summary: Your notes are encrypted on your device with a key that never leaves it. We cannot read them. When you use local-only mode, nothing you write is sent to us at all.</div>
+
+  <h2>Your notes</h2>
+  <p>By default, Txtshell runs entirely in your browser. Your notes are stored locally on your device (in your browser's storage) and encrypted with a key derived from your passphrase or passkey. <strong>That key never leaves your device and is never sent to us.</strong></p>
+  <p>In local-only mode, your notes are never transmitted anywhere. We do not receive, store, or have any ability to read them.</p>
+
+  <h2>If you use sync</h2>
+  <p>Txtshell offers optional sync so your notes can appear across your devices. Sync is designed to be end-to-end encrypted: what leaves your device is a block of encrypted data with no key attached. Whoever stores that data — whether that is you (self-hosted) or us (cloud sync) — receives only ciphertext they cannot decrypt.</p>
+  <ul>
+    <li><strong>Self-hosted sync:</strong> you run the sync server on your own cloud account. Your encrypted data never touches our infrastructure. We have no involvement in or access to it.</li>
+    <li><strong>Cloud sync (coming soon):</strong> we store your encrypted data on our servers so it can sync between your devices. We store only ciphertext; we do not hold your encryption key and cannot read your notes. To operate this service we process limited account information — see below.</li>
+  </ul>
+
+  <h2>Account information (cloud sync only)</h2>
+  <p>If and when you sign up for paid cloud sync, we process the minimum information needed to run the service:</p>
+  <ul>
+    <li><strong>Email address</strong> — to create your account, sign you in, and send service-related messages.</li>
+    <li><strong>Authentication data</strong> — passkey/credential identifiers used to log you in. We do not store passwords.</li>
+    <li><strong>Subscription/billing data</strong> — handled by our payment processor; we do not store your full card details.</li>
+    <li><strong>Encrypted note data</strong> — stored as ciphertext we cannot read.</li>
+  </ul>
+  <p>We do not sell your data, and we do not use it to build advertising profiles.</p>
+
+  <h2>Analytics</h2>
+  <p>We may use privacy-respecting, aggregate analytics to understand overall traffic and usage (for example, how many people visit). These do not identify you personally and do not access your notes.</p>
+
+  <h2>What we cannot do</h2>
+  <p>Because your notes are encrypted with a key we never hold, there are things we are simply unable to do, even if compelled: we cannot read your notes, we cannot recover them if you lose your passphrase and recovery key, and we cannot hand your readable notes to anyone. This is a property of the cryptography, not just a promise.</p>
+
+  <h2>Your rights</h2>
+  <p>Depending on your location, you may have rights to access, correct, export, or delete the personal information we hold about you (such as your account email). Because your notes are stored and encrypted on your side, you already control them directly — you can export or delete them at any time from within the app. For account-level requests, contact us at the address below.</p>
+
+  <h2>Data retention</h2>
+  <p>Local notes remain on your device until you delete them. For cloud sync, encrypted data and account information are retained while your account is active and for a limited period after cancellation, after which they are deleted.</p>
+
+  <h2>Changes to this policy</h2>
+  <p>We may update this policy as the product evolves (for example, when cloud sync launches). Material changes will be reflected here with an updated date.</p>
+
+  <h2>Contact</h2>
+  <p>Questions about privacy? Contact us at <a href="mailto:hello@txtshell.com">hello@txtshell.com</a>.</p>
+
+  <footer>
+    <a href="/">Home</a>
+    <a href="/terms.html">Terms</a>
+    <a href="https://github.com/gitkvn/txtshell">Source</a>
+  </footer>
+</div>
+</body>
+</html>

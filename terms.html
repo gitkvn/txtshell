@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Terms of Service — Txtshell</title>
+<meta name="description" content="The terms for using Txtshell." />
+<style>
+  :root {
+    --bg: #f5f3ee; --paper: #fffdf8; --ink: #171717; --muted: #68635b;
+    --line: #ddd6ca; --accent: #1f6feb; --radius: 10px;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "SFMono-Regular", "Menlo", "Consolas", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--ink); font-family: var(--font-sans); line-height: 1.65; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 32px 24px 80px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-family: var(--font-mono); font-weight: 600; font-size: 1.0625rem; letter-spacing: -0.01em; margin-bottom: 48px; text-decoration: none; color: var(--ink); }
+  .brand img { width: 26px; height: 26px; border-radius: 7px; }
+  h1 { font-family: var(--font-mono); font-weight: 500; font-size: clamp(1.35rem, 2.4vw, 1.7rem); letter-spacing: -0.01em; margin-bottom: 8px; }
+  .updated { font-family: var(--font-mono); font-size: 0.8125rem; color: var(--muted); margin-bottom: 40px; }
+  h2 { font-family: var(--font-mono); font-weight: 500; font-size: 1.0625rem; margin: 40px 0 12px; letter-spacing: -0.01em; }
+  p { margin: 0 0 16px; font-size: 0.9375rem; }
+  ul { margin: 0 0 16px; padding-left: 22px; }
+  li { font-size: 0.9375rem; margin-bottom: 8px; }
+  strong { font-weight: 600; }
+  a { color: var(--accent); }
+  .lead { font-size: 1.0625rem; color: var(--muted); margin-bottom: 8px; }
+  .note { font-family: var(--font-mono); font-size: 0.8125rem; color: var(--muted); background: var(--paper); border: 1px solid var(--line); border-left: 2px solid var(--accent); border-radius: var(--radius); padding: 16px 18px; margin: 24px 0; }
+  footer { margin-top: 56px; padding-top: 24px; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.8125rem; color: var(--muted); display: flex; gap: 20px; flex-wrap: wrap; }
+  footer a { color: var(--muted); text-decoration: none; }
+  footer a:hover { color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="brand" href="/">
+    <img src="/logo-shell.svg" alt="" />
+    txtshell
+  </a>
+
+  <h1>Terms of Service</h1>
+  <p class="updated">Last updated: 22 August 2026</p>
+
+  <p class="lead">These terms cover your use of Txtshell. By using it, you agree to them.</p>
+
+  <div class="note">Plain-language summary: Txtshell is a notes app. Your notes are yours. We provide the software as-is, and because your notes are encrypted on your device, keeping your passphrase and recovery key safe is your responsibility — we cannot recover them.</div>
+
+  <h2>The service</h2>
+  <p>Txtshell is a local-first, end-to-end encrypted notes application. It can be used entirely on your own device for free, self-hosted on your own infrastructure, or (when available) with paid cloud sync.</p>
+
+  <h2>Your content</h2>
+  <p>You retain all rights to the notes and content you create in Txtshell. We do not claim ownership of your content, and because it is encrypted with a key we do not hold, we cannot access it. You are responsible for the content you create and for complying with applicable law in doing so.</p>
+
+  <h2>Your responsibility for keys and recovery</h2>
+  <p>Txtshell's encryption means that access to your notes depends on your passphrase, passkey, and/or recovery key. <strong>If you lose these, your notes cannot be recovered — not by you, and not by us.</strong> This is a deliberate consequence of the security model. You are responsible for safely storing your credentials and for keeping your own backups (for example, using the export feature).</p>
+
+  <h2>Acceptable use</h2>
+  <p>You agree not to use Txtshell to break the law, to infringe others' rights, or to attempt to disrupt, attack, or gain unauthorized access to the service or its infrastructure. For self-hosted deployments, you are responsible for your own instance and its use.</p>
+
+  <h2>Paid subscriptions (cloud sync)</h2>
+  <p>When paid cloud sync is available, the following apply:</p>
+  <ul>
+    <li>Fees, billing intervals, and any trial terms are shown at the point of purchase.</li>
+    <li>Subscriptions renew automatically unless cancelled before the renewal date.</li>
+    <li>You can cancel at any time; cancellation stops future billing and takes effect at the end of the current billing period.</li>
+    <li>Payments are handled by a third-party payment processor subject to its own terms.</li>
+  </ul>
+
+  <h2>Availability and changes</h2>
+  <p>We aim to keep Txtshell available and working, but we provide it on an "as-is" and "as-available" basis. We may modify, suspend, or discontinue features over time. Because the app is open source and can run locally or be self-hosted, you are never fully dependent on our hosted service to keep using your notes.</p>
+
+  <h2>Disclaimer and limitation of liability</h2>
+  <p>To the fullest extent permitted by law, Txtshell is provided without warranties of any kind, and we are not liable for any loss of data, loss of access, or other damages arising from your use of the service — including loss of notes resulting from lost credentials, which we cannot recover. Some jurisdictions do not allow certain limitations, so parts of this may not apply to you.</p>
+
+  <h2>Open source</h2>
+  <p>Txtshell's source code is publicly available. Your use of the source code is governed by the license published in the project repository.</p>
+
+  <h2>Changes to these terms</h2>
+  <p>We may update these terms as the product evolves. Material changes will be reflected here with an updated date; continued use after changes means you accept the updated terms.</p>
+
+  <h2>Contact</h2>
+  <p>Questions about these terms? Contact us at <a href="mailto:hello@txtshell.com">hello@txtshell.com</a>.</p>
+
+  <footer>
+    <a href="/">Home</a>
+    <a href="/privacy.html">Privacy</a>
+    <a href="https://github.com/gitkvn/txtshell">Source</a>
+  </footer>
+</div>
+</body>
+</html>
