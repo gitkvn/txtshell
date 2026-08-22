@@ -62,7 +62,7 @@ const TOAST_DURATION = 3000;
 const HINT_TOAST_DURATION = 6000;
 
 const COMPOSER_PLACEHOLDER_EMPTY = "Type /about and press enter to get started. Cmd/Ctrl+Enter saves a block. Use the Esc key anytime to come back here.";
-const COMPOSER_PLACEHOLDER_HAS_BLOCKS = "Type a block, or / for commands";
+const COMPOSER_PLACEHOLDER_HAS_BLOCKS = "Type a block, or / for commands. Cmd/Ctrl+Enter saves a block. Use the Esc key anytime to come back here.";
 
 const SLASH_COMMANDS = [
   { name: "/about", description: "First-time user guide" },
