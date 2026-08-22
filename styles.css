@@ -1594,8 +1594,9 @@ kbd {
    the scales below so nothing is arbitrary.
 
    TYPE SCALE (mono display + sans body):
-     --intro-display : clamp(1.35rem,2.4vw,1.7rem)  headline / section title
-     --intro-lead    : 1.0625rem (17px)   proof + section lead (one step above body)
+     --intro-display : clamp(1.2rem,2vw,1.45rem)    hero headline (largest)
+     --intro-section : clamp(1.05rem,1.6vw,1.2rem)  section titles (a step down)
+     --intro-lead    : 1.0625rem (17px)   proof + section lead
      --intro-body    : 0.9375rem (15px)   descriptive copy (strip values, tier copy)
      --intro-label   : 0.8125rem (13px)   mono eyebrows / kickers / prices / footer
      --intro-tiny    : 0.75rem (12px)      tier numbers
@@ -1607,7 +1608,8 @@ kbd {
    ============================================================ */
 
 .intro-overlay {
-  --intro-display: clamp(1.35rem, 2.4vw, 1.7rem);
+  --intro-display: clamp(1.2rem, 2vw, 1.45rem);
+  --intro-section: clamp(1.05rem, 1.6vw, 1.2rem);
   --intro-lead: 1.0625rem;
   --intro-body: 0.9375rem;
   --intro-label: 0.8125rem;
@@ -1795,7 +1797,7 @@ html.show-intro .intro-overlay,
   margin: 0;
   max-width: 28ch;
   font-family: var(--font-mono);
-  font-size: var(--intro-display);
+  font-size: var(--intro-section);
   font-weight: 500;
   line-height: 1.35;
   letter-spacing: -0.01em;
