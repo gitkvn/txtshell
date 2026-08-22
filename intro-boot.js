@@ -12,3 +12,24 @@
     // Storage unavailable -> skip the intro rather than trap the user in it.
   }
 })();
+
+// iOS Safari zooms the page when a field under 16px is focused (the 14px
+// composer, the find/modal/vault inputs) and keeps that zoom after blur, which
+// pushes the layout off the right edge and breaks the keyboard-float math.
+// maximum-scale=1 stops the focus-zoom; since iOS 10 Safari ignores it for
+// pinch-zoom, so accessibility zoom is unaffected. Applied on iOS only because
+// Android Chrome would honour it and lose pinch-zoom. iPadOS reports as
+// MacIntel, hence the touch-points check; desktop Macs report 0 and skip.
+(() => {
+  try {
+    const isIOS =
+      /iPad|iPhone|iPod/.test(navigator.platform) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const viewport = document.querySelector('meta[name="viewport"]');
+    if (isIOS && viewport && !/maximum-scale/.test(viewport.content)) {
+      viewport.content += ", maximum-scale=1";
+    }
+  } catch {
+    // Never let a platform quirk block the page.
+  }
+})();
