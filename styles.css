@@ -1795,7 +1795,7 @@ html.show-intro .intro-overlay,
 
 .intro-sec-title {
   margin: 0;
-  max-width: 28ch;
+  max-width: 30ch;
   font-family: var(--font-mono);
   font-size: var(--intro-section);
   font-weight: 500;
