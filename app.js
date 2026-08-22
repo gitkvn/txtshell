@@ -3,6 +3,8 @@ const DB_VERSION = 1;
 const ENTRY_STORE = "entries";
 const META_STORE = "meta";
 const DRAFT_KEY = "draft";
+// Unsaved new-block text displaced by a reopen (see stashComposerDraft).
+const DRAFT_STASH_KEY = "draft-stash";
 const THEME_KEY = "txtshell-theme-v1";
 const WORD_COUNT_KEY = "txtshell-word-count-v1";
 const EDITOR_FONT_SIZE_KEY = "txtshell-editor-font-size";
@@ -104,6 +106,7 @@ const state = {
   search: "",
   preset: null,
   editingEntryId: null,
+  stashedDraft: null,
   selectedEntryId: null,
   pendingDeletedEntries: null,
   selectedSuggestionIndex: 0,
@@ -147,6 +150,8 @@ const closeSearchButton = document.querySelector("#closeSearchButton");
 const statusToast = document.querySelector("#statusToast");
 const wordCountToggleButton = document.querySelector("#wordCountToggleButton");
 const themeToggleButton = document.querySelector("#themeToggleButton");
+const pinnedButton = document.querySelector("#pinnedButton");
+const pinnedPanel = document.querySelector("#pinnedPanel");
 const composerHint = document.querySelector("#composerHint");
 const currentDateTime = document.querySelector("#currentDateTime");
 const entryTemplate = document.querySelector("#entryTemplate");
@@ -220,7 +225,7 @@ window.addEventListener("pointerdown", (event) => {
     return;
   }
 
-  if (target.closest("#searchMode, .copy-button, #searchInput, #editorSuggestions, #commandPalette, #vaultOverlay, #lockButton, #findReplaceBar, #mergeModal, #deleteModal")) {
+  if (target.closest("#searchMode, .copy-button, #searchInput, #editorSuggestions, #commandPalette, #vaultOverlay, #lockButton, #findReplaceBar, #mergeModal, #deleteModal, #pinnedPanel, #pinnedButton")) {
     return;
   }
 
@@ -464,6 +469,10 @@ wordCountToggleButton.addEventListener("click", () => {
   applyCountMode(COUNT_MODES[nextIndex]);
 });
 
+pinnedButton.addEventListener("click", () => {
+  togglePinnedPanel();
+});
+
 themeToggleButton.addEventListener("click", () => {
   const nextTheme = document.body.dataset.theme === "dark" ? "light" : "dark";
   applyTheme(nextTheme);
@@ -543,6 +552,10 @@ function escapeToComposer() {
     closeFindReplace();
     return;
   }
+  if (!pinnedPanel.hidden) {
+    closePinnedPanel();
+    return;
+  }
   if (!symPalette.hidden) {
     closeSymPalette();
     return;
@@ -582,21 +595,24 @@ function escapeToComposer() {
     state.targetCount = null;
     updateWordCount();
   }
+  let restoredDraft = false;
   if (state.editingEntryId) {
     state.editingEntryId = null;
     setEditorValue("");
     clearDraft();
+    restoredDraft = restoreStashedDraft();
   } else if (entryInput.value.trim().startsWith("/")) {
     setEditorValue("");
     clearDraft();
   }
   state.commandPaletteDismissed = false;
-  composerHint.textContent = "Ready";
+  composerHint.textContent = restoredDraft ? "Draft restored" : "Ready";
   render();
 
   // Ensure transient chrome is hidden after the re-render, then land in the composer.
   commandPalette.hidden = true;
   editorSuggestions.hidden = true;
+  hidePinnedPanel();
   statusToast.classList.remove("is-visible", "is-hint");
   focusComposer();
 }
@@ -1167,7 +1183,7 @@ function submitComposer() {
       saveEntry(existingEntry);
       setEditorValue("");
       clearDraft();
-      composerHint.textContent = "Updated";
+      composerHint.textContent = restoreStashedDraft() ? "Updated · draft restored" : "Updated";
       state.editingEntryId = null;
       render();
       return;
@@ -1177,7 +1193,7 @@ function submitComposer() {
   createEntryFromText(text);
   setEditorValue("");
   clearDraft();
-  composerHint.textContent = "Saved";
+  composerHint.textContent = restoreStashedDraft() ? "Saved · draft restored" : "Saved";
   render();
 
   if (state.entries.length === 1) {
@@ -1300,6 +1316,7 @@ function render() {
 
 function openSearchMode() {
   state.searchMode = true;
+  hidePinnedPanel();
   searchMode.hidden = false;
   composerForm.hidden = true;
   syncSelection(getFilteredEntries());
@@ -1348,6 +1365,7 @@ function reopenEntryInEditor(entryId) {
     return;
   }
 
+  stashComposerDraft();
   state.editingEntryId = entry.id;
   setEditorValue(entry.text);
   // Same rule as queueDraftSave: never persist plaintext drafts while encrypted.
@@ -1359,6 +1377,7 @@ function reopenEntryInEditor(entryId) {
   // would otherwise keep showing whatever was matched before the reopen.
   commandPalette.hidden = true;
   editorSuggestions.hidden = true;
+  hidePinnedPanel();
   closeSearchMode();
   composerHint.textContent = "Editing block -> save updates";
   entryInput.focus();
@@ -1435,6 +1454,16 @@ async function initialize() {
       composerHint.textContent = "Draft restored";
       entryInput.setSelectionRange(entryInput.value.length, entryInput.value.length);
     }
+    // A stash outliving a reload means the page closed mid-edit. The draft
+    // (if any) keeps the composer; the stash comes back once it's saved or
+    // dismissed. With no draft waiting, restore the stash right away.
+    const stash = await getMeta(DRAFT_STASH_KEY);
+    if (stash) {
+      state.stashedDraft = stash;
+      if (!draft && restoreStashedDraft()) {
+        composerHint.textContent = "Draft restored";
+      }
+    }
     signalReady();
   } catch {
     composerHint.textContent = "Storage unavailable";
@@ -1456,6 +1485,46 @@ function queueDraftSave() {
 function clearDraft() {
   window.clearTimeout(draftSaveTimer);
   saveMeta(DRAFT_KEY, "");
+}
+
+// Reopen paths (/re, Edit, the pinned panel, /-tag, Shift+Enter) replace the
+// composer with a saved block. Unsaved new-block text that was there is kept
+// aside and put back when that edit ends (saved, Esc, or the block is
+// deleted) instead of being silently dropped. A "term //" marker is stripped
+// the way openSearchFromQueryMarker does; slash commands and an in-progress
+// edit of another block are not stashed (the latter's original is already
+// saved). Persisted next to the draft so a reload mid-edit keeps it; never
+// persisted while encrypted, same rule as queueDraftSave.
+function stashComposerDraft() {
+  if (state.editingEntryId) {
+    return;
+  }
+  let text = entryInput.value;
+  if (getInlineQuery()) {
+    text = text.trimEnd().slice(0, -2).trimEnd();
+  }
+  if (!text.trim() || text.trim().startsWith("/")) {
+    return;
+  }
+  state.stashedDraft = text;
+  if (!state.encryption.enabled) {
+    saveMeta(DRAFT_STASH_KEY, text);
+  }
+}
+
+function restoreStashedDraft() {
+  const text = state.stashedDraft;
+  if (!text) {
+    return false;
+  }
+  state.stashedDraft = null;
+  setEditorValue(text);
+  entryInput.setSelectionRange(text.length, text.length);
+  if (!state.encryption.enabled) {
+    saveMeta(DRAFT_STASH_KEY, "");
+    saveMeta(DRAFT_KEY, text);
+  }
+  return true;
 }
 
 function openDatabase() {
@@ -1538,6 +1607,7 @@ function deleteEntry(entryId) {
     state.editingEntryId = null;
     setEditorValue("");
     clearDraft();
+    restoreStashedDraft();
   }
   removeEntry(entryId);
   composerHint.textContent = "Block deleted";
@@ -1962,6 +2032,7 @@ function performBulkDelete() {
       state.editingEntryId = null;
       setEditorValue("");
       clearDraft();
+      restoreStashedDraft();
     }
   }
 
@@ -3595,8 +3666,10 @@ function lockVault() {
   state.selectedEntryId = null;
   state.editingEntryId = null;
   state.pendingDeletedEntries = null;
+  state.stashedDraft = null;
   setEditorValue("");
   clearDraft();
+  hidePinnedPanel();
   if (state.searchMode) {
     closeSearchMode();
   }
@@ -4573,6 +4646,7 @@ async function handleRecoveryConfirm() {
     }
 
     await deleteMeta(DRAFT_KEY);
+    await deleteMeta(DRAFT_STASH_KEY);
 
     state.vaultView = null;
     state.vaultPending = null;
@@ -6128,6 +6202,7 @@ function renderSymPalette() {
 
 function openSymPalette() {
   renderSymPalette();
+  hidePinnedPanel();
   symPalette.hidden = false;
   // Feedback stays inside the palette (see setSymStatus): the bottom status
   // toast is fixed-position and would sit over the lowest row of keys.
@@ -6286,4 +6361,132 @@ symPalette.addEventListener("click", (event) => {
   } else if (action === "convert") {
     convertMarkersInComposer();
   }
+});
+
+// Pinned-blocks panel: the ★ in the top bar lists pinned blocks, most
+// recently edited first, and a tap hands the block to reopenEntryInEditor —
+// the same path /re and Edit use. Lives at the top of the editor area
+// (under the star) and follows the /sym palette's open/close/Esc contract.
+function getFirstLine(text) {
+  const line = text.split("\n").map((part) => part.trim()).find(Boolean);
+  return line || "(empty block)";
+}
+
+function renderPinnedPanel() {
+  pinnedPanel.innerHTML = "";
+
+  const header = document.createElement("div");
+  header.className = "pinned-panel-header";
+  const title = document.createElement("span");
+  title.className = "pinned-panel-title";
+  title.textContent = "Pinned";
+  const hint = document.createElement("span");
+  hint.className = "pinned-panel-hint";
+  hint.textContent = "tap to open in the editor · Esc closes";
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "pinned-panel-close";
+  close.textContent = "Close";
+  close.setAttribute("aria-label", "Close pinned blocks");
+  close.addEventListener("click", closePinnedPanel);
+  header.append(title, hint, close);
+  pinnedPanel.appendChild(header);
+
+  const pinned = state.entries
+    .filter((entry) => entry.pinned === true)
+    .sort((a, b) => (b.editedAt || b.createdAt).localeCompare(a.editedAt || a.createdAt));
+
+  if (!pinned.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "Nothing pinned yet. Use ☆ on a saved block to pin it.";
+    pinnedPanel.appendChild(empty);
+    return;
+  }
+
+  const list = document.createElement("div");
+  list.className = "pinned-list";
+  pinned.forEach((entry) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "pinned-item";
+    const line = document.createElement("span");
+    line.className = "pinned-item-line";
+    line.textContent = getFirstLine(entry.text);
+    const when = document.createElement("span");
+    when.className = "pinned-item-when";
+    when.textContent = formatTimestamp(entry.createdAt);
+    item.append(line, when);
+    item.addEventListener("click", () => {
+      hidePinnedPanel();
+      reopenEntryInEditor(entry.id);
+    });
+    list.appendChild(item);
+  });
+  pinnedPanel.appendChild(list);
+
+  const footer = document.createElement("div");
+  footer.className = "pinned-panel-footer";
+  const all = document.createElement("button");
+  all.type = "button";
+  all.className = "pinned-panel-all";
+  all.textContent = "All pinned →";
+  all.addEventListener("click", () => {
+    // Same view as the /pin command, without touching the composer text.
+    state.search = "";
+    state.preset = "pinned";
+    openSearchMode();
+    composerHint.textContent = "Pinned";
+    render();
+  });
+  footer.appendChild(all);
+  pinnedPanel.appendChild(footer);
+}
+
+// Hide without moving focus — for callers that are about to place it
+// themselves (reopen, search mode, the Esc sweep).
+function hidePinnedPanel() {
+  pinnedPanel.hidden = true;
+  pinnedButton.classList.remove("is-active");
+  pinnedButton.setAttribute("aria-expanded", "false");
+}
+
+function openPinnedPanel() {
+  renderPinnedPanel();
+  symPalette.hidden = true;
+  pinnedPanel.hidden = false;
+  pinnedButton.classList.add("is-active");
+  pinnedButton.setAttribute("aria-expanded", "true");
+  focusComposer();
+}
+
+function closePinnedPanel() {
+  hidePinnedPanel();
+  focusComposer();
+}
+
+// Same reach as toggleSymPalette, except search mode is closed first so the
+// star works from anywhere the composer can be reached.
+function togglePinnedPanel() {
+  if (isVaultLocked() || isInboxOpen() || state.vaultView || !findReplaceBar.hidden) {
+    return;
+  }
+  if (!pinnedPanel.hidden) {
+    closePinnedPanel();
+    return;
+  }
+  if (state.searchMode) {
+    closeSearchMode();
+  }
+  openPinnedPanel();
+}
+
+// Keep focus (and the soft keyboard) in the composer while tapping rows.
+["pointerdown", "mousedown"].forEach((type) => {
+  pinnedPanel.addEventListener(type, (event) => {
+    if (event.target.closest("button")) {
+      event.preventDefault();
+    }
+  });
+  pinnedButton.addEventListener(type, (event) => event.preventDefault());
 });

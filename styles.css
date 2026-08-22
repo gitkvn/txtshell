@@ -2124,3 +2124,155 @@ body:has(.sym-palette:not([hidden])) .status-toast {
     font-size: 1.15rem;
   }
 }
+
+/* Pinned-blocks panel: opened by the ★ in the top bar, drops in directly
+   under it at the top of the editor area (not below the textarea like /sym)
+   so it stays visible on phones with the keyboard up. Same card treatment
+   as the command palette; rows reuse its two-column name/desc layout. */
+.pinned-panel {
+  margin: 6px 20px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper) 96%, var(--ink) 4%);
+  font-family: var(--font-sans);
+}
+
+.pinned-panel[hidden] {
+  display: none;
+}
+
+.pinned-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px 8px;
+}
+
+.pinned-panel-title {
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.pinned-panel-hint {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.pinned-panel-close {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 0.82rem;
+  font-family: var(--font-sans);
+}
+
+.pinned-panel-close:hover,
+.pinned-panel-close:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
+.pinned-list {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(7 * 38px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
+
+.pinned-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
+
+.pinned-item:last-child {
+  border-bottom: 0;
+}
+
+.pinned-item:hover,
+.pinned-item:focus-visible {
+  background: color-mix(in srgb, var(--paper) 92%, var(--accent) 12%);
+  color: var(--accent);
+  outline: none;
+}
+
+.pinned-item-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pinned-item-when {
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.pinned-item:hover .pinned-item-when,
+.pinned-item:focus-visible .pinned-item-when {
+  color: color-mix(in srgb, var(--accent) 70%, var(--muted));
+}
+
+.pinned-panel .empty-state {
+  margin: 0;
+  padding: 4px 12px 12px;
+}
+
+.pinned-panel-footer {
+  padding: 8px 12px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+.pinned-panel-all {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+  font-size: 0.82rem;
+  font-family: var(--font-sans);
+}
+
+.pinned-panel-all:hover,
+.pinned-panel-all:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
+@media (pointer: coarse) {
+  .pinned-item {
+    min-height: 44px;
+    align-items: center;
+  }
+}
+
+@media (max-width: 600px) {
+  .pinned-panel {
+    margin: 4px 12px 0;
+  }
+
+  .pinned-list {
+    max-height: 40vh;
+  }
+}
