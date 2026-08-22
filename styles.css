@@ -43,8 +43,13 @@ body {
   font-family: var(--font-sans);
 }
 
+/* iOS Safari: 100vh is the *large* viewport (toolbar collapsed), so a 100vh
+   layout overflows the screen by one toolbar on load and the bottom row hides
+   behind it. 100dvh tracks the toolbar as it collapses/expands; browsers
+   without dvh keep the 100vh fallback. On desktop they're equal. */
 body {
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 textarea,
@@ -54,8 +59,12 @@ button {
 
 .app-shell {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   grid-template-rows: auto auto minmax(280px, 1fr) auto;
+  /* Notch clearance in landscape (viewport-fit=cover); 0 everywhere else. */
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
 }
 
 .topbar {
@@ -64,6 +73,7 @@ button {
   justify-content: space-between;
   align-items: center;
   padding: 14px 20px 8px;
+  padding-top: calc(14px + env(safe-area-inset-top, 0px));
 }
 
 .topbar-actions {
@@ -231,6 +241,18 @@ button {
   caret-color: var(--accent);
 }
 
+/* Touch devices: with the soft keyboard up the visual viewport is roughly
+   half the screen, and a textarea taller than that makes WebKit reveal it by
+   aligning its top edge — scrolling the top bar off-screen. A smaller
+   minimum (in small-viewport units) keeps the composer inside the visible
+   area; the 1fr grid row still lets it grow when the keyboard is closed. */
+@media (pointer: coarse) {
+  #entryInput {
+    min-height: 40vh;
+    min-height: 40svh;
+  }
+}
+
 #entryInput::placeholder {
   color: #9a948a;
 }
@@ -309,6 +331,7 @@ button {
   align-items: center;
   gap: 16px;
   padding: 8px 24px;
+  padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   color: var(--muted);
@@ -590,7 +613,7 @@ kbd {
 .status-toast {
   position: fixed;
   left: 50%;
-  bottom: 0;
+  bottom: env(safe-area-inset-bottom, 0px);
   transform: translateX(-50%) translateY(100%);
   z-index: 30;
   max-width: min(320px, calc(100vw - 32px));
@@ -627,6 +650,8 @@ kbd {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   background: color-mix(in srgb, var(--bg) 96%, transparent);
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
 }
 
 .search-mode[hidden] {
@@ -1630,6 +1655,8 @@ kbd {
   color: var(--ink);
   line-height: 1.6;
   transition: opacity 0.22s ease;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
 }
 
 html.show-intro .intro-overlay,
