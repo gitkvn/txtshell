@@ -8,7 +8,7 @@
     <link rel="icon" type="image/svg+xml" href="./logo-shell.svg" />
     <!-- Bump ?v= on every deploy that changes the file — index.html is no-cache,
          so a new URL forces browsers past any stale cached copy. -->
-    <link rel="stylesheet" href="./styles.css?v=20260822-6" />
+    <link rel="stylesheet" href="./styles.css?v=20260822-9" />
     <!-- Decides before first paint whether the first-visit intro overlay shows,
          so neither first-timers nor returning users see a flash. -->
     <script src="./intro-boot.js?v=20260822-1"></script>
@@ -142,109 +142,136 @@
           <section id="searchSuggestions" class="search-suggestions" hidden aria-label="Search suggestions"></section>
         </div>
         <section id="entryList" class="entry-list" aria-live="polite"></section>
-        <section id="aboutGuide" class="quick-reference" hidden>
+        <section id="aboutGuide" class="quick-reference qr-guide" hidden>
           <div class="qr-group">
-            <p><strong>What is txtshell?</strong></p>
+            <p class="qr-title">What is txtshell?</p>
             <p>A fast, local-first text editor. Everything stays on your device — no accounts, no cloud, no tracking. Just type and save.</p>
           </div>
           <div class="qr-group">
-            <p><strong>How it works</strong></p>
-            <p>Type anything in the editor. Press <kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⏎</kbd> to save it as a block. That's the core loop — write, save, find later.</p>
+            <p class="qr-title">The core loop</p>
+            <p><strong>Write.</strong> Type anything in the editor. A block is one note — no title, no formatting, no folders.</p>
+            <p><strong>Save.</strong> Press <kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⏎</kbd>, or tap <strong>Save block</strong> below the editor.</p>
+            <p><strong>Find.</strong> <kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>K</kbd> (or tap <strong>Saved (N)</strong>) opens search. Or type a word followed by <code>//</code> in the editor and press <kbd>⏎</kbd>.</p>
+            <p><strong>Edit.</strong> In search, hit <strong>Edit</strong> on a block — or select it and press <kbd>Shift</kbd> + <kbd>⏎</kbd> — change it, and save again.</p>
+            <p><button id="quickStartLinkAbout" class="intro-replay-link" type="button">Take the quick start</button> — the same four steps as short cards.</p>
           </div>
           <div class="qr-group">
-            <p><strong>Quick start</strong></p>
-            <p><button id="quickStartLinkAbout" class="intro-replay-link" type="button">Walk through the core loop</button> — four short cards: write, save, find, edit.</p>
+            <p class="qr-title">Organise as you go</p>
+            <p>Put <code>#tags</code> and <code>@mentions</code> anywhere in a block — search understands them, and several words together match only blocks containing all of them.</p>
+            <p><code>/t</code>, <code>/y</code> and <code>/w</code> show today’s, yesterday’s and last week’s blocks. <kbd>☆</kbd> on a block pins it; <code>/pin</code> shows only pinned blocks.</p>
+            <p><code>/re</code> reopens your most recent block.</p>
           </div>
           <div class="qr-group">
-            <p><strong>Finding your blocks</strong></p>
-            <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>K</kbd> opens search. Type to filter, use <code>#tags</code> and <code>@mentions</code> to organise. Or type a word followed by <code>//</code> in the editor and press <kbd>⏎</kbd> to search it.</p>
+            <p class="qr-title">Keep it yours</p>
+            <p><code>/encrypt</code> locks your blocks with a passphrase that never leaves your device. <code>/export</code> downloads a backup (<code>/export plain</code> for plaintext) and <code>/import</code> restores one.</p>
           </div>
           <div class="qr-group">
-            <p><strong>Useful commands</strong></p>
-            <p><code>/re</code> reopens your latest block for editing</p>
-            <p><code>/t</code> shows today's blocks, <code>/y</code> yesterday's</p>
-            <p><code>/w</code> shows last week</p>
-            <p><code>/pin</code> shows pinned blocks</p>
-            <p><code>/q</code> opens the full shortcut reference</p>
-          </div>
-          <div class="qr-group">
-            <p><strong>Optional features</strong></p>
-            <p><code>/encrypt</code> encrypts your blocks locally with a passphrase</p>
-            <p><code>/export</code> downloads an encrypted backup of your blocks</p>
-            <p><code>/export plain</code> downloads an unencrypted plaintext backup</p>
-            <p><code>/import</code> restores from an export file</p>
-          </div>
-          <div class="qr-group">
-            <p><strong>The pitch</strong></p>
+            <p class="qr-title">Go further</p>
+            <p><code>/q</code> opens the full reference — every command and shortcut, grouped by task.</p>
             <p><button id="introReplayButton" class="intro-replay-link" type="button">Replay the intro</button> — the first-visit screen on why your notes are unreadable to anyone but you.</p>
           </div>
         </section>
-        <section id="quickReference" class="quick-reference" hidden>
-          <div class="qr-group">
-            <p><strong>Quick start</strong></p>
-            <p><button id="quickStartLinkHelp" class="intro-replay-link" type="button">Open the quick start</button> -> four short cards on the core loop: write, save, find, edit</p>
+        <section id="quickReference" class="quick-reference qr-sheet" hidden>
+          <div class="qr-col">
+            <div class="qr-group">
+              <p class="qr-title">Start here</p>
+              <div class="qr-rows">
+              <span class="qr-key"><button id="quickStartLinkHelp" class="intro-replay-link" type="button">Quick start</button></span><span class="qr-desc">four short cards on the core loop: write, save, find, edit</span>
+              <span class="qr-key"><code>/about</code></span><span class="qr-desc">first-time guide and the pitch</span>
+              <span class="qr-key"><code>/q</code> <span class="qr-sep">·</span> <kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>H</kbd></span><span class="qr-desc">this reference (also the <kbd>?</kbd> button in the footer)</span>
+              </div>
+            </div>
+            <div class="qr-group">
+              <p class="qr-title">Editor</p>
+              <div class="qr-rows">
+              <span class="qr-key"><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⏎</kbd></span><span class="qr-desc">save the current block (on a phone with the keyboard up, <kbd>⏎</kbd> alone saves)</span>
+              <span class="qr-key"><kbd>Esc</kbd></span><span class="qr-desc">cancel editing and clear the editor — also closes whatever is open</span>
+              <span class="qr-key"><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>⏎</kbd> <span class="qr-sep">·</span> <code>/re</code></span><span class="qr-desc">reopen your most recent block</span>
+              <span class="qr-key"><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd></span><span class="qr-desc">find and replace inside the editor</span>
+              <span class="qr-key"><kbd>Tab</kbd> / <kbd>Shift</kbd> + <kbd>Tab</kbd></span><span class="qr-desc">indent / outdent</span>
+              <span class="qr-key"><code>/500</code></span><span class="qr-desc">set a word/char/line target for the counter (<kbd>Esc</kbd> clears it)</span>
+              <span class="qr-key"><code>/font 12</code></span><span class="qr-desc">note font size, 11–24px; <code>/font reset</code> restores 14px</span>
+              <span class="qr-key">counter button (top bar)</span><span class="qr-desc">cycle the counter: words / chars / lines / off</span>
+              </div>
+            </div>
+            <div class="qr-group">
+              <p class="qr-title">Symbols</p>
+              <div class="qr-rows">
+              <span class="qr-key"><code>/sym</code> <span class="qr-sep">·</span> <code>;;</code></span><span class="qr-desc">chemistry &amp; math symbol palette — click to insert ₂ → Δ ²⁺ as plain text (<code>;;</code> works after a space or at a line start)</span>
+              <span class="qr-key">convert button</span><span class="qr-desc"><code>H_2O</code> → H₂O, <code>Ca^2+</code> → Ca²⁺, <code>∫_0^1</code> → ∫₀¹, <code>e^{-x}</code> → e⁻ˣ; ∞ and π stay as typed</span>
+              </div>
+            </div>
+            <div class="qr-group">
+              <p class="qr-title">Find from the editor</p>
+              <div class="qr-rows">
+              <span class="qr-key"><code>term //</code> + <kbd>⏎</kbd></span><span class="qr-desc">search for that term</span>
+              <span class="qr-key"><code>#tag //</code> <span class="qr-sep">·</span> <code>@name //</code> + <kbd>⏎</kbd></span><span class="qr-desc">search filtered to that tag or mention</span>
+              <span class="qr-key"><code>term //</code> + <kbd>Shift</kbd> + <kbd>⏎</kbd></span><span class="qr-desc">open the first matching block in the editor</span>
+              <span class="qr-key"><code>/-</code> <span class="qr-sep">·</span> <code>/-tag</code></span><span class="qr-desc">pick from your tags; <code>/-tag</code> opens the latest block tagged #tag</span>
+              </div>
+            </div>
+            <div class="qr-group">
+              <p class="qr-title">By date</p>
+              <div class="qr-rows">
+              <span class="qr-key"><code>/t</code> <span class="qr-sep">·</span> <code>/y</code> <span class="qr-sep">·</span> <code>/w</code></span><span class="qr-desc">blocks saved today · yesterday · in the last week</span>
+              <span class="qr-key"><code>/ta</code> <span class="qr-sep">·</span> <code>/ya</code> <span class="qr-sep">·</span> <code>/wa</code></span><span class="qr-desc">blocks created <em>or edited</em> today · yesterday · in the last 7 days</span>
+              <span class="qr-key"><code>/otd</code></span><span class="qr-desc">on this day: blocks from today’s date in earlier months and years</span>
+              </div>
+            </div>
           </div>
-          <div class="qr-group">
-            <p><strong>Quick Retrieval</strong></p>
-            <p><code>term //</code> + <kbd>⏎</kbd> -> open search with that term</p>
-            <p><code>#tag //</code> + <kbd>⏎</kbd> -> open search filtered to that tag</p>
-            <p><code>@name //</code> + <kbd>⏎</kbd> -> open search filtered to that mention</p>
-            <p><kbd>Shift</kbd> + <kbd>⏎</kbd> after <code>term //</code> -> edit the first matching block</p>
-            <p><code>/-</code> -> pick from your tags; <code>/-tag</code> opens most recently edited block tagged #tag</p>
-          </div>
-          <div class="qr-group">
-            <p><strong>Commands</strong></p>
-            <p><code>/re</code> -> reopen your most recent saved block in the editor</p>
-            <p><code>/t</code> -> show blocks saved today</p>
-            <p><code>/ta</code> -> show blocks created or edited today</p>
-            <p><code>/otd</code> -> on this day: blocks from today's date in earlier months and years</p>
-            <p><code>/y</code> -> show blocks saved yesterday</p>
-            <p><code>/ya</code> -> show blocks created or edited yesterday</p>
-            <p><code>/w</code> -> show blocks saved during the last week</p>
-            <p><code>/wa</code> -> show blocks created or edited in the last 7 days</p>
-            <p><code>/pin</code> -> show only pinned blocks</p>
-            <p><kbd>☆</kbd>/<kbd>★</kbd> on a block -> toggle pin</p>
-            <p><code>/import</code> -> import blocks from an export file</p>
-            <p><code>/500</code> -> set a word/char/line count target (Esc to clear)</p>
-            <p><code>/font 12</code> -> set note font size for the editor and saved blocks (11–24px); <code>/font reset</code> restores the 14px default</p>
-            <p><code>/sym</code> -> chemistry &amp; math symbol palette: click to insert ₂ → Δ ²⁺ as plain text; <code>H_2O</code> → H₂O, <code>Ca^2+</code> → Ca²⁺, <code>∫_0^1</code> → ∫₀¹, <code>∫_a^b</code> → ∫ₐᵇ, <code>∑_{n=1}^{2n}</code>, <code>e^{-x}</code> → e⁻ˣ via its convert button (∞ and π have no small glyph and stay as typed). Type <code>;;</code> (after a space or at a line start) to toggle it mid-note</p>
-            <p><code>/q</code> -> open this help sheet</p>
-          </div>
-          <div class="qr-group">
-            <p><strong>Encryption</strong></p>
-            <p><code>/encrypt</code> -> encrypt your blocks with a passphrase</p>
-            <p><code>/encrypt change</code> -> change your passphrase</p>
-            <p><code>/encrypt off</code> -> remove encryption and restore plaintext</p>
-            <p><code>/lock</code> -> lock the vault (clears decrypted data from memory)</p>
-            <p>Save your recovery key when shown -> it is the only way back if you forget your passphrase</p>
-          </div>
-          <div class="qr-group">
-            <p><strong>Editor</strong></p>
-            <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⏎</kbd> -> save the current block</p>
-            <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>⏎</kbd> -> reopen your most recent block</p>
-            <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd> -> open find and replace</p>
-            <p><kbd>Esc</kbd> -> cancel editing and clear the editor</p>
-            <p><kbd>Tab</kbd> / <kbd>Shift</kbd> + <kbd>Tab</kbd> -> indent / outdent</p>
-            <p><code>;;</code> (after a space or at a line start) -> toggle the symbol palette</p>
-          </div>
-          <div class="qr-group">
-            <p><strong>Search</strong></p>
-            <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>K</kbd> -> open search</p>
-            <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>H</kbd> -> open this reference sheet</p>
-            <p>Several words -> only blocks containing all of them; mix in <code>#tag</code> or <code>@name</code> to narrow further</p>
-            <p><kbd>↑</kbd>/<kbd>↓</kbd> -> move through results</p>
-            <p><kbd>Enter</kbd> -> expand or collapse the selected result</p>
-            <p>Links in blocks are clickable -> they open in a new tab</p>
-            <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⌫</kbd> -> delete the selected block</p>
-            <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>C</kbd> -> copy the selected block (or the whole multi-selection)</p>
-            <p><kbd>Shift</kbd> + <kbd>⏎</kbd> -> edit the selected block</p>
-            <p><kbd>Shift</kbd> + click or <kbd>Shift</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd> -> select multiple (for copy, merge or delete)</p>
-            <p><kbd>Esc</kbd> -> clear the multi-selection, then close search</p>
-          </div>
-          <div class="qr-group">
-            <p><strong>Toolbar</strong></p>
-            <p><kbd>⌨</kbd> button -> cycle counter: words / chars / lines / off</p>
-            <p><kbd>↓</kbd> button -> export blocks (encrypted, requires unlocked vault)</p>
+          <div class="qr-col">
+            <div class="qr-group">
+              <p class="qr-title">Search</p>
+              <div class="qr-rows">
+              <span class="qr-key"><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>K</kbd> <span class="qr-sep">·</span> Saved (N)</span><span class="qr-desc">open search</span>
+              <span class="qr-key">several words</span><span class="qr-desc">only blocks containing all of them; mix in <code>#tag</code> or <code>@name</code> to narrow</span>
+              <span class="qr-key"><kbd>↑</kbd>/<kbd>↓</kbd></span><span class="qr-desc">move through results</span>
+              <span class="qr-key"><kbd>⏎</kbd></span><span class="qr-desc">expand / collapse the selected block</span>
+              <span class="qr-key"><kbd>Shift</kbd> + <kbd>⏎</kbd></span><span class="qr-desc">edit the selected block (also <kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>E</kbd>)</span>
+              <span class="qr-key"><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>C</kbd></span><span class="qr-desc">copy the selected block (or the whole multi-selection)</span>
+              <span class="qr-key"><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⌫</kbd></span><span class="qr-desc">delete the selected block</span>
+              <span class="qr-key"><kbd>Shift</kbd> + click <span class="qr-sep">·</span> <kbd>Shift</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd></span><span class="qr-desc">select multiple, then copy, merge or delete</span>
+              <span class="qr-key"><kbd>Esc</kbd></span><span class="qr-desc">clear the multi-selection, then close search</span>
+              <p class="qr-note">Links inside blocks are clickable and open in a new tab.</p>
+              </div>
+            </div>
+            <div class="qr-group">
+              <p class="qr-title">Pins</p>
+              <div class="qr-rows">
+              <span class="qr-key"><kbd>☆</kbd>/<kbd>★</kbd> on a block</span><span class="qr-desc">pin / unpin</span>
+              <span class="qr-key"><code>/pin</code></span><span class="qr-desc">show only pinned blocks</span>
+              <span class="qr-key"><kbd>☆</kbd> button (top bar)</span><span class="qr-desc">pinned quick-access panel</span>
+              </div>
+            </div>
+            <div class="qr-group">
+              <p class="qr-title">Backup</p>
+              <div class="qr-rows">
+              <span class="qr-key"><code>/export</code> <span class="qr-sep">·</span> <kbd>↓</kbd> button</span><span class="qr-desc">download an encrypted backup (vault must be unlocked)</span>
+              <span class="qr-key"><code>/export plain</code></span><span class="qr-desc">download an unencrypted plaintext backup</span>
+              <span class="qr-key"><code>/import</code></span><span class="qr-desc">restore blocks from an export file</span>
+              <span class="qr-key"><code>/wipe</code></span><span class="qr-desc">delete all blocks and vault metadata</span>
+              </div>
+            </div>
+            <div class="qr-group">
+              <p class="qr-title">Encryption</p>
+              <div class="qr-rows">
+              <span class="qr-key"><code>/encrypt</code></span><span class="qr-desc">encrypt your blocks with a passphrase</span>
+              <span class="qr-key"><code>/encrypt change</code></span><span class="qr-desc">change your passphrase</span>
+              <span class="qr-key"><code>/encrypt off</code></span><span class="qr-desc">remove encryption and restore plaintext</span>
+              <span class="qr-key"><code>/lock</code> <span class="qr-sep">·</span> lock button (top bar)</span><span class="qr-desc">lock the vault — clears decrypted data from memory</span>
+              <p class="qr-note">Save your recovery key when it is shown: it is the only way back if you forget your passphrase.</p>
+              </div>
+            </div>
+            <div class="qr-group">
+              <p class="qr-title">Sync &amp; phone <span class="qr-title-sub">(needs /encrypt first)</span></p>
+              <div class="qr-rows">
+              <span class="qr-key"><code>/sync setup</code></span><span class="qr-desc">set the sync Worker URL and auth token</span>
+              <span class="qr-key"><code>/mirror</code></span><span class="qr-desc">show a pairing QR to link an iOS device</span>
+              <span class="qr-key"><code>/port</code></span><span class="qr-desc">set up this browser from another browser’s pairing data</span>
+              <span class="qr-key"><code>/pull</code></span><span class="qr-desc">fetch the latest blocks from cloud</span>
+              <span class="qr-key"><code>/inbox</code></span><span class="qr-desc">triage captures synced from your phone</span>
+              </div>
+            </div>
           </div>
         </section>
         <section class="search-shortcuts">
