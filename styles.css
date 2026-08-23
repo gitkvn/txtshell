@@ -2029,6 +2029,14 @@ html.show-intro .intro-overlay,
   font-family: var(--font-mono);
 }
 
+.intro-footer-credit {
+  color: var(--muted);
+}
+
+.intro-heart {
+  color: var(--ink);
+}
+
 .intro-links {
   display: flex;
   gap: 20px;
