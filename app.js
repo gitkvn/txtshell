@@ -121,6 +121,7 @@ const state = {
   vaultView: null,
   vaultPending: null,
   targetCount: null,
+  counterAutoShown: false,
   selectedEntries: new Set(),
 };
 
@@ -466,6 +467,9 @@ const COUNT_MODES = ["off", "words", "chars", "lines"];
 wordCountToggleButton.addEventListener("click", () => {
   const current = document.body.dataset.countMode || "off";
   const nextIndex = (COUNT_MODES.indexOf(current) + 1) % COUNT_MODES.length;
+  // A deliberate click takes ownership of the counter: clearing a target
+  // afterwards must not hide it again.
+  state.counterAutoShown = false;
   applyCountMode(COUNT_MODES[nextIndex]);
 });
 
@@ -592,8 +596,7 @@ function escapeToComposer() {
 
   // Plain composer: sweep all transient UI in one pass.
   if (state.targetCount !== null) {
-    state.targetCount = null;
-    updateWordCount();
+    setTargetCount(null);
   }
   let restoredDraft = false;
   if (state.editingEntryId) {
@@ -688,11 +691,9 @@ entryInput.addEventListener("keydown", (event) => {
   if (targetMatch) {
     event.preventDefault();
     const value = parseInt(targetMatch[1], 10);
-    state.targetCount = value > 0 ? value : null;
     setEditorValue("");
     clearDraft();
-    updateWordCount();
-    composerHint.textContent = state.targetCount ? `Target set to ${state.targetCount}` : "Target cleared";
+    composerHint.textContent = setTargetCount(value > 0 ? value : null);
     return;
   }
 
@@ -1157,11 +1158,9 @@ function submitComposer() {
   const targetMatch = text.match(/^\/(\d+)$/);
   if (targetMatch) {
     const value = parseInt(targetMatch[1], 10);
-    state.targetCount = value > 0 ? value : null;
     setEditorValue("");
     clearDraft();
-    updateWordCount();
-    composerHint.textContent = state.targetCount ? `Target set to ${state.targetCount}` : "Target cleared";
+    composerHint.textContent = setTargetCount(value > 0 ? value : null);
     return;
   }
 
@@ -2113,13 +2112,41 @@ function applyEditorFontSize(size) {
   window.localStorage.setItem(EDITOR_FONT_SIZE_KEY, String(size));
 }
 
-function applyCountMode(mode) {
+function applyCountMode(mode, { persist = true } = {}) {
   document.body.dataset.countMode = mode;
-  window.localStorage.setItem(WORD_COUNT_KEY, mode);
+  if (persist) {
+    window.localStorage.setItem(WORD_COUNT_KEY, mode);
+  }
   wordCountDisplay.hidden = mode === "off";
   wordCountToggleButton.classList.toggle("is-active", mode !== "off");
   wordCountToggleButton.setAttribute("aria-label", `Counter: ${mode}`);
   updateWordCount();
+}
+
+// Sets (or clears, with null) the count target and returns the hint text.
+// The target is unitless -- it reads in whatever mode the counter is in. If the
+// counter is off when a target arrives, reveal it in words mode without
+// persisting, and remember that we did so; clearing the target then hides it
+// again unless the user has since clicked the toggle themselves.
+function setTargetCount(value) {
+  state.targetCount = value;
+  const mode = document.body.dataset.countMode || "off";
+  if (value !== null) {
+    if (mode === "off") {
+      state.counterAutoShown = true;
+      applyCountMode("words", { persist: false });
+      return `Target set to ${value} ${value === 1 ? "word" : "words"}`;
+    }
+    updateWordCount();
+    return `Target set to ${value}`;
+  }
+  if (state.counterAutoShown) {
+    state.counterAutoShown = false;
+    applyCountMode("off", { persist: false });
+  } else {
+    updateWordCount();
+  }
+  return "Target cleared";
 }
 
 function updateWordCount() {
