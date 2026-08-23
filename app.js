@@ -92,7 +92,7 @@ const SLASH_COMMANDS = [
   { name: "/pull", description: "Fetch the latest blocks from cloud" },
   { name: "/inbox", description: "Triage captures synced from your phone" },
   { name: "/font", description: "Set note font size in px (11–24, default 14); /font reset restores default" },
-  { name: "/sym", description: "Chemistry & math symbol palette (₂ → Δ ²⁺); ;; or ⌘. toggles it anywhere" },
+  { name: "/sym", description: "Chemistry & math symbol palette (₂ → Δ ²⁺); ;; toggles it anywhere" },
 ];
 const SLASH_COMMAND_NAMES = new Set(SLASH_COMMANDS.map((cmd) => cmd.name));
 // Commands that accept an argument after a space ("/font 12"). Their Enter
@@ -1232,12 +1232,6 @@ function handleGlobalShortcut(event) {
       return;
     }
     openFindReplace();
-    return;
-  }
-
-  if (key === "." && !event.shiftKey) {
-    event.preventDefault();
-    toggleSymPalette();
     return;
   }
 
@@ -6210,7 +6204,7 @@ function renderSymPalette() {
   symPalette.innerHTML = `
     <div class="sym-palette-header">
       <span class="sym-palette-title">Symbols</span>
-      <span class="sym-palette-hint">click to insert at the cursor · Esc closes · type ;; or ⌘/Ctrl+. to toggle anytime</span>
+      <span class="sym-palette-hint">click to insert at the cursor · Esc closes · type ;; to toggle anytime</span>
       <button class="sym-palette-close" type="button" data-action="close" aria-label="Close symbol palette">Close</button>
     </div>
     <div class="sym-section sym-section-recent">
@@ -6256,7 +6250,7 @@ function closeSymPalette() {
   focusComposer();
 }
 
-// Toggle from anywhere the composer is usable (Cmd/Ctrl+. and the ";;" sigil).
+// Toggle from anywhere the composer is usable (the ";;" sigil and /sym).
 // Search mode, the inbox, and the vault gate own the screen then; do nothing.
 function toggleSymPalette() {
   if (isVaultLocked() || state.searchMode || isInboxOpen() || state.vaultView || !findReplaceBar.hidden) {
