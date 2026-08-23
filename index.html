@@ -8,7 +8,7 @@
     <link rel="icon" type="image/svg+xml" href="./logo-shell.svg" />
     <!-- Bump ?v= on every deploy that changes the file — index.html is no-cache,
          so a new URL forces browsers past any stale cached copy. -->
-    <link rel="stylesheet" href="./styles.css?v=20260822-5" />
+    <link rel="stylesheet" href="./styles.css?v=20260822-6" />
     <!-- Decides before first paint whether the first-visit intro overlay shows,
          so neither first-timers nor returning users see a flash. -->
     <script src="./intro-boot.js?v=20260822-1"></script>
@@ -67,6 +67,14 @@
           <ul id="inboxList" class="inbox-list" aria-live="polite"></ul>
         </section>
       </form>
+
+      <!-- First-run nudge to the quick start. Shown once (QUICK_START_KEY);
+           the × or launching the cards hides it for good. app.js owns both. -->
+      <section id="quickStartHint" class="quick-start-hint" hidden aria-label="Quick start">
+        <span>New to Txtshell?</span>
+        <button id="quickStartHintLink" class="quick-start-hint-link" type="button">Take the quick start →</button>
+        <button id="quickStartHintClose" class="quick-start-hint-close" type="button" aria-label="Dismiss quick start hint">✕</button>
+      </section>
 
       <section id="commandBar" class="command-bar" aria-live="polite">
         <div class="footer-actions">
@@ -144,6 +152,10 @@
             <p>Type anything in the editor. Press <kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⏎</kbd> to save it as a block. That's the core loop — write, save, find later.</p>
           </div>
           <div class="qr-group">
+            <p><strong>Quick start</strong></p>
+            <p><button id="quickStartLinkAbout" class="intro-replay-link" type="button">Walk through the core loop</button> — four short cards: write, save, find, edit.</p>
+          </div>
+          <div class="qr-group">
             <p><strong>Finding your blocks</strong></p>
             <p><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>K</kbd> opens search. Type to filter, use <code>#tags</code> and <code>@mentions</code> to organise. Or type a word followed by <code>//</code> in the editor and press <kbd>⏎</kbd> to search it.</p>
           </div>
@@ -168,6 +180,10 @@
           </div>
         </section>
         <section id="quickReference" class="quick-reference" hidden>
+          <div class="qr-group">
+            <p><strong>Quick start</strong></p>
+            <p><button id="quickStartLinkHelp" class="intro-replay-link" type="button">Open the quick start</button> -> four short cards on the core loop: write, save, find, edit</p>
+          </div>
           <div class="qr-group">
             <p><strong>Quick Retrieval</strong></p>
             <p><code>term //</code> + <kbd>⏎</kbd> -> open search with that term</p>
@@ -239,6 +255,14 @@
         </section>
       </section>
     </main>
+
+    <!-- Quick start: a 4-card walkthrough of write / save / find / edit. Never
+         auto-shown; reached from the first-run hint bar, /about, or /q. The card
+         is rendered by app.js (QUICK_START_STEPS) one step at a time. -->
+    <section id="quickStartOverlay" class="modal-overlay quick-start" hidden role="dialog" aria-modal="true" aria-labelledby="quickStartTitle">
+      <div id="quickStartBackdrop" class="modal-backdrop"></div>
+      <div id="quickStartCard" class="modal-card quick-start-card"></div>
+    </section>
 
     <!-- First-visit intro. intro-boot.js (in <head>) shows it before first paint
          via the html.show-intro class; the /about guide's "Replay the intro"
@@ -359,6 +383,6 @@
     </template>
 
     <script src="./qrcode.js" integrity="sha384-74+AUd6tbAWrmm+GTFCXAWWFlqfuBEui1i9+CR7l70syLHvWFw8UwtK7zdW19BZI" crossorigin="anonymous"></script>
-    <script src="./app.js?v=20260822-8"></script>
+    <script src="./app.js?v=20260822-10"></script>
   </body>
 </html>

@@ -55,6 +55,33 @@ const HINT_DELAY = 800;
 
 const INTRO_KEY = "txtshell-intro-seen-v1"; // must match intro-boot.js
 const INTRO_FADE_MS = 220; // must match the .intro-overlay opacity transition
+const QUICK_START_KEY = "txtshell-quickstart-seen-v1"; // first-run hint bar shown once
+
+// Quick start cards. Static, trusted markup -- rendered one step at a time into
+// #quickStartCard. Every gesture here is a real binding; keep in sync with the
+// composer keydown handler, the search-mode card actions, and /q.
+const QUICK_START_STEPS = [
+  {
+    title: "Write a block",
+    body: `<p>Just start typing. A block is one note — no title, no formatting, no folders. A line or a page, it's one block until you save it.</p>`,
+  },
+  {
+    title: "Save it",
+    body: `<p>Press <kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⏎</kbd>, or tap <strong>Save block</strong> below the editor.</p>
+<p>Stored instantly — on your device, never on a server. <code>/encrypt</code> locks it with a passphrase.</p>`,
+  },
+  {
+    title: "Find anything",
+    body: `<p>Type <code>/</code> for commands — <code>/w</code> shows this week's blocks.</p>
+<p>Or type a word followed by <code>//</code> and press <kbd>⏎</kbd> to search for it. Instant, and it never leaves your device.</p>`,
+  },
+  {
+    title: "Edit & re-save",
+    body: `<p>In search, hit <strong>Edit</strong> on any block — or select it and press <kbd>Shift</kbd> + <kbd>⏎</kbd> — to open it in the editor. Change it, then <kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⏎</kbd> saves the update.</p>
+<p>Power move: after a <code>term//</code> search, <kbd>Shift</kbd> + <kbd>⏎</kbd> reopens the top match straight away.</p>
+<p class="quick-start-note"><code>/about</code> or <code>/q</code> reopens this quick start.</p>`,
+  },
+];
 
 const DRAFT_SAVE_DELAY = 180;
 const DELETE_UNDO_TIMEOUT = 10000;
@@ -141,6 +168,14 @@ const aboutGuide = document.querySelector("#aboutGuide");
 const introOverlay = document.querySelector("#introOverlay");
 const introStartButton = document.querySelector("#introStartButton");
 const introReplayButton = document.querySelector("#introReplayButton");
+const quickStartOverlay = document.querySelector("#quickStartOverlay");
+const quickStartBackdrop = document.querySelector("#quickStartBackdrop");
+const quickStartCard = document.querySelector("#quickStartCard");
+const quickStartHint = document.querySelector("#quickStartHint");
+const quickStartHintLink = document.querySelector("#quickStartHintLink");
+const quickStartHintClose = document.querySelector("#quickStartHintClose");
+const quickStartLinkAbout = document.querySelector("#quickStartLinkAbout");
+const quickStartLinkHelp = document.querySelector("#quickStartLinkHelp");
 const savedCount = document.querySelector("#savedCount");
 const syncIndicator = document.querySelector("#syncIndicator");
 const wordCountDisplay = document.querySelector("#wordCountDisplay");
@@ -511,6 +546,10 @@ searchInput.addEventListener("keydown", (event) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") {
+    if (isQuickStartOpen()) {
+      // The walkthrough owns the keyboard: ←/→ step, buttons handle Enter.
+      return;
+    }
     if (state.searchMode && event.target !== searchInput) {
       handleSearchKeyboard(event);
       if (event.defaultPrevented) {
@@ -541,6 +580,10 @@ function escapeToComposer() {
   // The intro overlay sits above every other surface, so Esc dismisses it first.
   if (isIntroOpen()) {
     dismissIntroOverlay();
+    return;
+  }
+  if (isQuickStartOpen()) {
+    closeQuickStart();
     return;
   }
 
@@ -806,6 +849,113 @@ function dismissIntroOverlay() {
 
 introStartButton.addEventListener("click", dismissIntroOverlay);
 introReplayButton.addEventListener("click", showIntroOverlay);
+
+// Quick start walkthrough. Never auto-shown (the intro owns the first-visit
+// slot); launched from the first-run hint bar, /about, or /q. Mirrors the intro's
+// open/close shape: .is-open/.is-closing fade, Esc dismisses (checked right after
+// the intro in escapeToComposer), closing lands in the composer per the Esc
+// contract -- or closes search mode when launched from the /about or /q sheets.
+let quickStartStep = 0;
+
+function isQuickStartOpen() {
+  return !quickStartOverlay.hidden && !quickStartOverlay.classList.contains("is-closing");
+}
+
+function markQuickStartSeen() {
+  window.localStorage.setItem(QUICK_START_KEY, "1");
+  quickStartHint.hidden = true;
+}
+
+function renderQuickStartStep() {
+  const step = QUICK_START_STEPS[quickStartStep];
+  const isLast = quickStartStep === QUICK_START_STEPS.length - 1;
+  const dots = QUICK_START_STEPS.map((_, index) =>
+    `<span class="quick-start-dot${index === quickStartStep ? " is-active" : ""}"></span>`
+  ).join("");
+  quickStartCard.innerHTML = `
+    <p class="quick-start-eyebrow">quick start · ${quickStartStep + 1} / ${QUICK_START_STEPS.length}</p>
+    <h2 id="quickStartTitle" class="quick-start-title">${step.title}</h2>
+    <div class="quick-start-body" aria-live="polite">${step.body}</div>
+    <div class="quick-start-footer">
+      <div class="quick-start-dots" aria-hidden="true">${dots}</div>
+      <div class="quick-start-actions">
+        ${isLast ? "" : `<button class="modal-button modal-button-secondary" type="button" data-action="skip">Skip</button>`}
+        <button class="modal-button modal-button-primary" type="button" data-action="next">${isLast ? "Start writing →" : "Next →"}</button>
+      </div>
+    </div>`;
+  window.requestAnimationFrame(() => {
+    quickStartCard.querySelector('[data-action="next"]')?.focus();
+  });
+}
+
+function openQuickStart() {
+  if (isIntroOpen()) {
+    return;
+  }
+  markQuickStartSeen();
+  quickStartStep = 0;
+  quickStartOverlay.classList.remove("is-closing");
+  quickStartOverlay.hidden = false;
+  renderQuickStartStep();
+  // Next frame so the opacity transition runs from the hidden state.
+  window.requestAnimationFrame(() => quickStartOverlay.classList.add("is-open"));
+}
+
+function closeQuickStart() {
+  if (quickStartOverlay.hidden) {
+    return;
+  }
+  quickStartOverlay.classList.add("is-closing");
+  quickStartOverlay.classList.remove("is-open");
+  window.setTimeout(() => {
+    quickStartOverlay.hidden = true;
+    quickStartOverlay.classList.remove("is-closing");
+    quickStartCard.innerHTML = "";
+  }, INTRO_FADE_MS);
+  if (state.searchMode) {
+    closeSearchMode();
+  } else {
+    focusComposer();
+  }
+}
+
+quickStartCard.addEventListener("click", (event) => {
+  const action = event.target.closest("[data-action]")?.dataset.action;
+  if (action === "skip") {
+    closeQuickStart();
+  } else if (action === "next") {
+    if (quickStartStep >= QUICK_START_STEPS.length - 1) {
+      closeQuickStart();
+    } else {
+      quickStartStep += 1;
+      renderQuickStartStep();
+    }
+  }
+});
+
+quickStartOverlay.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowRight" && quickStartStep < QUICK_START_STEPS.length - 1) {
+    event.preventDefault();
+    quickStartStep += 1;
+    renderQuickStartStep();
+  } else if (event.key === "ArrowLeft" && quickStartStep > 0) {
+    event.preventDefault();
+    quickStartStep -= 1;
+    renderQuickStartStep();
+  }
+});
+
+quickStartBackdrop.addEventListener("click", closeQuickStart);
+quickStartHintLink.addEventListener("click", openQuickStart);
+quickStartHintClose.addEventListener("click", () => {
+  markQuickStartSeen();
+  focusComposer();
+});
+quickStartLinkAbout.addEventListener("click", openQuickStart);
+quickStartLinkHelp.addEventListener("click", openQuickStart);
+
+// First-run hint bar: shown once until dismissed or the cards are opened.
+quickStartHint.hidden = Boolean(window.localStorage.getItem(QUICK_START_KEY));
 
 if (isIntroOpen()) {
   // Beat the textarea's autofocus so keyboard users start on the CTA.
