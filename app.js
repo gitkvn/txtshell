@@ -273,24 +273,37 @@ composerForm.addEventListener("submit", (event) => {
   submitComposer();
 });
 
-window.addEventListener("message", (event) => {
-  if (event.origin !== window.location.origin) {
-    return;
+// Extension capture channel. Every capture gets an explicit result message so
+// the extension can queue anything that didn't land (vault locked, page not yet
+// initialised) instead of assuming postMessage == saved — a capture posted into
+// a locked tab used to be dropped silently. Captures that arrive while locked
+// are held in memory and saved on unlock (covers old extension builds that
+// don't queue on a "locked" result); a reload loses the hold, which is why the
+// extension also queues on its side. Nonces dedupe the two paths.
+const MAX_HELD_CAPTURES = 500;
+const MAX_REMEMBERED_CAPTURE_NONCES = 2000;
+let heldCaptures = [];
+const deliveredCaptureNonces = new Set();
+
+function replyCaptureResult(nonce, ok, reason, id) {
+  const result = { type: "txtshell_capture_result", ok, reason };
+  if (typeof nonce === "string") result.nonce = nonce;
+  if (id) result.id = id;
+  window.postMessage(result, window.location.origin);
+}
+
+function rememberCaptureNonce(nonce) {
+  if (typeof nonce !== "string") return;
+  deliveredCaptureNonces.add(nonce);
+  if (deliveredCaptureNonces.size > MAX_REMEMBERED_CAPTURE_NONCES) {
+    deliveredCaptureNonces.delete(deliveredCaptureNonces.values().next().value);
   }
-  const data = event.data;
-  if (!data || data.type !== "txtshell_capture") {
-    return;
-  }
+}
+
+function captureTextFromPayload(data) {
   const note = typeof data.note === "string" ? data.note.trim() : "";
   const title = typeof data.title === "string" ? data.title.trim() : "";
   const url = typeof data.url === "string" ? data.url.trim() : "";
-  if (!note && !title && !url) {
-    return;
-  }
-  if (isVaultLocked()) {
-    console.warn("[txtshell] capture dropped: vault is locked");
-    return;
-  }
   const parts = [];
   if (note) {
     parts.push(note);
@@ -301,14 +314,68 @@ window.addEventListener("message", (event) => {
   if (url) {
     parts.push(url);
   }
-  const text = parts.join("\n");
+  return parts.join("\n");
+}
+
+// Saves one capture payload into the unlocked vault. Returns the result that
+// goes back to the extension.
+function saveCapturePayload(data) {
+  const nonce = typeof data.nonce === "string" ? data.nonce : undefined;
+  if (nonce && deliveredCaptureNonces.has(nonce)) {
+    return { ok: true, reason: "duplicate" }; // already saved via the other path
+  }
+  const text = captureTextFromPayload(data);
   if (text.length > MAX_IMPORT_ENTRY_TEXT) {
-    console.warn("[txtshell] capture dropped: too large");
-    return;
+    console.warn("[txtshell] capture rejected: too large");
+    return { ok: false, reason: "too-large" };
   }
   const entry = createEntryFromText(text);
+  rememberCaptureNonce(nonce);
   console.log("[txtshell] captured block from postMessage", entry.id);
-  render();
+  return { ok: true, reason: "saved", id: entry.id };
+}
+
+// Called on unlock, before txtshell_ready is re-sent, so held captures land
+// first and any queued duplicates the extension then drains are deduped.
+function flushHeldCaptures() {
+  if (heldCaptures.length === 0) return;
+  const pending = heldCaptures;
+  heldCaptures = [];
+  let saved = 0;
+  for (const data of pending) {
+    if (saveCapturePayload(data).ok) saved++;
+  }
+  if (saved > 0) {
+    render();
+    composerHint.textContent = `Saved ${saved} capture${saved === 1 ? "" : "s"} held while locked`;
+  }
+}
+
+window.addEventListener("message", (event) => {
+  if (event.origin !== window.location.origin) {
+    return;
+  }
+  const data = event.data;
+  if (!data || data.type !== "txtshell_capture") {
+    return;
+  }
+  const nonce = typeof data.nonce === "string" ? data.nonce : undefined;
+  if (!captureTextFromPayload(data)) {
+    replyCaptureResult(nonce, false, "empty");
+    return;
+  }
+  if (isVaultLocked() || !state.db) {
+    // Hold it for unlock, but tell the extension it did NOT land so it queues
+    // too (the hold doesn't survive a reload).
+    if (heldCaptures.length >= MAX_HELD_CAPTURES) heldCaptures.shift();
+    heldCaptures.push(data);
+    console.warn("[txtshell] capture held: vault is locked");
+    replyCaptureResult(nonce, false, "locked");
+    return;
+  }
+  const result = saveCapturePayload(data);
+  if (result.ok && result.reason === "saved") render();
+  replyCaptureResult(nonce, result.ok, result.reason, result.id);
 });
 
 new MutationObserver(() => {
@@ -3523,11 +3590,14 @@ function isVaultLocked() {
   return state.encryption.enabled && !state.encryption.unlocked;
 }
 
+// Sent once per unlock (reset by lockVault) — the extension drains its capture
+// queue on it, so a lock/unlock in the same tab must re-trigger the drain.
 let readySignalSent = false;
 function signalReady() {
   if (readySignalSent) return;
   if (isVaultLocked()) return;
   readySignalSent = true;
+  flushHeldCaptures();
   window.postMessage({ type: "txtshell_ready" }, "*");
 }
 
@@ -3854,6 +3924,7 @@ function lockVault() {
   mirrorPayload = null;
   state.vaultView = "unlock";
   state.vaultPending = null;
+  readySignalSent = false; // next unlock re-announces readiness so the extension drains its queue
   renderVault();
   updateLockButton();
   composerHint.textContent = "Vault locked";
