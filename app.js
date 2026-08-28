@@ -3860,10 +3860,18 @@ function lockVault() {
   render();
 }
 
+let lastRenderedVaultView = null;
 function renderVault() {
   clearUnlockCountdown();
   clearMirrorDismiss();
   const view = state.vaultView;
+  // Leaving the pull-conflict card by ANY route (keep, replace, lock, wipe, port…)
+  // lifts the push hold. Locked/disabled vaults make the replay a harmless skip.
+  const leftPullConflict = lastRenderedVaultView === "pull-conflict" && view !== "pull-conflict";
+  lastRenderedVaultView = view;
+  if (leftPullConflict) {
+    releaseDeferredPush();
+  }
   if (!view) {
     vaultOverlay.hidden = true;
     vaultOverlay.innerHTML = "";
@@ -5139,6 +5147,28 @@ function setPullStatusFromError(error) {
 let cloudSyncTimer = null;
 let cloudSyncInFlight = false;
 
+// Push hold. A pull compares the cloud blob to local and may raise the conflict
+// card; until the user resolves it, NO push may fire — otherwise a save that
+// lands mid-pull (a queued extension capture delivered on unlock is the classic
+// case) would overwrite the cloud ~1s later, before the user has even read the
+// card, making "Keep local" a no-op and "Replace with cloud" restore a snapshot
+// the cloud no longer holds (the capture is then lost everywhere). Held while a
+// pull GET is in flight and while the pull-conflict card is showing; a push
+// requested during the hold is remembered and replayed on release.
+let pullHoldDepth = 0;
+let cloudSyncDeferred = false;
+
+function pushIsHeld() {
+  return pullHoldDepth > 0 || state.vaultView === "pull-conflict";
+}
+
+function releaseDeferredPush() {
+  if (cloudSyncDeferred && !pushIsHeld()) {
+    cloudSyncDeferred = false;
+    scheduleCloudSync();
+  }
+}
+
 function scheduleCloudSync() {
   // Only encrypted, unlocked vaults sync; iOS decrypts the blob with the master key.
   if (!(state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey)) {
@@ -5170,6 +5200,12 @@ async function flushCloudSync() {
   const url = normalizeWorkerUrl(workerUrl);
   if (!url || !authToken) {
     return { status: "skipped", reason: "not-configured" }; // nothing to do, no error
+  }
+  if (pushIsHeld()) {
+    // Gated here (not in scheduleCloudSync) so a debounce timer armed BEFORE the
+    // hold began is caught too. Replayed by releaseDeferredPush().
+    cloudSyncDeferred = true;
+    return { status: "skipped", reason: "pull-pending" };
   }
 
   // Real work is about to begin — light the ambient "syncing" state. Resolved to
@@ -5331,8 +5367,11 @@ async function handleSyncSetupSubmit(workerUrl, authToken) {
     return;
   }
   if (result.status === "skipped") {
-    // Vault locked or an upload already in flight — config saved, nothing pushed.
-    composerHint.textContent = "Sync configured — unlock to upload existing blocks";
+    // Config saved, nothing pushed yet: vault locked, an upload already in flight,
+    // or a pull is holding pushes (the deferred push replays when it lifts).
+    composerHint.textContent = result.reason === "pull-pending"
+      ? "Sync configured — will upload once the current pull settles"
+      : "Sync configured — unlock to upload existing blocks";
     return;
   }
 
@@ -5606,6 +5645,7 @@ async function beginPull() {
     return;
   }
   composerHint.textContent = "Pulling…";
+  pullHoldDepth++;
   try {
     const result = await fetchAndDecryptBlocks();
     setSyncStatus("ok"); // reachable + decrypted: the sync channel is healthy
@@ -5628,6 +5668,9 @@ async function beginPull() {
       return;
     }
     composerHint.textContent = pullErrorMessage(error);
+  } finally {
+    pullHoldDepth--;
+    releaseDeferredPush(); // no-op if the conflict card is now holding
   }
 }
 
@@ -5635,6 +5678,7 @@ async function beginPull() {
 // hint toast and are otherwise ignored; an empty cloud is a silent no-op. Only prompts
 // when the normal view is showing, so it never clobbers an open vault card.
 async function autoPullOnUnlock() {
+  pullHoldDepth++;
   try {
     const result = await fetchAndDecryptBlocks();
     setSyncStatus("ok"); // reachable + decrypted: the sync channel is healthy
@@ -5652,6 +5696,9 @@ async function autoPullOnUnlock() {
     // card with its destructive overwrite button mid-session. That card surfaces only
     // on an explicit /pull (beginPull), so an overwrite can never happen by accident.
     setPullStatusFromError(error);
+  } finally {
+    pullHoldDepth--;
+    releaseDeferredPush(); // no-op if the conflict card is now holding
   }
 }
 
@@ -5680,53 +5727,169 @@ function showPullConflict(cloudEntries) {
   renderVault();
 }
 
+// Per-id three-way-ish diff of the cloud snapshot against local. No tombstones
+// exist, so a "localOnly" block is EITHER a local addition OR a block deleted on
+// another device — indistinguishable; keeping local may resurrect it (not content
+// loss). The destructive direction is the reverse: "cloudOnly" may be a remote
+// addition that "Keep local" would discard, so anything in cloudOnly/cloudNewer
+// routes to the careful card. Shared ids with different content are ranked by
+// editedAt under the same clock-skew tolerance the old card used; inside the
+// tolerance they're "ambiguous" and force the careful card.
+function classifyPullDivergence(cloudEntries, localEntries) {
+  const valid = (e) => e && typeof e.id === "string";
+  const cloudById = new Map(cloudEntries.filter(valid).map((e) => [e.id, e]));
+  const localById = new Map(localEntries.filter(valid).map((e) => [e.id, e]));
+  const localOnly = [];
+  const cloudOnly = [];
+  const localNewer = [];
+  const cloudNewer = [];
+  const ambiguous = [];
+  for (const [id, local] of localById) {
+    const cloud = cloudById.get(id);
+    if (!cloud) {
+      localOnly.push(local);
+      continue;
+    }
+    if (canonicalizeEntries([local]) === canonicalizeEntries([cloud])) {
+      continue;
+    }
+    const delta = entryFreshness(local) - entryFreshness(cloud);
+    if (Number.isFinite(delta) && delta > PULL_CLOCK_SKEW_TOLERANCE_MS) {
+      localNewer.push(local);
+    } else if (Number.isFinite(delta) && delta < -PULL_CLOCK_SKEW_TOLERANCE_MS) {
+      cloudNewer.push(cloud);
+    } else {
+      ambiguous.push(local); // includes unparseable stamps (delta NaN/±Infinity)
+    }
+  }
+  for (const [id, cloud] of cloudById) {
+    if (!localById.has(id)) {
+      cloudOnly.push(cloud);
+    }
+  }
+  const localAhead = localOnly.length + localNewer.length;
+  const cloudAhead = cloudOnly.length + cloudNewer.length;
+  let kind;
+  if (ambiguous.length === 0 && cloudAhead === 0 && localAhead > 0) {
+    kind = "local-ahead";
+  } else if (ambiguous.length === 0 && localAhead === 0 && cloudAhead > 0) {
+    kind = "cloud-ahead";
+  } else {
+    kind = "diverged"; // includes "differ but nothing classifiable" — never a blank card
+  }
+  return { kind, localOnly, cloudOnly, localNewer, cloudNewer, ambiguous };
+}
+
+// Short, single-line preview of a block for the conflict card lists.
+function previewBlockText(entry, max = 60) {
+  const line = (typeof entry?.text === "string" ? entry.text : "")
+    .split("\n").map((l) => l.trim()).find((l) => l.length > 0) || "(empty block)";
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+function renderPreviewList(label, entries, limit = 3) {
+  if (entries.length === 0) return "";
+  const items = entries.slice(0, limit)
+    .map((e) => `<li>${escapeHtml(previewBlockText(e))}</li>`).join("");
+  const more = entries.length > limit
+    ? `<li class="pull-diff-more">+${entries.length - limit} more</li>` : "";
+  return `<p class="vault-subtitle pull-diff-label">${escapeHtml(label)}</p><ul class="pull-diff-list">${items}${more}</ul>`;
+}
+
+const pluralCount = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
 function renderPullConflictCard() {
   const cloudEntries = state.vaultPending?.pullEntries;
   if (!Array.isArray(cloudEntries)) {
     exitVaultToNormal();
     return;
   }
-  // Freshness heuristic, skew-tolerant: these stamps come from two different
-  // device clocks, so a small difference proves nothing — ordinary clock skew
-  // could invert it. Only claim one side is newer when the gap exceeds the
-  // tolerance; inside it, present both sides neutrally and let the user decide.
-  // Whenever we aren't confident the cloud is newer, the non-destructive
-  // "Keep local" gets the primary emphasis.
+  const diff = classifyPullDivergence(cloudEntries, state.entries);
   const cloudNewest = newestEntryStamp(cloudEntries);
   const localNewest = newestEntryStamp(state.entries);
-  const cloudTime = Date.parse(cloudNewest);
-  const localTime = Date.parse(localNewest);
-  const comparable = !Number.isNaN(cloudTime) && !Number.isNaN(localTime);
-  const cloudIsOlder = comparable && localTime - cloudTime > PULL_CLOCK_SKEW_TOLERANCE_MS;
-  // An empty local store has nothing to lose, so replacing is safe to suggest.
-  const cloudIsNewer = state.entries.length === 0 ||
-    (comparable && cloudTime - localTime > PULL_CLOCK_SKEW_TOLERANCE_MS);
   const fmtStamp = (stamp) => {
     const t = new Date(stamp);
     return stamp && !Number.isNaN(t.getTime()) ? t.toLocaleString() : "unknown";
   };
-  const detail = `Cloud: ${cloudEntries.length} block${cloudEntries.length === 1 ? "" : "s"}, newest ${fmtStamp(cloudNewest)} · This browser: ${state.entries.length} block${state.entries.length === 1 ? "" : "s"}, newest ${fmtStamp(localNewest)}`;
+  const detail = `Cloud: ${pluralCount(cloudEntries.length, "block")}, newest ${fmtStamp(cloudNewest)} · This browser: ${pluralCount(state.entries.length, "block")}, newest ${fmtStamp(localNewest)}`;
+
   let title;
   let subtitle;
-  if (cloudIsOlder) {
-    title = "Cloud copy is older";
-    subtitle = "The cloud copy is OLDER than this browser's blocks — it may be stale or replayed. Replacing would revert your recent changes.";
-  } else if (cloudIsNewer) {
-    title = "Cloud has changes";
-    subtitle = "Another device saved changes to the cloud. Replace this browser's blocks with the cloud copy?";
+  let lists = "";
+  let warning = "";
+  let replaceLabel;
+  let keepLabel;
+  let primary; // "keep" | "replace" | null — null means neither is emphasised
+  if (diff.kind === "local-ahead") {
+    // SAFE: the cloud has nothing this browser lacks and no newer edits, so keeping
+    // local loses no content. (It may resurrect a block deleted elsewhere — see
+    // classifyPullDivergence.) Only this branch gets the friendly framing.
+    const adds = diff.localOnly.length;
+    const edits = diff.localNewer.length;
+    const parts = [];
+    if (adds) parts.push(`saved ${pluralCount(adds, "block")} here that ${adds === 1 ? "isn't" : "aren't"} in the cloud yet`);
+    if (edits) parts.push(`edited ${pluralCount(edits, "block")} here more recently than the cloud copy`);
+    const it = adds + edits === 1 ? "it" : "them";
+    title = "This browser has changes the cloud doesn't";
+    subtitle = `You've ${parts.join(" and ")}. Nothing in the cloud is missing from this browser, so keeping ${it} loses nothing.`;
+    lists = renderPreviewList(adds ? "Not in the cloud yet:" : "Edited here:", adds ? diff.localOnly : diff.localNewer);
+    keepLabel = `Keep ${it}`;
+    replaceLabel = `Discard ${it}, use cloud copy`;
+    primary = "keep";
+  } else if (diff.kind === "cloud-ahead") {
+    // Replacing loses nothing here. "Keep local" is the destructive direction
+    // (it discards cloud-only blocks — which could be remote additions, or blocks
+    // you deleted here that never pushed; the wording stays true either way).
+    const adds = diff.cloudOnly.length;
+    const edits = diff.cloudNewer.length;
+    const parts = [];
+    if (adds) parts.push(`${pluralCount(adds, "block")} this browser doesn't`);
+    if (edits) parts.push(`${pluralCount(edits, "block")} edited more recently than this browser's copy`);
+    title = "The cloud has changes this browser doesn't";
+    subtitle = `The cloud has ${parts.join(" and ")}. Nothing here is missing from the cloud, so replacing loses nothing.`;
+    lists = renderPreviewList(adds ? "Only in the cloud:" : "Newer in the cloud:", adds ? diff.cloudOnly : diff.cloudNewer);
+    replaceLabel = "Replace with cloud";
+    keepLabel = `Keep local — discards the cloud's ${adds + edits === 1 ? "change" : "changes"}`;
+    primary = "replace";
   } else {
-    title = "Cloud and local differ";
-    subtitle = "The two copies differ, but their timestamps are too close to tell which is newer. Compare the details below before choosing — replacing discards this browser's copy.";
+    // TRUE CONFLICT: both sides hold something the other lacks (or the timestamps
+    // can't order them). Either choice loses the other side's changes — and
+    // "Keep local" pushes IMMEDIATELY, so that loss is not deferred.
+    const cloudCount = diff.cloudOnly.length + diff.cloudNewer.length;
+    const localCount = diff.localOnly.length + diff.localNewer.length;
+    const amb = diff.ambiguous.length;
+    title = "Cloud and this browser have diverged";
+    const sides = [];
+    if (cloudCount) sides.push(`the cloud has ${pluralCount(cloudCount, "change")} this browser doesn't`);
+    if (localCount) sides.push(`this browser has ${pluralCount(localCount, "change")} the cloud doesn't`);
+    let body = sides.length ? sides.join(", and ") : "the two copies differ";
+    body = body.charAt(0).toUpperCase() + body.slice(1) + ".";
+    if (amb) {
+      body += ` ${pluralCount(amb, "block")} differ${amb === 1 ? "s" : ""} on both sides with timestamps too close to tell which is newer.`;
+    }
+    subtitle = `${body} Whichever you choose, the other side's changes are lost.`;
+    lists = renderPreviewList("Only in the cloud:", diff.cloudOnly) +
+      renderPreviewList("Newer in the cloud:", diff.cloudNewer) +
+      renderPreviewList("Only in this browser:", diff.localOnly) +
+      renderPreviewList("Newer in this browser:", diff.localNewer) +
+      renderPreviewList("Differ, can't tell which is newer:", diff.ambiguous);
+    warning = `Keep local overwrites the cloud copy right away — the cloud's ${cloudCount || amb ? pluralCount(cloudCount + amb, "change") : "changes"} will be gone from every device. Replace with cloud deletes this browser's ${localCount || amb ? pluralCount(localCount + amb, "change") : "changes"}.`;
+    replaceLabel = "Replace with cloud";
+    keepLabel = "Keep local, overwrite cloud";
+    primary = null;
   }
+
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG}
       <p class="vault-title">${escapeHtml(title)}</p>
       <p class="vault-subtitle">${escapeHtml(subtitle)}</p>
-      <p class="vault-subtitle">${escapeHtml(detail)}</p>
+      ${lists}
+      ${warning ? `<p class="wipe-warning">${escapeHtml(warning)}</p>` : ""}
+      <p class="vault-subtitle pull-diff-detail">${escapeHtml(detail)}</p>
       <p class="vault-error" hidden></p>
-      <button class="vault-button${cloudIsNewer ? "" : " secondary"}" type="button" data-action="replace">Replace with cloud</button>
-      <button class="vault-button${cloudIsNewer ? " secondary" : ""}" type="button" data-action="keep">Keep local</button>
+      <button class="vault-button${primary === "replace" ? "" : " secondary"}" type="button" data-action="replace">${escapeHtml(replaceLabel)}</button>
+      <button class="vault-button${primary === "keep" ? "" : " secondary"}" type="button" data-action="keep">${escapeHtml(keepLabel)}</button>
     </div>
   `;
   const errorLine = vaultOverlay.querySelector(".vault-error");
@@ -5746,10 +5909,15 @@ function renderPullConflictCard() {
     }
   });
   keepButton.addEventListener("click", () => {
-    // Last-writer-wins: the next local save overwrites the cloud blob.
+    // Push now rather than "on the next save": the cloud actually catches up in
+    // the safe case, and in a true conflict the (warned) overwrite happens at a
+    // predictable moment instead of whenever the user next happens to save.
     state.vaultPending = null;
-    exitVaultToNormal();
-    composerHint.textContent = "Kept local — your next save overwrites cloud.";
+    exitVaultToNormal(); // renderVault lifts the hold and replays any deferred push
+    scheduleCloudSync();
+    composerHint.textContent = diff.kind === "local-ahead"
+      ? "Kept — syncing to cloud."
+      : "Kept local — overwriting the cloud copy.";
   });
 }
 
@@ -5771,7 +5939,7 @@ async function applyCloudReplaceLocal(cloudEntries) {
   const count = state.entries.length;
   state.vaultView = null;
   state.vaultPending = null;
-  renderVault();
+  renderVault(); // lifts the push hold; the saves above then push the adopted set
   composerHint.textContent = `Replaced local with cloud (${count} block${count === 1 ? "" : "s"}).`;
 }
 
