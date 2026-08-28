@@ -5284,6 +5284,9 @@ async function flushCloudSync() {
   setSyncStatus("syncing");
 
   let body;
+  // Canonical form of the exact snapshot being uploaded, taken before any await so
+  // a save landing mid-upload can't be recorded as "what the cloud holds".
+  const uploadedCanonical = canonicalizeEntries(state.entries);
   try {
     // Reuse the exact AES-GCM path used by encrypted export: base64(IV(12) || ct+tag).
     // Upload the raw bytes of that blob; iOS splits the 12-byte IV prefix and decrypts.
@@ -5319,6 +5322,7 @@ async function flushCloudSync() {
       return { status: "error", reason: "http-" + response.status };
     } else {
       setSyncStatus("ok");
+      void recordSyncedBaseCanonical(uploadedCanonical); // the cloud now holds this snapshot
       return { status: "ok" };
     }
   } catch (error) {
@@ -5681,6 +5685,57 @@ function entriesDiffer(cloud, local) {
   return canonicalizeEntries(cloud) !== canonicalizeEntries(local);
 }
 
+// Merge base. Records the SHA-256 of the canonical set this browser last KNEW the
+// cloud held (PUT 200 of that exact snapshot, a pull that came back identical, or
+// a replace-with-cloud). At the conflict card, "cloud hash === base" proves the
+// cloud has not changed since we last synced, so any divergence originated here.
+// Stored encrypted under the master key (no plaintext-derived hash at rest); a
+// key change makes it undecryptable, which simply means "no base". Never
+// written on Keep — the resulting push records it.
+const SYNC_BASE_HASH_KEY = "sync-last-synced-hash";
+
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function recordSyncedBaseCanonical(canonical) {
+  if (!(state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey)) return;
+  try {
+    const hash = await sha256Hex(canonical);
+    await saveMeta(SYNC_BASE_HASH_KEY, await encryptPlaintext(hash, state.encryption.masterKey));
+  } catch (error) {
+    console.warn("[txtshell] couldn't record sync base", error); // no base is always safe
+  }
+}
+
+function recordSyncedBase(entries) {
+  return recordSyncedBaseCanonical(canonicalizeEntries(entries));
+}
+
+async function clearSyncedBase() {
+  try {
+    await deleteMeta(SYNC_BASE_HASH_KEY);
+  } catch (error) {
+    console.warn("[txtshell] couldn't clear sync base", error);
+  }
+}
+
+// True only when a base exists, decrypts under the current key, and equals the
+// hash of the cloud set in hand. Any failure → false → today's classification.
+async function cloudMatchesSyncedBase(cloudEntries) {
+  if (!(state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey)) return false;
+  try {
+    const stored = await getMeta(SYNC_BASE_HASH_KEY);
+    if (!stored) return false;
+    const base = await decryptCiphertext(stored, state.encryption.masterKey);
+    if (!/^[0-9a-f]{64}$/.test(base)) return false;
+    return (await sha256Hex(canonicalizeEntries(cloudEntries))) === base;
+  } catch {
+    return false; // undecryptable (key changed) or unreadable → no base
+  }
+}
+
 // Newest content timestamp across entries (ISO strings compare lexicographically).
 // These live inside the GCM-authenticated payload, so a hostile server can't forge
 // them — they're the trustworthy freshness signal for the pull-conflict card.
@@ -5721,12 +5776,14 @@ async function beginPull() {
     const result = await fetchAndDecryptBlocks();
     setSyncStatus("ok"); // reachable + decrypted: the sync channel is healthy
     if (result.empty) {
+      void clearSyncedBase();
       composerHint.textContent = "Cloud is empty — nothing to pull.";
       return;
     }
     if (entriesDiffer(result.entries, state.entries)) {
-      showPullConflict(result.entries);
+      await showPullConflict(result.entries); // awaited: the card must be up before the hold lifts
     } else {
+      void recordSyncedBase(state.entries); // local == cloud, established
       composerHint.textContent = "Already up to date.";
     }
   } catch (error) {
@@ -5753,10 +5810,15 @@ async function autoPullOnUnlock() {
   try {
     const result = await fetchAndDecryptBlocks();
     setSyncStatus("ok"); // reachable + decrypted: the sync channel is healthy
-    if (result.empty) return;
+    if (result.empty) {
+      void clearSyncedBase();
+      return;
+    }
     if (!state.encryption.unlocked || state.vaultView) return; // user moved on; catch it next time
     if (entriesDiffer(result.entries, state.entries)) {
-      showPullConflict(result.entries);
+      await showPullConflict(result.entries); // awaited: the card must be up before the hold lifts
+    } else {
+      void recordSyncedBase(state.entries); // local == cloud, established
     }
   } catch (error) {
     if (error?.message === "not-configured") return; // sync not set up — nothing to fetch
@@ -5792,8 +5854,10 @@ function pullErrorMessage(error) {
   }
 }
 
-function showPullConflict(cloudEntries) {
-  state.vaultPending = { pullEntries: cloudEntries };
+async function showPullConflict(cloudEntries) {
+  const baseMatches = await cloudMatchesSyncedBase(cloudEntries);
+  if (state.vaultView) return; // a card opened meanwhile — never clobber it
+  state.vaultPending = { pullEntries: cloudEntries, baseMatches };
   state.vaultView = "pull-conflict";
   renderVault();
 }
@@ -5806,7 +5870,7 @@ function showPullConflict(cloudEntries) {
 // routes to the careful card. Shared ids with different content are ranked by
 // editedAt under the same clock-skew tolerance the old card used; inside the
 // tolerance they're "ambiguous" and force the careful card.
-function classifyPullDivergence(cloudEntries, localEntries) {
+function classifyPullDivergence(cloudEntries, localEntries, baseMatches = false) {
   const valid = (e) => e && typeof e.id === "string";
   const cloudById = new Map(cloudEntries.filter(valid).map((e) => [e.id, e]));
   const localById = new Map(localEntries.filter(valid).map((e) => [e.id, e]));
@@ -5838,6 +5902,16 @@ function classifyPullDivergence(cloudEntries, localEntries) {
       cloudOnly.push(cloud);
     }
   }
+  // Merge base: the cloud is byte-identical to what we last synced, so every
+  // divergence originated here and in-window "ambiguous" edits are local edits.
+  // Applied ONLY when the cloud shows no evidence of change — cloudOnly/cloudNewer
+  // under a base match is a contradiction (another tab of this profile pushed, or a
+  // clock ran backwards) and the base is ignored. It upgrades ambiguity; it never
+  // overrides evidence.
+  const baseApplied = baseMatches && cloudOnly.length === 0 && cloudNewer.length === 0;
+  if (baseApplied && ambiguous.length > 0) {
+    localNewer.push(...ambiguous.splice(0));
+  }
   const localAhead = localOnly.length + localNewer.length;
   const cloudAhead = cloudOnly.length + cloudNewer.length;
   let kind;
@@ -5848,7 +5922,7 @@ function classifyPullDivergence(cloudEntries, localEntries) {
   } else {
     kind = "diverged"; // includes "differ but nothing classifiable" — never a blank card
   }
-  return { kind, localOnly, cloudOnly, localNewer, cloudNewer, ambiguous };
+  return { kind, localOnly, cloudOnly, localNewer, cloudNewer, ambiguous, baseApplied };
 }
 
 // Short, single-line preview of a block for the conflict card lists.
@@ -5875,7 +5949,7 @@ function renderPullConflictCard() {
     exitVaultToNormal();
     return;
   }
-  const diff = classifyPullDivergence(cloudEntries, state.entries);
+  const diff = classifyPullDivergence(cloudEntries, state.entries, state.vaultPending.baseMatches === true);
   const cloudNewest = newestEntryStamp(cloudEntries);
   const localNewest = newestEntryStamp(state.entries);
   const fmtStamp = (stamp) => {
@@ -5903,6 +5977,9 @@ function renderPullConflictCard() {
     const it = adds + edits === 1 ? "it" : "them";
     title = "This browser has changes the cloud doesn't";
     subtitle = `You've ${parts.join(" and ")}. Nothing in the cloud is missing from this browser, so keeping ${it} loses nothing.`;
+    if (diff.baseApplied) {
+      subtitle += " The cloud hasn't changed since this browser last synced.";
+    }
     lists = renderPreviewList(adds ? "Not in the cloud yet:" : "Edited here:", adds ? diff.localOnly : diff.localNewer);
     keepLabel = `Keep ${it}`;
     replaceLabel = `Discard ${it}, use cloud copy`;
@@ -6007,6 +6084,7 @@ async function applyCloudReplaceLocal(cloudEntries) {
   await clearAllEntryRecords();
   state.entries = [];
   await mergeImportedEntries(valid); // re-encrypts via saveEntry
+  await recordSyncedBase(cloudEntries); // local now mirrors the cloud
   const count = state.entries.length;
   state.vaultView = null;
   state.vaultPending = null;
