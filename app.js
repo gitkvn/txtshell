@@ -145,6 +145,11 @@ const state = {
     unlocked: false,
     masterKey: null,
   },
+  // Records in IndexedDB that the current key cannot open (see
+  // decryptAllEntriesIntoState). Kept out of `entries` so they are never
+  // rendered, indexed or edited; kept in memory so they travel with the vault
+  // (sync blob, exports) instead of being silently dropped. Memory-only.
+  unreadable: [],
   vaultView: null,
   vaultPending: null,
   targetCount: null,
@@ -1465,7 +1470,9 @@ function handleGlobalShortcut(event) {
 }
 
 function render() {
-  savedCount.textContent = `Saved (${state.entries.length})`;
+  savedCount.textContent = state.unreadable.length > 0
+    ? `Saved (${state.entries.length}) · ${state.unreadable.length} unreadable`
+    : `Saved (${state.entries.length})`;
   entryInput.placeholder = state.entries.length
     ? COMPOSER_PLACEHOLDER_HAS_BLOCKS
     : COMPOSER_PLACEHOLDER_EMPTY;
@@ -1650,8 +1657,12 @@ async function initialize() {
       return;
     }
 
-    state.entries = await getAllEntries();
-    state.entries = state.entries.map((entry) => ({
+    const rawEntries = await getAllEntries();
+    // A plaintext store can still hold records flagged unreadable (they arrive
+    // via a pull or an import from an encrypted vault). They are not blocks:
+    // never render or index their ciphertext, keep them for the vault to carry.
+    state.unreadable = rawEntries.filter(isUnreadableRecord).map(unreadableRecordOf);
+    state.entries = rawEntries.filter((entry) => !isUnreadableRecord(entry)).map((entry) => ({
       ...entry,
       tags: Array.isArray(entry.tags) ? entry.tags : extractTags(entry.text),
       mentions: Array.isArray(entry.mentions) ? entry.mentions : extractMentions(entry.text),
@@ -3309,10 +3320,20 @@ async function exportEntries({ plain = false } = {}) {
     return;
   }
 
-  if (!state.entries.length) {
+  if (!state.entries.length && !state.unreadable.length) {
     composerHint.textContent = "Nothing to export";
     return;
   }
+
+  // Both exports carry unreadable records flagged, ciphertext untouched, so a
+  // backup is complete and says so; an importer keeps them flagged too.
+  const exportEntriesList = [...state.entries, ...state.unreadable.map(blobRecordOf)];
+  const exportedLabel = (suffix) => {
+    const carried = state.unreadable.length > 0
+      ? `, ${pluralCount(state.unreadable.length, "block")} carried as unreadable`
+      : "";
+    return `Exported ${pluralCount(state.entries.length, "block")}${carried} (${suffix})`;
+  };
 
   if (!plain && state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey) {
     const saltPass = await getMeta(ENC_SALT_PASS_KEY);
@@ -3332,7 +3353,7 @@ async function exportEntries({ plain = false } = {}) {
     const iterationsPass = await readIterations(ENC_ITERATIONS_PASS_KEY);
 
     const combined = await encryptPlaintext(
-      JSON.stringify(state.entries),
+      JSON.stringify(exportEntriesList),
       state.encryption.masterKey,
     );
     const combinedBytes = base64ToBytes(combined);
@@ -3365,11 +3386,11 @@ async function exportEntries({ plain = false } = {}) {
     link.download = `txtshell-encrypted-${timestamp}.json`;
     link.click();
     URL.revokeObjectURL(url);
-    composerHint.textContent = `Exported ${state.entries.length} blocks (encrypted)`;
+    composerHint.textContent = exportedLabel("encrypted");
     return;
   }
 
-  const content = JSON.stringify(state.entries, null, 2);
+  const content = JSON.stringify(exportEntriesList, null, 2);
   const timestamp = new Date().toISOString().slice(0, 10);
   const blob = new Blob([content], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -3379,8 +3400,8 @@ async function exportEntries({ plain = false } = {}) {
   link.click();
   URL.revokeObjectURL(url);
   composerHint.textContent = state.encryption.enabled
-    ? `Exported ${state.entries.length} blocks (plaintext — this file is NOT encrypted)`
-    : `Exported ${state.entries.length} blocks (plaintext)`;
+    ? exportedLabel("plaintext — this file is NOT encrypted")
+    : exportedLabel("plaintext");
 }
 
 function importEntries() {
@@ -3440,6 +3461,8 @@ async function mergeImportedEntries(items) {
   let added = 0;
   let updated = 0;
   let skipped = 0;
+  let kept = 0;      // flagged items stored as unreadable (no readable copy here)
+  let recovered = 0; // readable items that superseded a local unreadable copy
   for (const item of items) {
     if (typeof item.id !== "string" || typeof item.text !== "string" || typeof item.createdAt !== "string") {
       skipped++;
@@ -3447,6 +3470,33 @@ async function mergeImportedEntries(items) {
     }
     if (item.text.length > MAX_IMPORT_ENTRY_TEXT) {
       skipped++;
+      continue;
+    }
+    if (isUnreadableRecord(item)) {
+      // A flagged copy: ciphertext under a key the sender lacked. Never index
+      // it (no tags/mentions over ciphertext), never show it. The rule: a
+      // readable copy of the id here beats it outright.
+      if (!isCiphertextShaped(item.text)) {
+        skipped++;
+        continue;
+      }
+      if (state.entries.some((e) => e.id === item.id)) {
+        continue; // readable here — the flagged copy carries nothing we lack
+      }
+      const existingUnreadable = state.unreadable.find((u) => u.id === item.id);
+      if (existingUnreadable) {
+        if (existingUnreadable.text === item.text || entryFreshness(item) <= entryFreshness(existingUnreadable)) {
+          continue; // same ciphertext, or ours is as fresh — keep ours
+        }
+        const replacement = unreadableRecordOf(item);
+        await putEntryRecord(replacement);
+        Object.assign(existingUnreadable, replacement);
+      } else {
+        const record = unreadableRecordOf(item);
+        await putEntryRecord(record); // verbatim: saveEntry would encrypt ciphertext again
+        state.unreadable.push(record);
+      }
+      kept++;
       continue;
     }
     const entry = {
@@ -3469,6 +3519,13 @@ async function mergeImportedEntries(items) {
         updated++;
       }
     } else {
+      // A readable copy of an id we hold only as unreadable supersedes it
+      // (saveEntry overwrites the flagged record by id).
+      const unreadableIndex = state.unreadable.findIndex((u) => u.id === entry.id);
+      if (unreadableIndex !== -1) {
+        state.unreadable.splice(unreadableIndex, 1);
+        recovered++;
+      }
       state.entries.push(entry);
       await saveEntry(entry);
       added++;
@@ -3476,16 +3533,19 @@ async function mergeImportedEntries(items) {
   }
   state.entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   render();
+  const extras = [];
+  if (recovered > 0) extras.push(`recovered ${recovered} from the cloud`);
+  if (kept > 0) extras.push(`${kept} unreadable kept`);
+  if (skipped > 0) extras.push(`${skipped} skipped (oversized or malformed)`);
   if (added === 0 && updated === 0) {
-    composerHint.textContent = skipped > 0
-      ? `No new entries to import (${skipped} skipped — oversized or malformed)`
+    composerHint.textContent = extras.length > 0
+      ? `No new entries to import (${extras.join(", ")})`
       : "No new entries to import";
   } else {
     const parts = [];
     if (added > 0) parts.push(`${added} new`);
     if (updated > 0) parts.push(`${updated} updated`);
-    if (skipped > 0) parts.push(`${skipped} skipped (oversized or malformed)`);
-    composerHint.textContent = `Imported ${parts.join(", ")}`;
+    composerHint.textContent = `Imported ${parts.concat(extras).join(", ")}`;
   }
 }
 
@@ -3831,48 +3891,198 @@ async function verifyMasterKey(masterKey) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Unreadable records. A record the current key cannot open is never dropped,
+// never deleted (only /wipe removes it) and never shown as a block. It is kept
+// in memory as the raw record so it can travel with the vault: the sync blob
+// and both exports carry it flagged `unreadable: true` with its ciphertext
+// untouched, and any device that holds (or later obtains) the right key reads
+// it as an ordinary block. One rule resolves a collision everywhere, in both
+// directions: a READABLE copy of an id beats an UNREADABLE copy of the same id.
+// ---------------------------------------------------------------------------
+
+// Every record saveEntry has ever written is base64(IV(12) || ct || tag(16)):
+// strict base64, length % 4 == 0, at least 28 bytes decoded. A record that
+// fails this cannot be our ciphertext — it is plaintext left behind by an
+// interrupted /encrypt, and is recoverable as-is. A record that passes it but
+// fails GCM is under a key this device does not hold.
+function isCiphertextShaped(text) {
+  if (typeof text !== "string" || text.length === 0 || text.length % 4 !== 0) return false;
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(text)) return false;
+  try {
+    return base64ToBytes(text).length >= 28;
+  } catch {
+    return false;
+  }
+}
+
+function isUnreadableRecord(record) {
+  return Boolean(record) && record.unreadable === true;
+}
+
+// The in-memory / IndexedDB shape of an unreadable record: the ciphertext
+// verbatim, no derived fields (never index ciphertext), flagged.
+function unreadableRecordOf(record) {
+  return {
+    id: record.id,
+    text: record.text,
+    tags: [],
+    mentions: [],
+    createdAt: typeof record.createdAt === "string" ? record.createdAt : "",
+    editedAt: typeof record.editedAt === "string" ? record.editedAt : (record.createdAt || ""),
+    pinned: record.pinned === true,
+    unreadable: true,
+  };
+}
+
+// The shape an unreadable record takes inside the sync blob and the exports.
+function blobRecordOf(record) {
+  return {
+    id: record.id,
+    createdAt: record.createdAt,
+    editedAt: record.editedAt,
+    pinned: record.pinned === true,
+    unreadable: true,
+    text: record.text,
+  };
+}
+
+function entryFromPlaintext(record, text) {
+  return {
+    id: record.id,
+    text,
+    tags: extractTags(text),
+    mentions: extractMentions(text),
+    createdAt: record.createdAt,
+    editedAt: record.editedAt || record.createdAt,
+    pinned: record.pinned === true,
+  };
+}
+
+// A short, user-facing summary of the unlock outcome for the composer hint.
+function describeUnlockOutcome(outcome) {
+  const parts = [];
+  if (outcome.recovered.length > 0) {
+    parts.push(`recovered ${pluralCount(outcome.recovered.length, "block")} left unencrypted by an interrupted /encrypt`);
+  }
+  if (outcome.unreadable > 0) {
+    parts.push(`${pluralCount(outcome.unreadable, "block")} can't be read with this key (kept, not deleted)`);
+  }
+  return parts.join(" · ");
+}
+
+// Decrypts every record into state. A record that fails is classified, not
+// dropped: a plaintext leftover is recovered into `entries` (and returned so
+// the caller re-encrypts it), anything else is kept in `state.unreadable`.
+// Returns { recovered: entry[], unreadable: count }.
 async function decryptAllEntriesIntoState() {
   const raw = await getAllEntries();
   const decrypted = [];
+  const unreadable = [];
+  const recovered = [];
   for (const record of raw) {
     try {
       const text = await decryptCiphertext(record.text, state.encryption.masterKey);
-      decrypted.push({
-        id: record.id,
-        text,
-        tags: extractTags(text),
-        mentions: extractMentions(text),
-        createdAt: record.createdAt,
-        editedAt: record.editedAt || record.createdAt,
-        pinned: record.pinned === true,
-      });
+      decrypted.push(entryFromPlaintext(record, text));
+      continue;
     } catch (error) {
       console.error("Failed to decrypt entry", record.id, error);
+    }
+    // A record that arrived flagged was already judged by the device that
+    // flagged it; never run the plaintext heuristic on it.
+    if (!isUnreadableRecord(record) && !isCiphertextShaped(record.text)) {
+      const entry = entryFromPlaintext(record, record.text);
+      decrypted.push(entry);
+      recovered.push(entry);
+    } else {
+      unreadable.push(unreadableRecordOf(record));
     }
   }
   decrypted.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   state.entries = decrypted;
+  state.unreadable = unreadable;
+  return { recovered, unreadable: unreadable.length };
 }
 
-async function cleanupOrphanedEntries() {
-  if (isVaultLocked()) {
-    console.warn("Cannot run cleanup while vault is locked — would delete all encrypted entries. Unlock first.");
-    return;
+// Re-encrypts plaintext leftovers in place. One record per write: a crash
+// mid-way leaves plaintext records, which the next unlock recovers again.
+async function reencryptRecovered(outcome) {
+  for (const entry of outcome.recovered) {
+    await saveEntry(entry);
   }
-  if (state.entries.length === 0) {
-    console.warn("Cannot run cleanup with empty state.entries — refusing to proceed.");
-    return;
+}
+
+// Replaces every block record and the listed meta rows under a new key in ONE
+// IndexedDB transaction, so the store is entirely on the old key or entirely
+// on the new one — never mixed. Two phases, because an IDB transaction goes
+// inactive the moment control returns to the event loop with no request
+// pending, and `await crypto.subtle.*` does exactly that:
+//   1. all crypto, in memory, no transaction open (every await is here);
+//   2. one write-only transaction: every put/delete issued synchronously.
+// `key` null writes plaintext records (/encrypt off). Unreadable records are
+// never re-encrypted: they are written back verbatim WITH the flag, so a store
+// that ends up in plaintext (/encrypt off) cannot mistake their ciphertext for
+// a block on the next load.
+async function rekeyVault({ entries, key, flagged = state.unreadable, metaPuts = [], metaDeletes = [] }) {
+  const records = flagged.map(unreadableRecordOf);
+  for (const entry of entries) {
+    records.push(key
+      ? {
+        id: entry.id,
+        text: await encryptPlaintext(entry.text, key),
+        tags: [],
+        mentions: [],
+        createdAt: entry.createdAt,
+        editedAt: entry.editedAt || entry.createdAt,
+        pinned: entry.pinned === true,
+      }
+      : {
+        id: entry.id,
+        text: entry.text,
+        tags: extractTags(entry.text),
+        mentions: extractMentions(entry.text),
+        createdAt: entry.createdAt,
+        editedAt: entry.editedAt || entry.createdAt,
+        pinned: entry.pinned === true,
+      });
   }
-  const raw = await getAllEntries();
-  const known = new Set(state.entries.map((e) => e.id));
-  let removed = 0;
-  for (const record of raw) {
-    if (!known.has(record.id)) {
-      await removeEntry(record.id);
-      removed++;
+  if (!state.db) {
+    throw new Error("storage-unavailable");
+  }
+  await new Promise((resolve, reject) => {
+    const transaction = state.db.transaction([ENTRY_STORE, META_STORE], "readwrite", { durability: "strict" });
+    const entryStore = transaction.objectStore(ENTRY_STORE);
+    const metaStore = transaction.objectStore(META_STORE);
+    for (const record of records) {
+      entryStore.put(record);
     }
+    for (const [metaKey, value] of metaPuts) {
+      metaStore.put({ key: metaKey, value });
+    }
+    for (const metaKey of metaDeletes) {
+      metaStore.delete(metaKey);
+    }
+    transaction.addEventListener("complete", () => resolve());
+    transaction.addEventListener("abort", () => reject(transaction.error || new Error("rekey-aborted")));
+    transaction.addEventListener("error", () => reject(transaction.error || new Error("rekey-failed")));
+  });
+}
+
+// Deletes exactly the listed ids. Replaces the old "clear the whole store"
+// so records that are not in `entries` (unreadable ones) survive a replace.
+function deleteEntryRecords(ids) {
+  if (!state.db || ids.length === 0) {
+    return Promise.resolve();
   }
-  console.log(`[txtshell] cleanupOrphanedEntries: removed ${removed} orphaned ${removed === 1 ? "entry" : "entries"}`);
+  return new Promise((resolve, reject) => {
+    const transaction = state.db.transaction(ENTRY_STORE, "readwrite");
+    const store = transaction.objectStore(ENTRY_STORE);
+    for (const id of ids) {
+      store.delete(id);
+    }
+    transaction.addEventListener("complete", () => resolve());
+    transaction.addEventListener("error", () => reject(transaction.error));
+  });
 }
 
 function updateLockButton() {
@@ -3902,6 +4112,7 @@ function lockVault() {
   state.encryption.unlocked = false;
   state.encryption.masterKey = null;
   state.entries = [];
+  state.unreadable = [];
   state.search = "";
   state.preset = null;
   state.selectedEntryId = null;
@@ -3985,7 +4196,9 @@ function renderVault() {
   } else if (view === "disable-confirm") {
     renderPassphraseConfirmCard({
       title: "Turn off encryption",
-      subtitle: "Enter your passphrase. Your blocks will be restored to plaintext in local storage.",
+      subtitle: state.unreadable.length > 0
+        ? `Enter your passphrase. Your blocks will be restored to plaintext in local storage. ${pluralCount(state.unreadable.length, "block")} this key can't read will stay unreadable.`
+        : "Enter your passphrase. Your blocks will be restored to plaintext in local storage.",
       buttonText: "Turn off encryption",
       onSubmit: handleDisableSubmit,
       onCancel: exitVaultToNormal,
@@ -4522,6 +4735,7 @@ async function performWipe() {
   });
 
   state.entries = [];
+  state.unreadable = [];
   state.encryption = { enabled: false, unlocked: false, masterKey: null };
   state.vaultView = null;
   state.vaultPending = null;
@@ -4798,16 +5012,15 @@ async function handleImportAdoptVault() {
       [ENC_ITERATIONS_RECOVERY_KEY, String(Math.max(file.iterationsRecovery || file.iterations || PBKDF2_ITERATIONS, MIN_IMPORT_ITERATIONS))],
     );
   }
-  await saveMetaBatch(metaRows);
+  // Blocks that existed before adoption are encrypted at rest in the same
+  // transaction that writes the vault meta — without this they'd stay
+  // plaintext records and fail decryption after relock; and a crash between
+  // the meta and the records would strand them.
+  await rekeyVault({ entries: state.entries, key: pending.importMasterKey, metaPuts: metaRows });
   state.encryption.enabled = true;
   state.encryption.unlocked = true;
   state.encryption.masterKey = pending.importMasterKey;
   updateLockButton();
-  // Re-save any blocks that existed before adoption so they're encrypted at rest —
-  // without this they'd stay plaintext records and fail decryption after relock.
-  for (const entry of state.entries) {
-    await saveEntry(entry);
-  }
   await mergeImportedEntries(pending.importEntries);
   state.vaultView = null;
   state.vaultPending = null;
@@ -4875,28 +5088,29 @@ async function handleRecoveryConfirm() {
   renderVault();
 
   try {
-    // One IndexedDB transaction: a partial write (e.g. salt without wrapped key)
-    // would present an unlock gate that no credential can ever open.
-    await saveMetaBatch([
-      [ENC_SALT_PASS_KEY, bytesToBase64(pending.saltPass)],
-      [ENC_SALT_RECOVERY_KEY, bytesToBase64(pending.saltRecovery)],
-      [ENC_WRAPPED_PASS_KEY, pending.wrappedPass],
-      [ENC_WRAPPED_RECOVERY_KEY, pending.wrappedRecovery],
-      [ENC_VERIFY_KEY, pending.verify],
-      [ENC_ITERATIONS_PASS_KEY, String(PBKDF2_ITERATIONS)],
-      [ENC_ITERATIONS_RECOVERY_KEY, String(PBKDF2_ITERATIONS)],
-    ]);
+    // One IndexedDB transaction for the vault meta AND every re-encrypted
+    // record: a partial write (salt without wrapped key, or meta that says
+    // encrypted over records still in plaintext) would present an unlock gate
+    // that no credential can ever open, or a vault that cannot read its own
+    // blocks. rekeyVault does the crypto first, then commits all or nothing.
+    await rekeyVault({
+      entries: state.entries,
+      key: pending.masterKey,
+      metaPuts: [
+        [ENC_SALT_PASS_KEY, bytesToBase64(pending.saltPass)],
+        [ENC_SALT_RECOVERY_KEY, bytesToBase64(pending.saltRecovery)],
+        [ENC_WRAPPED_PASS_KEY, pending.wrappedPass],
+        [ENC_WRAPPED_RECOVERY_KEY, pending.wrappedRecovery],
+        [ENC_VERIFY_KEY, pending.verify],
+        [ENC_ITERATIONS_PASS_KEY, String(PBKDF2_ITERATIONS)],
+        [ENC_ITERATIONS_RECOVERY_KEY, String(PBKDF2_ITERATIONS)],
+      ],
+      metaDeletes: [DRAFT_KEY, DRAFT_STASH_KEY],
+    });
 
     state.encryption.enabled = true;
     state.encryption.unlocked = true;
     state.encryption.masterKey = pending.masterKey;
-
-    for (const entry of state.entries) {
-      await saveEntry(entry);
-    }
-
-    await deleteMeta(DRAFT_KEY);
-    await deleteMeta(DRAFT_STASH_KEY);
 
     state.vaultView = null;
     state.vaultPending = null;
@@ -4905,6 +5119,7 @@ async function handleRecoveryConfirm() {
     composerHint.textContent = "Encryption on";
     render();
     entryInput.focus();
+    scheduleCloudSync();
   } catch (error) {
     console.error(error);
     state.vaultView = "recovery-display";
@@ -4958,16 +5173,19 @@ async function handleUnlockSubmit(value, isRecovery) {
 
   state.encryption.masterKey = masterKey;
   state.encryption.unlocked = true;
-  await decryptAllEntriesIntoState();
+  const outcome = await decryptAllEntriesIntoState();
 
   state.vaultView = null;
   state.vaultPending = null;
   renderVault();
   updateLockButton();
-  composerHint.textContent = "Vault unlocked";
+  const outcomeText = describeUnlockOutcome(outcome);
+  composerHint.textContent = outcomeText ? `Vault unlocked — ${outcomeText}` : "Vault unlocked";
   render();
   entryInput.focus();
   signalReady();
+  // Plaintext leftovers go back under the key now that the vault is open.
+  void reencryptRecovered(outcome);
 
   // Non-blocking: refresh from cloud after unlock; prompts only if cloud differs.
   void autoPullOnUnlock();
@@ -5050,7 +5268,7 @@ async function handleDisableSubmit(passphrase) {
 
   try {
     if (!state.entries.length) {
-      await decryptAllEntriesIntoState();
+      await decryptAllEntriesIntoState(); // plaintext leftovers land in entries; unreadable ones stay flagged
     }
     const plaintextEntries = state.entries.map((entry) => ({
       ...entry,
@@ -5058,28 +5276,37 @@ async function handleDisableSubmit(passphrase) {
       mentions: extractMentions(entry.text),
     }));
 
+    // Every record back to plaintext and the vault meta removed in ONE
+    // transaction: a crash can leave the vault fully on or fully off, never a
+    // plaintext store whose meta still demands a passphrase. Unreadable
+    // records are untouched — they stay flagged, and the footer keeps counting
+    // them; the key being removed could not open them anyway.
+    await rekeyVault({
+      entries: plaintextEntries,
+      key: null,
+      metaDeletes: [
+        ENC_SALT_PASS_KEY,
+        ENC_SALT_RECOVERY_KEY,
+        ENC_WRAPPED_PASS_KEY,
+        ENC_WRAPPED_RECOVERY_KEY,
+        ENC_VERIFY_KEY,
+        ENC_ITERATIONS_PASS_KEY,
+        ENC_ITERATIONS_RECOVERY_KEY,
+      ],
+    });
+
     state.encryption.enabled = false;
     state.encryption.unlocked = false;
     state.encryption.masterKey = null;
     state.entries = plaintextEntries;
 
-    for (const entry of plaintextEntries) {
-      await saveEntry(entry);
-    }
-
-    await deleteMeta(ENC_SALT_PASS_KEY);
-    await deleteMeta(ENC_SALT_RECOVERY_KEY);
-    await deleteMeta(ENC_WRAPPED_PASS_KEY);
-    await deleteMeta(ENC_WRAPPED_RECOVERY_KEY);
-    await deleteMeta(ENC_VERIFY_KEY);
-    await deleteMeta(ENC_ITERATIONS_PASS_KEY);
-    await deleteMeta(ENC_ITERATIONS_RECOVERY_KEY);
-
     state.vaultView = null;
     state.vaultPending = null;
     renderVault();
     updateLockButton();
-    composerHint.textContent = "Encryption off";
+    composerHint.textContent = state.unreadable.length > 0
+      ? `Encryption off — ${pluralCount(state.unreadable.length, "unreadable block")} kept as-is`
+      : "Encryption off";
     render();
     entryInput.focus();
   } catch (error) {
@@ -5122,6 +5349,7 @@ const SYNC_STATUS_LABELS = {
   "push-blocked": { short: "Sync: can't reach Worker", full: "Sync failed — can't reach Worker (offline or blocked)" },
   "push-encrypt": { short: "Sync: encrypt error", full: "Sync failed — couldn't encrypt blocks" },
   "push-server": { short: "Sync: server error", full: "Sync failed — Worker rejected the upload" },
+  "push-too-large": { short: "Sync: vault too large", full: "Sync failed — the vault exceeds the Worker's size limit" },
   "pull-auth": { short: "Pull: check token", full: "Pull failed — auth rejected, check your token" },
   "pull-blocked": { short: "Pull: can't reach cloud", full: "Pull failed — can't reach cloud (offline or blocked)" },
   "pull-decrypt": { short: "Pull: decrypt error", full: "Pull failed — couldn't decrypt cloud blocks" },
@@ -5166,8 +5394,20 @@ function setSyncStatus(status) {
   // One-shot toast only when newly broken or the reason changed — never on a repeat
   // of the same standing failure. The indicator itself carries the persistent signal.
   if (isNewFailure) {
-    showStatusToast(SYNC_STATUS_LABELS[reason].full, { isHint: true });
+    showStatusToast(syncStatusFull(reason), { isHint: true });
   }
+}
+
+// The full message for a failure reason. The size limit is the one place the
+// unreadable count belongs: flagged records ride in the blob as ciphertext and
+// count against the Worker's cap like any block, so the user must see them in
+// the same breath as the limit.
+function syncStatusFull(reason) {
+  const base = (SYNC_STATUS_LABELS[reason] || SYNC_STATUS_LABELS["push-server"]).full;
+  if (reason === "push-too-large" && state.unreadable.length > 0) {
+    return `${base} (${pluralCount(state.unreadable.length, "unreadable block")} included)`;
+  }
+  return base;
 }
 
 function renderSyncIndicator() {
@@ -5182,9 +5422,10 @@ function renderSyncIndicator() {
 
   if (state === "failed") {
     const label = SYNC_STATUS_LABELS[lastFailureReason] || SYNC_STATUS_LABELS["push-server"];
+    const full = syncStatusFull(lastFailureReason);
     labelEl.textContent = label.short;
-    syncIndicator.setAttribute("data-tooltip", label.full);
-    syncIndicator.setAttribute("aria-label", label.full);
+    syncIndicator.setAttribute("data-tooltip", full);
+    syncIndicator.setAttribute("aria-label", full);
   } else if (state === "syncing") {
     labelEl.textContent = "Syncing…";
     syncIndicator.removeAttribute("data-tooltip");
@@ -5284,14 +5525,18 @@ async function flushCloudSync() {
   setSyncStatus("syncing");
 
   let body;
+  // The blob carries every readable block AND every unreadable record (flagged,
+  // ciphertext verbatim): the cloud must never claim those ids do not exist, or
+  // another device's Replace would delete its readable copies of them.
+  const payload = syncPayloadEntries();
   // Canonical form of the exact snapshot being uploaded, taken before any await so
   // a save landing mid-upload can't be recorded as "what the cloud holds".
-  const uploadedCanonical = canonicalizeEntries(state.entries);
+  const uploadedCanonical = canonicalizeEntries(payload);
   try {
     // Reuse the exact AES-GCM path used by encrypted export: base64(IV(12) || ct+tag).
     // Upload the raw bytes of that blob; iOS splits the 12-byte IV prefix and decrypts.
     const base64Blob = await encryptPlaintext(
-      JSON.stringify(state.entries),
+      JSON.stringify(payload),
       state.encryption.masterKey,
     );
     body = base64ToBytes(base64Blob);
@@ -5317,6 +5562,9 @@ async function flushCloudSync() {
     if (response.status === 401) {
       setSyncStatus("push-auth");
       return { status: "auth" };
+    } else if (response.status === 413) {
+      setSyncStatus("push-too-large");
+      return { status: "error", reason: "http-413" };
     } else if (!response.ok) {
       setSyncStatus("push-server");
       return { status: "error", reason: "http-" + response.status };
@@ -5345,6 +5593,10 @@ function describeSyncError(reason) {
       return "request timed out";
     case "network":
       return "network error";
+    case "http-413":
+      return state.unreadable.length > 0
+        ? `vault exceeds the Worker's size limit (${pluralCount(state.unreadable.length, "unreadable block")} included)`
+        : "vault exceeds the Worker's size limit";
     default:
       if (typeof reason === "string" && reason.startsWith("http-")) {
         return `server error (${reason.slice(5)})`;
@@ -5665,6 +5917,120 @@ async function fetchAndDecryptBlocks() {
   return { empty: false, entries };
 }
 
+// What a push uploads: every readable block plus every unreadable record,
+// flagged, ciphertext verbatim. Same set the exports carry.
+function syncPayloadEntries() {
+  return [...state.entries, ...state.unreadable.map(blobRecordOf)];
+}
+
+// Adopts readable cloud copies of ids this browser holds only as unreadable.
+// No card: nothing readable is at stake (we replace ciphertext we cannot open
+// with a block we can), and leaving the unreadable copy in place would let
+// "Keep local" push it over the cloud's readable one. saveEntry overwrites the
+// flagged record by id and schedules the push that carries it readable.
+async function adoptReadableCopies(cloudEntries) {
+  let recovered = 0;
+  for (const item of cloudEntries) {
+    if (!item || typeof item.id !== "string" || typeof item.text !== "string" || typeof item.createdAt !== "string") continue;
+    if (isUnreadableRecord(item) || item.text.length > MAX_IMPORT_ENTRY_TEXT) continue;
+    const index = state.unreadable.findIndex((u) => u.id === item.id);
+    if (index === -1) continue;
+    state.unreadable.splice(index, 1);
+    const entry = entryFromPlaintext(item, item.text);
+    state.entries.push(entry);
+    await saveEntry(entry);
+    recovered++;
+  }
+  if (recovered > 0) {
+    state.entries.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    render();
+  }
+  return recovered;
+}
+
+// Stores a flagged cloud copy this browser has no readable record for.
+async function storeUnreadableCopy(item) {
+  if (!isCiphertextShaped(item.text) || item.text.length > MAX_IMPORT_ENTRY_TEXT) return false;
+  const record = unreadableRecordOf(item);
+  await putEntryRecord(record); // verbatim: saveEntry would encrypt ciphertext again
+  const index = state.unreadable.findIndex((u) => u.id === record.id);
+  if (index === -1) state.unreadable.push(record); else state.unreadable[index] = record;
+  return true;
+}
+
+// Reconciles a pulled set BEFORE the classifier sees it. Unreadable records
+// never reach the classifier: they are not blocks that can be "ahead" or
+// "behind", and a card cannot discard them (nothing but /wipe removes them),
+// so putting them in front of it would raise a card the user cannot clear.
+// They are settled here by the one rule — a readable copy of an id beats an
+// unreadable copy — and otherwise carried:
+//   1. cloud flagged, local readable  → local wins: the local entry stands in
+//      for the cloud copy so the sets compare equal on that id, and the next
+//      push carries it readable (`healable`, pushed right away);
+//   2. cloud readable, local unreadable → adopted now (`recovered`); nothing
+//      readable is at stake and leaving it would let "Keep local" push
+//      ciphertext over the cloud's readable copy;
+//   3. cloud flagged, local lacks it   → stored flagged, verbatim (`kept`);
+//   4. local unreadable, cloud lacks it → carried by the next push (`carried`,
+//      pushed right away);
+//   5. flagged on both sides: same ciphertext → nothing; else the fresher
+//      editedAt wins (adopted as 3, or carried as 4).
+// The classifier (unchanged) then compares readable sets only.
+// Returns { cloud, local, healable, recovered, kept, carried }.
+async function reconcileCloudEntries(cloudEntries) {
+  const valid = (e) => e && typeof e.id === "string";
+  const recovered = await adoptReadableCopies(cloudEntries); // rule 2
+  const localById = new Map(state.entries.map((e) => [e.id, e]));
+  const cloudIds = new Set(cloudEntries.filter(valid).map((e) => e.id));
+  let healable = 0;
+  let kept = 0;
+  const cloud = [];
+  for (const item of cloudEntries) {
+    if (!valid(item) || !isUnreadableRecord(item)) {
+      cloud.push(item); // readable (or invalid, left to the validators as before)
+      continue;
+    }
+    if (localById.has(item.id)) {
+      cloud.push(localById.get(item.id)); // rule 1: compare as equal on this id; the push carries it readable
+      healable++;
+      continue;
+    }
+    const mine = state.unreadable.find((u) => u.id === item.id);
+    if (!mine) {
+      if (await storeUnreadableCopy(item)) kept++; // rule 3
+    } else if (mine.text !== item.text && entryFreshness(item) > entryFreshness(mine)) {
+      if (await storeUnreadableCopy(item)) kept++; // rule 5
+    }
+  }
+  const carried = state.unreadable.filter((u) => !cloudIds.has(u.id)).length; // rule 4
+  if (kept > 0) render();
+  return { cloud, local: state.entries, healable, recovered, kept, carried };
+}
+
+// True when a pull found something to send back (rules 1 and 4): heal straight
+// away rather than on the next unrelated save, or a device the user only reads
+// on would leave the cloud's flags in place forever.
+function reconcileWantsPush(reconciled) {
+  return reconciled.healable > 0 || reconciled.carried > 0;
+}
+
+function describePullReconcile(reconciled) {
+  const parts = [];
+  if (reconciled.recovered > 0) {
+    parts.push(`recovered ${pluralCount(reconciled.recovered, "block")} from the cloud`);
+  }
+  if (reconciled.kept > 0) {
+    parts.push(`${pluralCount(reconciled.kept, "block")} in the cloud can't be read with this key (kept)`);
+  }
+  if (reconciled.healable > 0) {
+    parts.push(`the cloud has ${pluralCount(reconciled.healable, "block")} flagged unreadable that this browser can read; sending ${reconciled.healable === 1 ? "it" : "them"} now`);
+  }
+  if (reconciled.carried > 0) {
+    parts.push(`carrying ${pluralCount(reconciled.carried, "unreadable block")} to the cloud`);
+  }
+  return parts.join("; ");
+}
+
 // Stable serialization of the fields that define a block's content, sorted by id.
 // tags/mentions are derived from text, so they're excluded from the comparison.
 function canonicalizeEntries(entries) {
@@ -5751,18 +6117,6 @@ function newestEntryStamp(entries) {
   return newest;
 }
 
-function clearAllEntryRecords() {
-  if (!state.db) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve, reject) => {
-    const transaction = state.db.transaction(ENTRY_STORE, "readwrite");
-    transaction.objectStore(ENTRY_STORE).clear();
-    transaction.addEventListener("complete", () => resolve());
-    transaction.addEventListener("error", () => reject(transaction.error));
-  });
-}
-
 // Manual fetch. Requires an unlocked vault. Compares the cloud blob to local and
 // either no-ops ("up to date") or raises the conflict card.
 async function beginPull() {
@@ -5780,11 +6134,17 @@ async function beginPull() {
       composerHint.textContent = "Cloud is empty — nothing to pull.";
       return;
     }
-    if (entriesDiffer(result.entries, state.entries)) {
-      await showPullConflict(result.entries); // awaited: the card must be up before the hold lifts
+    const reconciled = await reconcileCloudEntries(result.entries);
+    if (entriesDiffer(reconciled.cloud, reconciled.local)) {
+      await showPullConflict(result.entries, reconciled); // awaited: the card must be up before the hold lifts
     } else {
-      void recordSyncedBase(state.entries); // local == cloud, established
-      composerHint.textContent = "Already up to date.";
+      void recordSyncedBase(result.entries); // local == cloud, established
+      const note = describePullReconcile(reconciled);
+      composerHint.textContent = note ? `Already up to date — ${note}.` : "Already up to date.";
+    }
+    // Replayed after the card if one is showing (the hold defers it).
+    if (reconcileWantsPush(reconciled)) {
+      scheduleCloudSync();
     }
   } catch (error) {
     setPullStatusFromError(error);
@@ -5815,10 +6175,18 @@ async function autoPullOnUnlock() {
       return;
     }
     if (!state.encryption.unlocked || state.vaultView) return; // user moved on; catch it next time
-    if (entriesDiffer(result.entries, state.entries)) {
-      await showPullConflict(result.entries); // awaited: the card must be up before the hold lifts
+    const reconciled = await reconcileCloudEntries(result.entries);
+    if (entriesDiffer(reconciled.cloud, reconciled.local)) {
+      await showPullConflict(result.entries, reconciled); // awaited: the card must be up before the hold lifts
     } else {
-      void recordSyncedBase(state.entries); // local == cloud, established
+      void recordSyncedBase(result.entries); // local == cloud, established
+    }
+    if (reconciled.recovered > 0 || reconciled.kept > 0) {
+      const note = describePullReconcile({ ...reconciled, healable: 0, carried: 0 });
+      composerHint.textContent = note.charAt(0).toUpperCase() + note.slice(1) + ".";
+    }
+    if (reconcileWantsPush(reconciled)) {
+      scheduleCloudSync(); // see beginPull
     }
   } catch (error) {
     if (error?.message === "not-configured") return; // sync not set up — nothing to fetch
@@ -5854,10 +6222,16 @@ function pullErrorMessage(error) {
   }
 }
 
-async function showPullConflict(cloudEntries) {
+// `cloudEntries` is the raw pulled set (what Replace adopts and what the base
+// hash was computed over); `reconciled` holds the two sets the classifier
+// compares after the readable-beats-unreadable rule.
+async function showPullConflict(cloudEntries, reconciled = null) {
+  if (!reconciled) {
+    reconciled = await reconcileCloudEntries(cloudEntries);
+  }
   const baseMatches = await cloudMatchesSyncedBase(cloudEntries);
   if (state.vaultView) return; // a card opened meanwhile — never clobber it
-  state.vaultPending = { pullEntries: cloudEntries, baseMatches };
+  state.vaultPending = { pullEntries: cloudEntries, pullCloud: reconciled.cloud, pullLocal: reconciled.local, baseMatches };
   state.vaultView = "pull-conflict";
   renderVault();
 }
@@ -5927,6 +6301,9 @@ function classifyPullDivergence(cloudEntries, localEntries, baseMatches = false)
 
 // Short, single-line preview of a block for the conflict card lists.
 function previewBlockText(entry, max = 60) {
+  if (isUnreadableRecord(entry)) {
+    return "(unreadable block)"; // never preview ciphertext
+  }
   const line = (typeof entry?.text === "string" ? entry.text : "")
     .split("\n").map((l) => l.trim()).find((l) => l.length > 0) || "(empty block)";
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
@@ -5949,14 +6326,18 @@ function renderPullConflictCard() {
     exitVaultToNormal();
     return;
   }
-  const diff = classifyPullDivergence(cloudEntries, state.entries, state.vaultPending.baseMatches === true);
-  const cloudNewest = newestEntryStamp(cloudEntries);
-  const localNewest = newestEntryStamp(state.entries);
+  // Compare the reconciled sets (readable beats unreadable, applied before the
+  // classifier); fall back to the raw sets for a pending card from an older build.
+  const cloudSet = Array.isArray(state.vaultPending.pullCloud) ? state.vaultPending.pullCloud : cloudEntries;
+  const localSet = Array.isArray(state.vaultPending.pullLocal) ? state.vaultPending.pullLocal : state.entries;
+  const diff = classifyPullDivergence(cloudSet, localSet, state.vaultPending.baseMatches === true);
+  const cloudNewest = newestEntryStamp(cloudSet);
+  const localNewest = newestEntryStamp(localSet);
   const fmtStamp = (stamp) => {
     const t = new Date(stamp);
     return stamp && !Number.isNaN(t.getTime()) ? t.toLocaleString() : "unknown";
   };
-  const detail = `Cloud: ${pluralCount(cloudEntries.length, "block")}, newest ${fmtStamp(cloudNewest)} · This browser: ${pluralCount(state.entries.length, "block")}, newest ${fmtStamp(localNewest)}`;
+  const detail = `Cloud: ${pluralCount(cloudSet.length, "block")}, newest ${fmtStamp(cloudNewest)} · This browser: ${pluralCount(localSet.length, "block")}, newest ${fmtStamp(localNewest)}`;
 
   let title;
   let subtitle;
@@ -6081,15 +6462,29 @@ async function applyCloudReplaceLocal(cloudEntries) {
   if (valid.length === 0 && cloudEntries.length > 0) {
     throw new Error("invalid-cloud-payload");
   }
-  await clearAllEntryRecords();
-  state.entries = [];
-  await mergeImportedEntries(valid); // re-encrypts via saveEntry
-  await recordSyncedBase(cloudEntries); // local now mirrors the cloud
+  // Readable beats unreadable: a block this browser can read and the cloud only
+  // holds flagged survives the replace, and the flagged copy is not adopted.
+  // Delete only the readable ids being replaced — never the whole store, so
+  // local unreadable records (which the cloud may lack) survive too.
+  const flaggedIds = new Set(valid.filter(isUnreadableRecord).map((item) => item.id));
+  const survivors = state.entries.filter((entry) => flaggedIds.has(entry.id));
+  const replacedIds = state.entries.filter((entry) => !flaggedIds.has(entry.id)).map((entry) => entry.id);
+  const survivorIds = new Set(survivors.map((entry) => entry.id));
+  const incoming = valid.filter((item) => !(isUnreadableRecord(item) && survivorIds.has(item.id)));
+  await deleteEntryRecords(replacedIds);
+  state.entries = survivors.slice(); // a copy: the merge below pushes into state.entries
+  await mergeImportedEntries(incoming); // re-encrypts via saveEntry; flagged items stay flagged
+  await recordSyncedBase(cloudEntries); // the cloud holds exactly this set
+  if (survivors.length > 0) {
+    scheduleCloudSync(); // send the readable copies the cloud only has flagged
+  }
   const count = state.entries.length;
   state.vaultView = null;
   state.vaultPending = null;
   renderVault(); // lifts the push hold; the saves above then push the adopted set
-  composerHint.textContent = `Replaced local with cloud (${count} block${count === 1 ? "" : "s"}).`;
+  composerHint.textContent = survivors.length > 0
+    ? `Replaced local with cloud (${pluralCount(count, "block")}; kept ${pluralCount(survivors.length, "block")} the cloud can't read, sending ${survivors.length === 1 ? "it" : "them"} now).`
+    : `Replaced local with cloud (${pluralCount(count, "block")}).`;
 }
 
 function showKeyMismatch() {

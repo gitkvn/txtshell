@@ -260,6 +260,7 @@
               <span class="qr-key"><code>/encrypt off</code></span><span class="qr-desc">remove encryption and restore plaintext</span>
               <span class="qr-key"><code>/lock</code> <span class="qr-sep">·</span> lock button (top bar)</span><span class="qr-desc">lock the vault — clears decrypted data from memory</span>
               <p class="qr-note">Save your recovery key when it is shown: it is the only way back if you forget your passphrase.</p>
+              <p class="qr-note"><em>unreadable</em> in the footer count: blocks saved under a different key. They are kept, not shown, and travel with your backups and sync so a device with the right key can read them. If this browser has the wrong key, re-pair it from the device that has your data (/mirror there, /port here). /wipe is the only thing that removes them.</p>
               </div>
             </div>
             <div class="qr-group">
@@ -411,6 +412,6 @@
     </template>
 
     <script src="./qrcode.js" integrity="sha384-74+AUd6tbAWrmm+GTFCXAWWFlqfuBEui1i9+CR7l70syLHvWFw8UwtK7zdW19BZI" crossorigin="anonymous"></script>
-    <script src="./app.js?v=20260828-2"></script>
+    <script src="./app.js?v=20261007-1"></script>
   </body>
 </html>
