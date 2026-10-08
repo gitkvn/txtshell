@@ -144,6 +144,22 @@ const state = {
     enabled: false,
     unlocked: false,
     masterKey: null,
+    // "passphrase" (the vault as it has always been) or "central" (a Txtshell
+    // account: the key is the account's vault key, unlocked with a passkey).
+    // Decided once in initialize() from the `enc-mode` meta row; absent means
+    // passphrase, so every existing install reads exactly as before.
+    mode: "passphrase",
+  },
+  // Txtshell account session. Memory only — a reload locks the vault and the
+  // online unlock is itself a sign-in. Nothing here is ever written to storage.
+  central: {
+    session: null,
+    userId: null,
+    credentialId: null,
+    // Set after a join that re-keyed local blocks: the next pull that finds the
+    // cloud different shows the first-join card (merge) instead of the
+    // stale-copy card, because the two histories are unrelated.
+    firstJoin: false,
   },
   // Records in IndexedDB that the current key cannot open (see
   // decryptAllEntriesIntoState). Kept out of `entries` so they are never
@@ -5354,6 +5370,11 @@ const SYNC_STATUS_LABELS = {
   "pull-blocked": { short: "Pull: can't reach cloud", full: "Pull failed — can't reach cloud (offline or blocked)" },
   "pull-decrypt": { short: "Pull: decrypt error", full: "Pull failed — couldn't decrypt cloud blocks" },
   "pull-key-mismatch": { short: "Pull: key mismatch", full: "Pull failed — cloud copy doesn't match this device's key" },
+  // Txtshell account only. A 401 is "session gone" (expired, signed out elsewhere,
+  // revoked), never "check your token"; saves continue, pushes wait for a sign-in.
+  "central-signin": { short: "Sync: sign in to resume", full: "Sync paused — sign in with your passkey to resume (/account)" },
+  "central-setup": { short: "Sync: finish setup", full: "Account setup incomplete — run /account" },
+  "central-offline": { short: "Sync: offline", full: "Unlocked with your passkey while offline — sign in to sync (/account)" },
 };
 
 // Drives the persistent ambient sync indicator in the footer.
@@ -5444,7 +5465,9 @@ function setPullStatusFromError(error) {
   const message = error?.message;
   if (message === "not-configured" || message === "locked") return;
   if (message === "auth") {
-    setSyncStatus("pull-auth");
+    setSyncStatus(isCentral() ? "central-signin" : "pull-auth");
+  } else if (message === "setup") {
+    setSyncStatus("central-setup");
   } else if (message === "decrypt") {
     // AES-GCM OperationError: the cloud blob was encrypted under a DIFFERENT master
     // key than this device holds — a key mismatch, not transient corruption.
@@ -5458,6 +5481,23 @@ function setPullStatusFromError(error) {
 
 let cloudSyncTimer = null;
 let cloudSyncInFlight = false;
+let cloudSyncRetryAfterUsed = false;
+
+// A Txtshell account session has ended (401: expired, signed out elsewhere,
+// revoked). The vault key stays — editing continues, pushes wait for a
+// sign-in. Nothing local is touched.
+function dropCentralSession(reason) {
+  state.central.session = null;
+  setSyncStatus("central-signin");
+  console.warn("[txtshell] account session ended", reason);
+}
+
+// After a 412: pull under the same hold, without the "Pulling…" copy. Shows the
+// existing card if cloud and local differ; a push follows from Keep/Replace.
+async function pullAfterRejectedPush() {
+  if (!(state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey)) return;
+  await beginPull({ quiet: true });
+}
 
 // Push hold. A pull compares the cloud blob to local and may raise the conflict
 // card; until the user resolves it, NO push may fire — otherwise a save that
@@ -5550,26 +5590,63 @@ async function flushCloudSync() {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), CLOUD_SYNC_TIMEOUT_MS);
   try {
+    // Conditional on the generation this browser last synced (0 = "the cloud is
+    // empty as far as I know"). Only when the Worker speaks generations: a
+    // Txtshell account always does; a self-hosted Worker once it has sent an ETag.
+    const headers = {
+      Authorization: `Bearer ${authToken}`,
+      "Content-Type": "application/octet-stream",
+    };
+    const generation = await readSyncedGeneration();
+    if (isCentral() || generation !== null) {
+      headers["If-Match"] = `"g${generation || 0}"`;
+    }
     const response = await fetch(`${url}/v1/blocks`, {
       method: "PUT",
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-        "Content-Type": "application/octet-stream",
-      },
+      headers,
       body,
       signal: controller.signal,
     });
     if (response.status === 401) {
+      if (isCentral()) {
+        dropCentralSession("401");
+        return { status: "auth" };
+      }
       setSyncStatus("push-auth");
       return { status: "auth" };
+    } else if (response.status === 403 && isCentral()) {
+      setSyncStatus("central-setup");
+      return { status: "error", reason: "http-403" };
+    } else if (response.status === 412) {
+      // The cloud moved on since this browser last synced. Never retry blindly:
+      // pull, compare, and let the existing card decide. The push is not lost —
+      // Keep/Replace re-push, and a save after the card schedules one.
+      cloudSyncRetryAfterUsed = false;
+      void pullAfterRejectedPush();
+      return { status: "conflict" };
     } else if (response.status === 413) {
       setSyncStatus("push-too-large");
       return { status: "error", reason: "http-413" };
+    } else if (response.status === 429) {
+      // Honour Retry-After once; a second 429 in a row is a standing failure.
+      const retryAfter = Number(response.headers.get("retry-after") || 0);
+      if (!cloudSyncRetryAfterUsed && retryAfter > 0 && retryAfter <= 300) {
+        cloudSyncRetryAfterUsed = true;
+        window.setTimeout(() => scheduleCloudSync(), retryAfter * 1000);
+        return { status: "error", reason: "http-429" };
+      }
+      setSyncStatus("push-server");
+      return { status: "error", reason: "http-429" };
     } else if (!response.ok) {
       setSyncStatus("push-server");
       return { status: "error", reason: "http-" + response.status };
     } else {
       setSyncStatus("ok");
+      cloudSyncRetryAfterUsed = false;
+      const newGeneration = generationFromResponse(response);
+      if (newGeneration !== null) {
+        void recordSyncedGeneration(newGeneration); // the Worker speaks generations: next push is conditional on this one
+      }
       void recordSyncedBaseCanonical(uploadedCanonical); // the cloud now holds this snapshot
       return { status: "ok" };
     }
@@ -5693,6 +5770,10 @@ async function handleSyncSetupSubmit(workerUrl, authToken) {
     composerHint.textContent = `Sync failed — ${describeSyncError(result.reason)}`;
     return;
   }
+  if (result.status === "conflict") {
+    composerHint.textContent = "Cloud has other changes — choose on the card";
+    return;
+  }
   if (result.status === "skipped") {
     // Config saved, nothing pushed yet: vault locked, an upload already in flight,
     // or a pull is holding pushes (the deferred push replays when it lifts).
@@ -5707,7 +5788,7 @@ async function handleSyncSetupSubmit(workerUrl, authToken) {
   // failure, so fall back to a soft confirm rather than reporting it as broken.
   try {
     const readback = await fetchAndDecryptBlocks();
-    if (readback.empty) {
+    if (readback.empty || readback.upToDate) {
       composerHint.textContent = "Uploaded — will confirm on next sync";
     } else {
       const n = readback.entries.length;
@@ -5870,21 +5951,40 @@ async function fetchAndDecryptBlocks() {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), CLOUD_SYNC_TIMEOUT_MS);
   let buffer;
+  let generation = null;
   try {
+    // "Unchanged since I last synced" is a header round-trip once a generation
+    // is known; never sent to a Worker that has not shown it speaks generations.
+    const headers = { Authorization: `Bearer ${authToken}` };
+    const known = await readSyncedGeneration();
+    if (known !== null) {
+      headers["If-None-Match"] = `"g${known}"`;
+    }
     const response = await fetch(`${url}/v1/blocks`, {
       method: "GET",
-      headers: { Authorization: `Bearer ${authToken}` },
+      headers,
       signal: controller.signal,
     });
+    if (response.status === 304) {
+      return { empty: false, upToDate: true, generation: known };
+    }
     if (response.status === 404) {
-      return { empty: true };
+      if (isCentral() || known !== null) {
+        void recordSyncedGeneration(0); // an empty cloud: the next push is a first upload
+      }
+      return { empty: true, generation: 0 };
     }
     if (response.status === 401) {
+      if (isCentral()) dropCentralSession("401");
       throw new Error("auth");
+    }
+    if (response.status === 403 && isCentral()) {
+      throw new Error("setup");
     }
     if (!response.ok) {
       throw new Error("http-" + response.status);
     }
+    generation = generationFromResponse(response);
     if (Number(response.headers.get("content-length") || 0) > CLOUD_MAX_RESPONSE_BYTES) {
       throw new Error("too-large");
     }
@@ -5914,7 +6014,7 @@ async function fetchAndDecryptBlocks() {
   } catch {
     throw new Error("malformed");
   }
-  return { empty: false, entries };
+  return { empty: false, entries, generation };
 }
 
 // What a push uploads: every readable block plus every unreadable record,
@@ -6059,6 +6159,61 @@ function entriesDiffer(cloud, local) {
 // key change makes it undecryptable, which simply means "no base". Never
 // written on Keep — the resulting push records it.
 const SYNC_BASE_HASH_KEY = "sync-last-synced-hash";
+// The cloud generation this browser last synced to (plaintext integer; leaks
+// nothing). Known only once the Worker has answered with an ETag "g<N>" — an
+// older self-hosted Worker never sends one, so no generation is ever stored
+// for it and no conditional header is ever sent to it (its CORS allow-list
+// would refuse one). A Txtshell account always speaks conditionally.
+const SYNC_GENERATION_KEY = "sync-last-synced-generation";
+
+function isCentral() {
+  return state.encryption.mode === "central";
+}
+
+async function readSyncedGeneration() {
+  const stored = await getMeta(SYNC_GENERATION_KEY);
+  if (stored === "" || stored === null || stored === undefined) return null;
+  const n = Number(stored);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+async function recordSyncedGeneration(generation) {
+  if (!Number.isInteger(generation) || generation < 0) return;
+  try {
+    await saveMeta(SYNC_GENERATION_KEY, String(generation));
+  } catch (error) {
+    console.warn("[txtshell] couldn't record sync generation", error);
+  }
+}
+
+// ETag "g<N>" (or X-Blob-Generation) → N; null when the Worker sent neither
+// (a legacy self-hosted Worker, or a cross-origin one that does not expose it).
+function generationFromResponse(response) {
+  const etag = response.headers.get("etag") || "";
+  const match = etag.match(/^(?:W\/)?"g(\d+)"$/);
+  if (match) return Number(match[1]);
+  const header = response.headers.get("x-blob-generation");
+  if (header !== null && /^\d+$/.test(header)) return Number(header);
+  return null;
+}
+
+// Whether this push/pull should carry If-Match / If-None-Match.
+async function syncIsConditional() {
+  if (isCentral()) return true;
+  return (await readSyncedGeneration()) !== null;
+}
+
+// Forgets what this browser believes the cloud holds: the merge base and the
+// generation. Local blocks are KEPT. Called when the account's key changes
+// under this device (join, re-key, rung 2, abandon) so a pre-change generation
+// is never reused, and when the cloud turns out to be empty.
+async function clearSyncState() {
+  try {
+    await Promise.all([deleteMeta(SYNC_BASE_HASH_KEY), deleteMeta(SYNC_GENERATION_KEY)]);
+  } catch (error) {
+    console.warn("[txtshell] couldn't clear sync state", error);
+  }
+}
 
 async function sha256Hex(text) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
@@ -6119,16 +6274,20 @@ function newestEntryStamp(entries) {
 
 // Manual fetch. Requires an unlocked vault. Compares the cloud blob to local and
 // either no-ops ("up to date") or raises the conflict card.
-async function beginPull() {
+async function beginPull({ quiet = false } = {}) {
   if (!(state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey)) {
-    composerHint.textContent = "Unlock your vault to pull.";
+    if (!quiet) composerHint.textContent = "Unlock your vault to pull.";
     return;
   }
-  composerHint.textContent = "Pulling…";
+  if (!quiet) composerHint.textContent = "Pulling…";
   pullHoldDepth++;
   try {
     const result = await fetchAndDecryptBlocks();
     setSyncStatus("ok"); // reachable + decrypted: the sync channel is healthy
+    if (result.upToDate) {
+      composerHint.textContent = "Already up to date.";
+      return;
+    }
     if (result.empty) {
       void clearSyncedBase();
       composerHint.textContent = "Cloud is empty — nothing to pull.";
@@ -6136,9 +6295,10 @@ async function beginPull() {
     }
     const reconciled = await reconcileCloudEntries(result.entries);
     if (entriesDiffer(reconciled.cloud, reconciled.local)) {
-      await showPullConflict(result.entries, reconciled); // awaited: the card must be up before the hold lifts
+      await showPullConflict(result.entries, reconciled, result.generation); // awaited: the card must be up before the hold lifts
     } else {
       void recordSyncedBase(result.entries); // local == cloud, established
+      if (result.generation !== null) void recordSyncedGeneration(result.generation);
       const note = describePullReconcile(reconciled);
       composerHint.textContent = note ? `Already up to date — ${note}.` : "Already up to date.";
     }
@@ -6170,6 +6330,7 @@ async function autoPullOnUnlock() {
   try {
     const result = await fetchAndDecryptBlocks();
     setSyncStatus("ok"); // reachable + decrypted: the sync channel is healthy
+    if (result.upToDate) return;
     if (result.empty) {
       void clearSyncedBase();
       return;
@@ -6177,9 +6338,10 @@ async function autoPullOnUnlock() {
     if (!state.encryption.unlocked || state.vaultView) return; // user moved on; catch it next time
     const reconciled = await reconcileCloudEntries(result.entries);
     if (entriesDiffer(reconciled.cloud, reconciled.local)) {
-      await showPullConflict(result.entries, reconciled); // awaited: the card must be up before the hold lifts
+      await showPullConflict(result.entries, reconciled, result.generation); // awaited: the card must be up before the hold lifts
     } else {
       void recordSyncedBase(result.entries); // local == cloud, established
+      if (result.generation !== null) void recordSyncedGeneration(result.generation);
     }
     if (reconciled.recovered > 0 || reconciled.kept > 0) {
       const note = describePullReconcile({ ...reconciled, healable: 0, carried: 0 });
@@ -6225,13 +6387,13 @@ function pullErrorMessage(error) {
 // `cloudEntries` is the raw pulled set (what Replace adopts and what the base
 // hash was computed over); `reconciled` holds the two sets the classifier
 // compares after the readable-beats-unreadable rule.
-async function showPullConflict(cloudEntries, reconciled = null) {
+async function showPullConflict(cloudEntries, reconciled = null, cloudGeneration = null) {
   if (!reconciled) {
     reconciled = await reconcileCloudEntries(cloudEntries);
   }
   const baseMatches = await cloudMatchesSyncedBase(cloudEntries);
   if (state.vaultView) return; // a card opened meanwhile — never clobber it
-  state.vaultPending = { pullEntries: cloudEntries, pullCloud: reconciled.cloud, pullLocal: reconciled.local, baseMatches };
+  state.vaultPending = { pullEntries: cloudEntries, pullCloud: reconciled.cloud, pullLocal: reconciled.local, baseMatches, pullGeneration: cloudGeneration };
   state.vaultView = "pull-conflict";
   renderVault();
 }
@@ -6437,10 +6599,14 @@ function renderPullConflictCard() {
       keepButton.disabled = false;
     }
   });
-  keepButton.addEventListener("click", () => {
+  keepButton.addEventListener("click", async () => {
     // Push now rather than "on the next save": the cloud actually catches up in
     // the safe case, and in a true conflict the (warned) overwrite happens at a
     // predictable moment instead of whenever the user next happens to save.
+    // The overwrite is conditional on the generation just pulled: if the cloud
+    // moves again in between, the push is refused and the card returns.
+    const cloudGeneration = state.vaultPending?.pullGeneration;
+    if (Number.isInteger(cloudGeneration)) await recordSyncedGeneration(cloudGeneration);
     state.vaultPending = null;
     exitVaultToNormal(); // renderVault lifts the hold and replays any deferred push
     scheduleCloudSync();
@@ -6471,10 +6637,12 @@ async function applyCloudReplaceLocal(cloudEntries) {
   const replacedIds = state.entries.filter((entry) => !flaggedIds.has(entry.id)).map((entry) => entry.id);
   const survivorIds = new Set(survivors.map((entry) => entry.id));
   const incoming = valid.filter((item) => !(isUnreadableRecord(item) && survivorIds.has(item.id)));
+  const cloudGeneration = state.vaultPending?.pullGeneration;
   await deleteEntryRecords(replacedIds);
   state.entries = survivors.slice(); // a copy: the merge below pushes into state.entries
   await mergeImportedEntries(incoming); // re-encrypts via saveEntry; flagged items stay flagged
   await recordSyncedBase(cloudEntries); // the cloud holds exactly this set
+  if (Number.isInteger(cloudGeneration)) await recordSyncedGeneration(cloudGeneration);
   if (survivors.length > 0) {
     scheduleCloudSync(); // send the readable copies the cloud only has flagged
   }
