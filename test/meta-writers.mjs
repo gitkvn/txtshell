@@ -105,5 +105,5 @@ for (const [fn, n] of callers) console.log(`      ${fn} ×${n}`);
 const EXPECTED_CALLERS = ["handleRecoveryConfirm", "handleDisableSubmit", "handleImportAdoptVault", "centralJoin", "handleCentralUnlock", "centralResume", "handleAccountLeaveSubmit"];
 check(EXPECTED_CALLERS.every((fn) => callers.has(fn)) && [...callers.keys()].every((fn) => EXPECTED_CALLERS.includes(fn)), `rekeyVault callers are exactly ${EXPECTED_CALLERS.join(", ")}`);
 
-console.log(`\n${failures === 0 ? "ALL PASSED" : failures + " FAILURE(S)"}`);
+console.log(`\n${failures === 0 ? "ALL PASSED" : failures + " FAILURE(S)"} · nothing skipped`);
 process.exit(failures ? 1 : 0);

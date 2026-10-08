@@ -4128,18 +4128,25 @@ async function rekeyVault({ entries, key, flagged = state.unreadable, metaPuts =
     const transaction = state.db.transaction([ENTRY_STORE, META_STORE], "readwrite", { durability: "strict" });
     const entryStore = transaction.objectStore(ENTRY_STORE);
     const metaStore = transaction.objectStore(META_STORE);
-    for (const record of records) {
-      entryStore.put(record);
-    }
-    for (const [metaKey, value] of metaPuts) {
-      metaStore.put({ key: metaKey, value });
-    }
-    for (const metaKey of metaDeletes) {
-      metaStore.delete(metaKey);
-    }
     transaction.addEventListener("complete", () => resolve());
     transaction.addEventListener("abort", () => reject(transaction.error || new Error("rekey-aborted")));
     transaction.addEventListener("error", () => reject(transaction.error || new Error("rekey-failed")));
+    try {
+      for (const record of records) {
+        entryStore.put(record);
+      }
+      for (const [metaKey, value] of metaPuts) {
+        metaStore.put({ key: metaKey, value });
+      }
+      for (const metaKey of metaDeletes) {
+        metaStore.delete(metaKey);
+      }
+    } catch (error) {
+      // A request that throws while being issued (an invalid key, a closed store) must take the
+      // requests already queued down with it, or the store commits half re-keyed.
+      try { transaction.abort(); } catch { /* already aborting */ }
+      reject(error);
+    }
   });
 }
 
@@ -4950,6 +4957,10 @@ function renderImportUnlockCard(isRecovery) {
     : "Enter the passphrase for this export.";
   const placeholder = isRecovery ? "Recovery key" : "Passphrase";
   const linkText = isRecovery ? "Use passphrase instead" : "Use recovery key instead";
+  // A file without a recovery wrap (a /port-paired browser's export, or a Txtshell account's
+  // export under an export passphrase) can only be opened with its passphrase: no dead toggle.
+  const file = state.vaultPending?.importFileData;
+  const hasRecoveryWrap = Boolean(file?.saltRecovery && file?.wrappedRecovery);
 
   vaultOverlay.innerHTML = `
     <div class="vault-card">
@@ -4959,7 +4970,7 @@ function renderImportUnlockCard(isRecovery) {
       <p class="vault-error" hidden></p>
       <input class="vault-input" data-field="pass" type="${isRecovery ? "text" : "password"}" placeholder="${escapeHtml(placeholder)}" autocomplete="off" />
       <button class="vault-button" type="button" data-action="submit">Import</button>
-      <button class="vault-link" type="button" data-action="toggle">${escapeHtml(linkText)}</button>
+      ${hasRecoveryWrap ? `<button class="vault-link" type="button" data-action="toggle">${escapeHtml(linkText)}</button>` : ""}
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
     </div>
   `;
@@ -5002,10 +5013,12 @@ function renderImportUnlockCard(isRecovery) {
       submit();
     }
   });
-  toggleButton.addEventListener("click", () => {
-    state.vaultView = isRecovery ? "import-unlock" : "import-unlock-recovery";
-    renderVault();
-  });
+  if (toggleButton) {
+    toggleButton.addEventListener("click", () => {
+      state.vaultView = isRecovery ? "import-unlock" : "import-unlock-recovery";
+      renderVault();
+    });
+  }
   cancelButton.addEventListener("click", exitVaultToNormal);
   window.requestAnimationFrame(() => passInput.focus());
 }

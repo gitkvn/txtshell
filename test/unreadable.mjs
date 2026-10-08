@@ -36,6 +36,11 @@ const CHROME = process.env.CHROME || defaultChrome();
 
 let failures = 0;
 const check = (c, m) => { console.log(`${c ? "PASS" : "FAIL"}  ${m}`); if (!c) failures++; return !!c; };
+// Harness rule: a skipped part is printed every run with its reason and counted in the last line.
+const skips = [];
+const skipped = (part, reason) => { skips.push(part); console.log(`SKIP  ${part} — ${reason}`); };
+const summary = () => `${failures === 0 ? "ALL PASSED" : failures + " FAILURE(S)"}${skips.length ? ` · ${skips.length} part(s) SKIPPED: ${skips.join("; ")}` : " · nothing skipped"}`;
+void skipped;
 const procs = [];
 process.on("exit", () => procs.forEach((p) => { try { p.kill(); } catch {} }));
 
@@ -465,6 +470,7 @@ console.log("\n--- U7 atomic /encrypt and /encrypt off under a crash (10 rounds)
   check(mixed === 0, `/encrypt off crash rounds: on=${offOrOn.on} off=${offOrOn.off} mixed=${mixed}`);
 }
 
-console.log(`\n${failures === 0 ? "ALL PASSED" : failures + " FAILURE(S)"}`);
+console.log(`
+${summary()}`);
 ws.close(); server.close();
 process.exit(failures ? 1 : 0);
