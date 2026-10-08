@@ -4327,6 +4327,10 @@ function renderVault() {
     renderCentralStartCard();
   } else if (view === "central-code") {
     renderCentralCodeCard();
+  } else if (view === "central-registered") {
+    renderCentralRegisteredCard();
+  } else if (view === "central-has-passkey") {
+    renderCentralHasPasskeyCard();
   } else if (view === "central-busy") {
     renderCentralBusyCard(state.vaultPending?.busy || "Working");
   } else if (view === "central-forced-save") {
@@ -7392,8 +7396,20 @@ function renderCentralCodeCard() {
       state.vaultPending = { ...pending, busy: "Registering your passkey" };
       renderVault();
       const registered = await window.txCentral.webauthn.register(signupToken);
-      await centralJoin({ via: "register", registered });
+      // The sign-in is its own ceremony behind its own tap: Safari spends the user activation on
+      // the registration, and every browser refuses a ceremony while the sheet's focus settles.
+      state.vaultPending = { ...pending, registered };
+      state.vaultView = "central-registered";
+      renderVault();
     } catch (error) {
+      if (error?.name === "InvalidStateError") {
+        // The authenticator already holds a passkey for this account (the server's
+        // excludeCredentials did its job): sign in with it instead of failing.
+        state.vaultPending = { ...pending };
+        state.vaultView = "central-has-passkey";
+        renderVault();
+        return;
+      }
       if (error.code === "code-invalid" || error.code === "code-locked" || error.status === 400) {
         state.vaultView = "central-code";
         renderVault();
@@ -7411,6 +7427,71 @@ function renderCentralCodeCard() {
   window.requestAnimationFrame(() => input.focus());
 }
 
+function renderCentralRegisteredCard() {
+  const registered = state.vaultPending?.registered;
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG_DOT}
+      <p class="vault-title">Your passkey is ready</p>
+      <p class="vault-subtitle">Sign in to finish setting up.</p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="signin">Sign in</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+  const button = vaultOverlay.querySelector('[data-action="signin"]');
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await centralJoin({ via: "register", registered });
+    } catch (error) {
+      centralFlowFailed(error, "central-registered");
+    }
+  });
+  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", exitVaultToNormal);
+}
+
+function renderCentralHasPasskeyCard() {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG_DOT}
+      <p class="vault-title">This device already has a passkey for this account</p>
+      <p class="vault-subtitle">Sign in with it — nothing else to set up.</p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="signin">Sign in with passkey</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+  const button = vaultOverlay.querySelector('[data-action="signin"]');
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await centralJoin({ via: "signin" });
+    } catch (error) {
+      centralFlowFailed(error, "central-has-passkey");
+    }
+  });
+  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", exitVaultToNormal);
+}
+
+// One sentence for a person, per failure; the technical name goes to the console.
+function centralFailureMessage(error) {
+  if (error?.code === "unknown-credential") return "This passkey was removed from the account. Add this device again with your email — you'll need your recovery phrase.";
+  if (error?.code === "no-prf") return "This passkey can't protect your notes in this browser. Try another browser, or sign in with a different passkey.";
+  if (error?.status === 429 || error?.code === "rate-limited") return "Too many tries — wait a minute and try again.";
+  switch (error?.name) {
+    case "InvalidStateError": return "This device already has a passkey for this account. Use \"Sign in with passkey\" instead.";
+    case "NotAllowedError": return "The passkey step didn't finish — the prompt was closed, or the page lost focus. Click the page, then try again.";
+    case "AbortError": return "The passkey step was interrupted. Try again.";
+    case "SecurityError": return "Something's off with this page's address — try opening txtshell.com directly.";
+    case "NotSupportedError": return "This browser can't use passkeys here. Try an up-to-date Safari, Chrome or Edge.";
+    case "TypeError": return "Can't reach Txtshell right now. Check your connection and try again.";
+    default: break;
+  }
+  if (error?.status === 0) return "Can't reach Txtshell right now. Check your connection and try again.";
+  return "Something went wrong. Try again.";
+}
+
 // Any failure inside a flow lands back on a card with a message, or (on
 // cancel) back in the normal view. Nothing local has changed unless the one
 // rekeyVault transaction completed, and then the state was updated with it.
@@ -7419,12 +7500,8 @@ function centralFlowFailed(error, view) {
     exitVaultToNormal();
     return;
   }
-  console.error("[txtshell] account flow failed", error);
-  let message = "Something went wrong. Try again.";
-  if (error?.name === "NotAllowedError") message = "The passkey prompt was cancelled or timed out.";
-  else if (error?.code === "unknown-credential") message = "This passkey isn't on the account any more — it was removed. Use your email to add this device again (you'll need your recovery phrase).";
-  else if (error?.code === "no-prf") message = "This passkey can't derive a key on this browser. Try another browser, or a different passkey.";
-  else if (error?.status === 0 || error?.name === "TypeError") message = "Can't reach the account service. Check your connection.";
+  console.error("[txtshell] account flow failed", error?.name || "", error?.code || "", error);
+  const message = centralFailureMessage(error);
   if (view) {
     state.vaultView = view;
     renderVault();
@@ -7637,9 +7714,9 @@ function renderCentralUnlockCard() {
         return;
       }
       console.error(error);
-      errorLine.textContent = error?.name === "NotAllowedError"
-        ? "The passkey prompt was cancelled or timed out."
-        : (error?.message === "wrong-key" ? "This passkey doesn't open the vault on this browser." : "Couldn't unlock. Try again.");
+      errorLine.textContent = error?.message === "wrong-key"
+        ? "This passkey doesn't open the vault on this browser."
+        : (error?.message === "offline-no-cache" ? "You're offline and this browser has nothing saved to unlock with yet — connect and try again." : centralFailureMessage(error));
       errorLine.hidden = false;
       unlockButton.disabled = false;
       unlockButton.textContent = "Unlock with passkey";

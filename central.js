@@ -133,6 +133,21 @@
   // ---------- WebAuthn: register / login with PRF, and the offline assertion ----------
   const prfEvalSalt = () => sha256(enc.encode(PRF_EVAL_CONTEXT));
 
+  // Browsers refuse a ceremony while the document is not focused (Chrome, Edge: "the page does
+  // not have focus"; Safari: "The document is not focused"), and focus comes back a beat after a
+  // passkey sheet closes. Wait for it, briefly, before every create()/get(). (Safari also needs a
+  // user gesture per ceremony — that is why app.js puts each ceremony behind its own click.)
+  function waitForFocus(ms = 3000) {
+    if (document.hasFocus()) return Promise.resolve();
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (done) return; done = true; window.removeEventListener("focus", finish); document.removeEventListener("visibilitychange", finish); resolve(); };
+      window.addEventListener("focus", finish);
+      document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && document.hasFocus()) finish(); });
+      setTimeout(finish, ms);
+    });
+  }
+
   const signup = (email) => api("/v1/auth/signup", "POST", { email });
   const verifyEmail = (email, code) => api("/v1/auth/verify-email", "POST", { email, code });
 
@@ -145,6 +160,7 @@
       excludeCredentials: (o.excludeCredentials || []).map((c) => ({ ...c, id: fromB64url(c.id) })),
       extensions: { prf: {} },
     };
+    await waitForFocus();
     const cred = await navigator.credentials.create({ publicKey });
     const ext = cred.getClientExtensionResults();
     const r = cred.response;
@@ -173,6 +189,7 @@
       allowCredentials: (o.allowCredentials || []).map((c) => ({ ...c, id: fromB64url(c.id) })),
       extensions: { prf: { eval: { first: fromB64url(o.extensions.prf.eval.first) } } },
     };
+    await waitForFocus();
     const a = await navigator.credentials.get({ publicKey });
     const ext = a.getClientExtensionResults();
     const prf = ext.prf?.results?.first ? new Uint8Array(ext.prf.results.first) : null;
@@ -200,13 +217,14 @@
       allowCredentials: [{ type: "public-key", id: fromB64url(credentialId) }],
       extensions: { prf: { eval: { first: await prfEvalSalt() } } },
     };
+    await waitForFocus();
     const a = await navigator.credentials.get({ publicKey });
     const ext = a.getClientExtensionResults();
     const prf = ext.prf?.results?.first ? new Uint8Array(ext.prf.results.first) : null;
     if (!prf || prf.length !== 32) throw Object.assign(new Error("no PRF output from this passkey"), { code: "no-prf" });
     return { prf };
   }
-  const webauthn = { signup, verifyEmail, register, login, assertOffline };
+  const webauthn = { signup, verifyEmail, register, login, assertOffline, waitForFocus };
 
   // ---------- ladder: bootstrap | rung 1 | rung 2 | abandon ----------
   // ctx: { session, kekWrap, hasPrfWrap, hasRecovery, vk? }
