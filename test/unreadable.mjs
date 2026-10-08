@@ -70,6 +70,20 @@ const server = createServer({ key: readFileSync(path.join(scratch, "key.pem")), 
   res.writeHead(200, { "Content-Type": MIME[path.extname(file)] || "application/octet-stream", "Cache-Control": "no-store" });
   res.end(readFileSync(file));
 });
+// A previous run may still be releasing its ports (Chrome exits after the harness does): wait
+// for both to be free rather than starting against a dying browser and failing at the first tab.
+async function waitForPortFree(port, probe, ms = 30000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (!(await probe(port))) return true;
+    await sleep(250);
+  }
+  return false;
+}
+const httpProbe = (port) => fetch(`http://127.0.0.1:${port}/json/version`).then(() => true, () => false);
+const listenProbe = (port) => new Promise((resolve) => { const t = createServer(); t.once("error", () => resolve(true)); t.listen(port, () => t.close(() => resolve(false))); });
+if (!(await waitForPortFree(CDP_PORT, httpProbe))) { console.error(`CDP port ${CDP_PORT} still held by a previous Chrome after 30s`); process.exit(2); }
+if (!(await waitForPortFree(PORT, listenProbe))) { console.error(`port ${PORT} still in use after 30s`); process.exit(2); }
 await new Promise((r) => server.listen(PORT, r));
 
 // ---------- CDP ----------
@@ -303,6 +317,9 @@ const B = await device("B");
   // B pairs with A's key and pulls A's blob (10… here 5 readable + 2 flagged) → B stores the flagged copies (U11 shape).
   await B.port(rawKeyA);
   check((await B.entries()).length === 5 && (await B.unreadable()).length === 2, `B paired: ${await B.footer()}`);
+  // Nothing may be pending on either device before the scenario is staged: a debounced push
+  // landing later would either move the cloud under B's pull or be counted as B's PUT.
+  await A.settle(); await B.settle();
   // Now give B readable copies of foreign-1/foreign-2 (as if B had them before A's copies went bad).
   await B.eval(`(async () => { for (const [id, text] of [["foreign-1", "secret one #tagone"], ["foreign-2", "secret two #tagtwo"]]) { state.unreadable = state.unreadable.filter((u) => u.id !== id); const e = { id, text, tags: extractTags(text), mentions: extractMentions(text), createdAt: "2026-01-01T00:00:00.000Z", editedAt: "2026-01-01T00:00:00.000Z", pinned: false }; state.entries.push(e); await putEntryRecord({ id, text: await encryptPlaintext(text, state.encryption.masterKey), tags: [], mentions: [], createdAt: e.createdAt, editedAt: e.editedAt, pinned: false }); } render(); return true; })()`);
   check((await B.entries()).length === 7 && (await B.unreadable()).length === 0, "B holds foreign-1/2 readable");
@@ -315,7 +332,9 @@ const B = await device("B");
   check(blob.length === 7 && blob.filter((e) => e.unreadable).length === 0 && blob.find((e) => e.id === "foreign-1").text === "secret one #tagone", "cloud now holds foreign-1/2 readable");
   // Replace must not touch B's readable copies when the cloud flags them: put A's old blob back and force a card.
   const healed = stub.blob;
+  await B.settle(); // B's heal push has landed; nothing of B's may fire after A's forcing push below
   await A.add("extra from A"); await A.push();
+  await A.settle(); // A's add also armed its debounced push; let it fire so the next PUT counted is B's
   const putsA = stub.puts;
   await B.pull();
   check(await waitFor(() => B.view().then((v) => v === "pull-conflict")), `B pull → card (${await B.view()})`);

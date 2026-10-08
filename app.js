@@ -5763,6 +5763,10 @@ async function flushCloudSync() {
       const newGeneration = generationFromResponse(response);
       if (newGeneration !== null) {
         void recordSyncedGeneration(newGeneration); // the Worker speaks generations: next push is conditional on this one
+      } else if (!isCentral()) {
+        // A self-hosted Worker from before conditional PUT: pushes stay unconditional (as they
+        // always were) and this browser says so once. Redeploying the Worker is the fix.
+        showHint("sync-legacy-worker", "Update your sync Worker for conflict protection — redeploy it from github.com/gitkvn/txtshell-sync");
       }
       void recordSyncedBaseCanonical(uploadedCanonical); // the cloud now holds this snapshot
       return { status: "ok" };
@@ -5905,7 +5909,11 @@ async function handleSyncSetupSubmit(workerUrl, authToken) {
   // failure, so fall back to a soft confirm rather than reporting it as broken.
   try {
     const readback = await fetchAndDecryptBlocks();
-    if (readback.empty || readback.upToDate) {
+    if (readback.upToDate) {
+      // 304 against the generation just pushed: the cloud holds exactly this set.
+      const n = state.entries.length;
+      composerHint.textContent = `Synced — ${n} block${n === 1 ? "" : "s"} in the cloud`;
+    } else if (readback.empty) {
       composerHint.textContent = "Uploaded — will confirm on next sync";
     } else {
       const n = readback.entries.length;
@@ -6968,6 +6976,7 @@ async function handlePortPassphraseSubmit(passphrase) {
       composerHint.textContent = "Paired — cloud is empty, nothing to load yet.";
     } else {
       await mergeImportedEntries(result.entries);
+      if (result.generation !== null) void recordSyncedGeneration(result.generation); // the first push after pairing is conditional on what was just loaded
       composerHint.textContent = `Paired — ${state.entries.length} block${state.entries.length === 1 ? "" : "s"} loaded.`;
     }
   } catch (error) {
