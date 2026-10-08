@@ -6779,6 +6779,16 @@ async function applyCloudReplaceLocal(cloudEntries) {
   if (Number.isInteger(cloudGeneration)) await recordSyncedGeneration(cloudGeneration);
   if (survivors.length > 0) {
     scheduleCloudSync(); // send the readable copies the cloud only has flagged
+  } else if (await syncIsConditional()) {
+    // The saves above armed a push of exactly the set the cloud already holds. Against a Worker
+    // that speaks generations that push would only move the generation, and every other device
+    // in sync would then meet a 412 and a card over nothing. Drop it (an older Worker, where a
+    // push is unconditional and the generation does not exist, keeps the re-push it always had).
+    if (cloudSyncTimer !== null) {
+      window.clearTimeout(cloudSyncTimer);
+      cloudSyncTimer = null;
+    }
+    cloudSyncDeferred = false;
   }
   const count = state.entries.length;
   state.vaultView = null;
@@ -7537,7 +7547,9 @@ function finishCentralJoin(hint) {
   render();
   entryInput.focus();
   signalReady();
-  scheduleCloudSync();
+  // Nothing to upload from an empty install: pushing an empty blob would only move the account's
+  // generation (and race the first real push from another device).
+  if (state.entries.length > 0 || state.unreadable.length > 0) scheduleCloudSync();
 }
 
 // Asks for this browser's passphrase on a confirm card and verifies it against
@@ -7704,6 +7716,10 @@ async function handleCentralUnlock() {
     state.encryption.masterKey = out.vk;
     state.central.firstJoin = state.entries.length > 0;
     await finishCentralUnlock(out.vk, { offline: false, rekeyed: true });
+    // The re-keyed blocks go up (plan §6.3): the unlock's pull holds this until it has settled
+    // the generation (0 after an abandon), so the first push is "g0" → 204, or meets the
+    // first-join card if another device filled the new vault meanwhile.
+    scheduleCloudSync();
     return;
   }
   // The one dead end (plan §6.3): cached wrap gone and the server wrap gone. The
