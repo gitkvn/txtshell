@@ -23,6 +23,18 @@ const ENC_ITERATIONS_RECOVERY_KEY = "enc-iterations-recovery";
 const ENC_UNLOCK_FAIL_COUNT = "enc-unlock-fail-count";
 const ENC_UNLOCK_LOCKED_UNTIL = "enc-unlock-locked-until";
 const ENC_UNLOCK_ESCALATION = "enc-unlock-escalation";
+// Txtshell account (central) vault mode. `enc-mode` absent = passphrase vault.
+const ENC_MODE_KEY = "enc-mode";
+const CENTRAL_URL_KEY = "central-url";
+const CENTRAL_CREDENTIAL_ID_KEY = "central-credential-id";
+const CENTRAL_HKDF_SALT_KEY = "central-hkdf-salt";
+const CENTRAL_PRF_WRAP_KEY = "central-prf-wrap"; // this device's 60-byte wrap of VK, sealed under its passkey's KEK
+const CENTRAL_RP_ID_KEY = "central-rp-id"; // the rpId the server named at sign-in, cached for the offline ceremony
+const CENTRAL_PASSPHRASE_ROWS = [
+  ENC_SALT_PASS_KEY, ENC_SALT_RECOVERY_KEY, ENC_WRAPPED_PASS_KEY, ENC_WRAPPED_RECOVERY_KEY,
+  ENC_ITERATIONS_PASS_KEY, ENC_ITERATIONS_RECOVERY_KEY, ENC_UNLOCK_FAIL_COUNT, ENC_UNLOCK_LOCKED_UNTIL, ENC_UNLOCK_ESCALATION,
+];
+const CENTRAL_ROWS = [ENC_MODE_KEY, CENTRAL_URL_KEY, CENTRAL_CREDENTIAL_ID_KEY, CENTRAL_HKDF_SALT_KEY, CENTRAL_PRF_WRAP_KEY, CENTRAL_RP_ID_KEY];
 const ENC_VERIFY_PLAINTEXT = "txtshell-verify-v1";
 const SYNC_WORKER_URL_KEY = "sync-worker-url";
 const SYNC_AUTH_TOKEN_KEY = "sync-auth-token";
@@ -117,6 +129,11 @@ const SLASH_COMMANDS = [
   { name: "/sync setup", description: "Set the sync Worker URL and auth token" },
   { name: "/port", description: "Set up this browser using pairing data from another browser" },
   { name: "/pull", description: "Fetch the latest blocks from cloud" },
+  { name: "/account", description: "Txtshell account: sign in with a passkey, or sign up" },
+  { name: "/account devices", description: "Passkeys on your account; remove one, rotate the phrase, sign out" },
+  { name: "/account phrase", description: "Get a new recovery phrase (the old one stops working)" },
+  { name: "/account signout", description: "End this device's account session; blocks stay here" },
+  { name: "/account leave", description: "Turn this browser back into a passphrase vault with the same blocks" },
   { name: "/inbox", description: "Triage captures synced from your phone" },
   { name: "/font", description: "Set note font size in px (11–24, default 14); /font reset restores default" },
   { name: "/sym", description: "Chemistry & math symbol palette (₂ → Δ ²⁺); ;; toggles it anywhere" },
@@ -1227,6 +1244,34 @@ function submitComposer() {
     return;
   }
 
+  if (text === "/account") {
+    beginAccount();
+    return;
+  }
+  if (text === "/account devices") {
+    void beginAccountDevices();
+    return;
+  }
+  if (text === "/account phrase") {
+    void beginAccountPhrase();
+    return;
+  }
+  if (text === "/account signout") {
+    void accountSignOut();
+    return;
+  }
+  if (text === "/account leave") {
+    void beginAccountLeave();
+    return;
+  }
+
+  // With a Txtshell account the passkey is the only way in (plan §7): the
+  // passphrase commands and the pairing commands are refused, one line each.
+  if (isCentral() && ["/encrypt", "/encrypt change", "/encrypt off", "/mirror", "/port", "/sync setup"].includes(text)) {
+    composerHint.textContent = CENTRAL_REFUSAL;
+    return;
+  }
+
   if (text === "/encrypt") {
     if (state.encryption.enabled) {
       composerHint.textContent = "Encryption already on";
@@ -1663,7 +1708,9 @@ async function initialize() {
   try {
     state.db = await openDatabase();
     const saltPassBase64 = await getMeta(ENC_SALT_PASS_KEY);
-    state.encryption.enabled = Boolean(saltPassBase64);
+    const encMode = await getMeta(ENC_MODE_KEY);
+    state.encryption.mode = encMode === "central" ? "central" : "passphrase";
+    state.encryption.enabled = Boolean(saltPassBase64) || state.encryption.mode === "central";
 
     if (state.encryption.enabled) {
       state.vaultView = "unlock";
@@ -3351,6 +3398,14 @@ async function exportEntries({ plain = false } = {}) {
     return `Exported ${pluralCount(state.entries.length, "block")}${carried} (${suffix})`;
   };
 
+  if (!plain && isCentral() && state.encryption.unlocked && state.encryption.masterKey) {
+    // Plan §9: an export passphrase of the user's choosing wraps VK into the unchanged file format.
+    setEditorValue("");
+    clearDraft();
+    beginCentralExport(exportEntriesList, exportedLabel);
+    return;
+  }
+
   if (!plain && state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey) {
     const saltPass = await getMeta(ENC_SALT_PASS_KEY);
     const wrappedPass = await getMeta(ENC_WRAPPED_PASS_KEY);
@@ -4039,9 +4094,13 @@ async function reencryptRecovered(outcome) {
 // never re-encrypted: they are written back verbatim WITH the flag, so a store
 // that ends up in plaintext (/encrypt off) cannot mistake their ciphertext for
 // a block on the next load.
+// `entries` null = META ONLY: the key does not change, so no record (flagged or
+// not) is touched; the meta rows still land in the same single transaction.
+// This is the one path by which vault meta is ever written for a key change or
+// a mode change (Txtshell account join / leave / cached-wrap refresh).
 async function rekeyVault({ entries, key, flagged = state.unreadable, metaPuts = [], metaDeletes = [] }) {
-  const records = flagged.map(unreadableRecordOf);
-  for (const entry of entries) {
+  const records = entries === null ? [] : flagged.map(unreadableRecordOf);
+  for (const entry of entries || []) {
     records.push(key
       ? {
         id: entry.id,
@@ -4127,6 +4186,7 @@ function updateLockButton() {
 function lockVault() {
   state.encryption.unlocked = false;
   state.encryption.masterKey = null;
+  state.central.session = null; // an account session never outlives an unlocked tab
   state.entries = [];
   state.unreadable = [];
   state.search = "";
@@ -4189,7 +4249,7 @@ function renderVault() {
   } else if (view === "decrypting") {
     renderEncryptingCard("Decrypting your blocks");
   } else if (view === "unlock") {
-    renderUnlockCard(false);
+    if (isCentral()) renderCentralUnlockCard(); else renderUnlockCard(false);
   } else if (view === "unlock-recovery") {
     renderUnlockCard(true);
   } else if (view === "change-current") {
@@ -4256,6 +4316,50 @@ function renderVault() {
     renderPullConflictCard();
   } else if (view === "key-mismatch") {
     renderKeyMismatchCard();
+  } else if (view === "central-start") {
+    renderCentralStartCard();
+  } else if (view === "central-code") {
+    renderCentralCodeCard();
+  } else if (view === "central-busy") {
+    renderCentralBusyCard(state.vaultPending?.busy || "Working");
+  } else if (view === "central-forced-save") {
+    renderCentralForcedSaveCard();
+  } else if (view === "central-rung2") {
+    renderCentralRung2Card();
+  } else if (view === "central-abandon") {
+    renderCentralAbandonCard();
+  } else if (view === "central-passphrase") {
+    renderCentralPassphraseCard();
+  } else if (view === "central-devices") {
+    void renderCentralDevicesCard();
+  } else if (view === "central-leave") {
+    renderSetupCard({
+      title: "Choose a passphrase for this browser",
+      subtitle: "Your blocks keep their key. From now on this passphrase unlocks them here; your account and other devices are unaffected.",
+      buttonText: "Leave the account",
+      skipRecovery: true,
+      onSubmit: handleAccountLeaveSubmit,
+      onCancel: exitVaultToNormal,
+    });
+  } else if (view === "central-export-pass") {
+    renderSetupCard({
+      title: "Export passphrase",
+      subtitle: "The file holds a copy of your account's vault key, locked under this passphrase. Anyone with the file and the passphrase can read every block in your account, now and later. Keep it like you keep the recovery phrase. Any Txtshell install opens it with /import.",
+      buttonText: "Confirm with passkey and export",
+      skipRecovery: true,
+      onSubmit: async (passphrase) => {
+        const { exportEntriesList, exportedLabel } = state.vaultPending || {};
+        if (!exportEntriesList) throw new Error("missing-export");
+        await exportCentralEncrypted(passphrase, exportEntriesList, exportedLabel);
+        state.vaultView = null;
+        state.vaultPending = null;
+        renderVault();
+        entryInput.focus();
+      },
+      onCancel: exitVaultToNormal,
+    });
+  } else if (view === "first-join") {
+    renderFirstJoinCard();
   }
 }
 
@@ -4566,7 +4670,7 @@ function renderUnlockCardLocked(lockout) {
 const WIPE_CONFIRM_PHRASE = "DELETE EVERYTHING";
 
 function renderWipeCard(isRecovery) {
-  const hasVault = state.encryption.enabled;
+  const hasVault = state.encryption.enabled && !isCentral(); // central: the passkey confirms, not a passphrase
   const placeholder = isRecovery ? "Recovery key" : "Passphrase";
   const linkText = isRecovery ? "Use passphrase instead" : "Use recovery key instead";
 
@@ -4581,7 +4685,7 @@ function renderWipeCard(isRecovery) {
     <div class="vault-card">
       ${LOCK_ICON_SVG}
       <p class="vault-title">Wipe all data</p>
-      <p class="wipe-warning">This will permanently delete all your blocks and vault metadata from this browser. This cannot be undone.</p>
+      <p class="wipe-warning">This will permanently delete all your blocks and vault metadata from this browser. This cannot be undone.${isCentral() ? " Your account and its other devices are not affected; you'll confirm with your passkey." : ""}</p>
       <p class="vault-error" hidden></p>
       ${authFieldHtml}
       <input class="vault-input" data-field="confirm" type="text" placeholder="Type DELETE EVERYTHING" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
@@ -4661,7 +4765,10 @@ async function handleWipeSubmit(value, isRecovery, confirmPhrase) {
     throw new Error("phrase-mismatch");
   }
 
-  if (state.encryption.enabled) {
+  if (isCentral()) {
+    // A stolen unlocked tab cannot wipe without the authenticator.
+    await centralExtractableKey();
+  } else if (state.encryption.enabled) {
     if (!isRecovery) {
       const lockout = await readLockoutState();
       if (isCurrentlyLockedOut(lockout)) {
@@ -4752,7 +4859,8 @@ async function performWipe() {
 
   state.entries = [];
   state.unreadable = [];
-  state.encryption = { enabled: false, unlocked: false, masterKey: null };
+  state.encryption = { enabled: false, unlocked: false, masterKey: null, mode: "passphrase" };
+  state.central = { session: null, userId: null, credentialId: null, firstJoin: false };
   state.vaultView = null;
   state.vaultPending = null;
   state.editingEntryId = null;
@@ -5338,6 +5446,12 @@ async function handleDisableSubmit(passphrase) {
 // ---------------------------------------------------------------------------
 
 async function getSyncConfig() {
+  // One shape for both modes. A Txtshell account is the app's own origin and
+  // the live session (or "" when there is none — "not configured" to callers,
+  // never an error); self-hosted is whatever /sync setup stored.
+  if (isCentral()) {
+    return { workerUrl: window.location.origin, authToken: state.central.session || "" };
+  }
   const [workerUrl, authToken] = await Promise.all([
     getMeta(SYNC_WORKER_URL_KEY),
     getMeta(SYNC_AUTH_TOKEN_KEY),
@@ -5354,7 +5468,10 @@ function normalizeWorkerUrl(value) {
   } catch {
     return null;
   }
-  if (parsed.protocol !== "https:") return null; // Worker is HTTPS-only
+  // Worker is HTTPS-only. http://localhost is a secure context too (WebAuthn
+  // allows it), so the local harness for the account flow can run — plan §4.2.
+  const localhost = parsed.protocol === "http:" && (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1");
+  if (parsed.protocol !== "https:" && !localhost) return null;
   return trimmed.replace(/\/+$/, "");
 }
 
@@ -6285,10 +6402,12 @@ async function beginPull({ quiet = false } = {}) {
     const result = await fetchAndDecryptBlocks();
     setSyncStatus("ok"); // reachable + decrypted: the sync channel is healthy
     if (result.upToDate) {
+      state.central.firstJoin = false;
       composerHint.textContent = "Already up to date.";
       return;
     }
     if (result.empty) {
+      state.central.firstJoin = false;
       void clearSyncedBase();
       composerHint.textContent = "Cloud is empty — nothing to pull.";
       return;
@@ -6299,6 +6418,7 @@ async function beginPull({ quiet = false } = {}) {
     } else {
       void recordSyncedBase(result.entries); // local == cloud, established
       if (result.generation !== null) void recordSyncedGeneration(result.generation);
+      state.central.firstJoin = false;
       const note = describePullReconcile(reconciled);
       composerHint.textContent = note ? `Already up to date — ${note}.` : "Already up to date.";
     }
@@ -6330,8 +6450,12 @@ async function autoPullOnUnlock() {
   try {
     const result = await fetchAndDecryptBlocks();
     setSyncStatus("ok"); // reachable + decrypted: the sync channel is healthy
-    if (result.upToDate) return;
+    if (result.upToDate) {
+      state.central.firstJoin = false;
+      return;
+    }
     if (result.empty) {
+      state.central.firstJoin = false;
       void clearSyncedBase();
       return;
     }
@@ -6394,7 +6518,9 @@ async function showPullConflict(cloudEntries, reconciled = null, cloudGeneration
   const baseMatches = await cloudMatchesSyncedBase(cloudEntries);
   if (state.vaultView) return; // a card opened meanwhile — never clobber it
   state.vaultPending = { pullEntries: cloudEntries, pullCloud: reconciled.cloud, pullLocal: reconciled.local, baseMatches, pullGeneration: cloudGeneration };
-  state.vaultView = "pull-conflict";
+  // After a join that re-keyed this browser's blocks, cloud and local are two
+  // unrelated histories: the first-join card (merge) instead of the stale-copy card.
+  state.vaultView = isCentral() && state.central.firstJoin && reconciled.local.length > 0 ? "first-join" : "pull-conflict";
   renderVault();
 }
 
@@ -6850,6 +6976,1124 @@ async function handlePortPassphraseSubmit(passphrase) {
     setPullStatusFromError(error);
   }
   signalReady();
+}
+
+// ---------------------------------------------------------------------------
+// Txtshell account (central sync). Vault mode "central": the vault key is the
+// account's vault key (VK), unlocked with a passkey; the API is the app's own
+// origin. The key enters the SAME slot as a passphrase vault's master key
+// (state.encryption.masterKey) — nothing downstream knows the difference.
+// Every write of vault meta goes through rekeyVault's one transaction (records
+// when the key changes, meta only when it does not). The server never sees the
+// PRF output, a KEK, VK, the recovery phrase or its entropy. Plan: txtshell-
+// central/docs/phase-d-plan.md §3–§9.
+// ---------------------------------------------------------------------------
+
+const CENTRAL_REFUSAL = "Not used with a Txtshell account — see /account";
+const CENTRAL_UNAVAILABLE = "Account features aren't loaded on this page";
+
+function centralAvailable() {
+  return typeof window.txCentral === "object" && window.txCentral !== null;
+}
+
+// The meta rows that describe a central vault (all public or sealed under a
+// key only this device's authenticator can derive).
+function centralMetaRows({ credentialId, hkdfSalt, prfWrap, rpId }) {
+  return [
+    [ENC_MODE_KEY, "central"],
+    [CENTRAL_URL_KEY, window.location.origin],
+    [CENTRAL_CREDENTIAL_ID_KEY, credentialId],
+    [CENTRAL_HKDF_SALT_KEY, hkdfSalt],
+    [CENTRAL_PRF_WRAP_KEY, prfWrap],
+    [CENTRAL_RP_ID_KEY, rpId],
+  ];
+}
+
+async function readCentralMeta() {
+  const [credentialId, hkdfSalt, prfWrap, rpId] = await Promise.all([
+    getMeta(CENTRAL_CREDENTIAL_ID_KEY),
+    getMeta(CENTRAL_HKDF_SALT_KEY),
+    getMeta(CENTRAL_PRF_WRAP_KEY),
+    getMeta(CENTRAL_RP_ID_KEY),
+  ]);
+  return { credentialId, hkdfSalt, prfWrap, rpId };
+}
+
+function setCentralSession(login) {
+  state.central.session = login.session;
+  state.central.userId = login.userId;
+  state.central.credentialId = login.credentialId;
+}
+
+function clearCentralSession() {
+  state.central.session = null;
+  state.central.userId = null;
+  state.central.credentialId = null;
+}
+
+// A 401 from any account request: the session is gone. Local state untouched.
+document.addEventListener("txcentral:session-lost", () => {
+  if (isCentral() && state.central.session) dropCentralSession("session-lost");
+});
+
+// ---------- the cards the ladder drives (flow in central.js, DOM here) ----------
+
+// Shared pending-promise plumbing: a card resolves or rejects the ladder's
+// question; Cancel rejects with "cancelled", which unwinds the whole flow.
+let centralCardSettle = null;
+function settleCentralCard(value, error) {
+  const settle = centralCardSettle;
+  centralCardSettle = null;
+  if (!settle) return;
+  if (error) settle.reject(error); else settle.resolve(value);
+}
+function cancelCentralCard() {
+  settleCentralCard(undefined, new Error("cancelled"));
+}
+
+const centralUi = {
+  // Forced-save: the 12 words, Copy (primary) or Download, then a 3-word spot
+  // check answered from the SAVED copy (the words leave the screen first).
+  forcedSave(words, { title, intro }) {
+    return new Promise((resolve, reject) => {
+      centralCardSettle = { resolve, reject };
+      state.vaultPending = { ...(state.vaultPending || {}), forcedSave: { words, title, intro } };
+      state.vaultView = "central-forced-save";
+      renderVault();
+    });
+  },
+  askPhrase(errorText) {
+    return new Promise((resolve, reject) => {
+      centralCardSettle = { resolve, reject };
+      state.vaultPending = { ...(state.vaultPending || {}), rung2Error: errorText || "" };
+      state.vaultView = "central-rung2";
+      renderVault();
+    });
+  },
+};
+
+function renderCentralBusyCard(label) {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      <p class="encrypting-status">${escapeHtml(label)}<span class="dot"> ...</span></p>
+    </div>
+  `;
+}
+
+function renderCentralForcedSaveCard() {
+  const pending = state.vaultPending?.forcedSave;
+  if (!pending) {
+    exitVaultToNormal();
+    return;
+  }
+  const { words, title, intro } = pending;
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG_DOT}
+      <p class="vault-title">${escapeHtml(title)}</p>
+      <p class="vault-subtitle">${escapeHtml(intro)}</p>
+      <ol class="phrase-words" data-field="words"></ol>
+      <p class="vault-subtitle" data-field="hidden" hidden>Phrase hidden — answer the check from your saved copy. <button class="vault-link inline" type="button" data-action="show">Show it again</button></p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="copy">Copy to your password manager</button>
+      <button class="vault-button secondary" type="button" data-action="download">Download as a file</button>
+      <div class="phrase-check" data-field="check" hidden></div>
+      <p class="vault-subtitle" data-field="note"></p>
+      <button class="vault-button" type="button" data-action="continue" disabled>Continue</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+  const list = vaultOverlay.querySelector('[data-field="words"]');
+  const hiddenNote = vaultOverlay.querySelector('[data-field="hidden"]');
+  const check = vaultOverlay.querySelector('[data-field="check"]');
+  const note = vaultOverlay.querySelector('[data-field="note"]');
+  const continueButton = vaultOverlay.querySelector('[data-action="continue"]');
+  let saved = false;
+  let positions = window.txCentral.phrase.spotPositions();
+  const showPhrase = () => {
+    list.innerHTML = "";
+    words.forEach((word, index) => {
+      const li = document.createElement("li");
+      li.dataset.word = word;
+      li.textContent = `${index + 1}. ${word}`;
+      list.appendChild(li);
+    });
+    list.hidden = false;
+    hiddenNote.hidden = true;
+  };
+  const hidePhrase = () => {
+    list.innerHTML = "";
+    list.hidden = true;
+    hiddenNote.hidden = false;
+  };
+  const resetCheck = () => {
+    check.hidden = true;
+    check.innerHTML = "";
+    continueButton.disabled = true;
+    saved = false;
+    positions = window.txCentral.phrase.spotPositions();
+  };
+  const armSpotCheck = () => {
+    if (saved) return;
+    saved = true;
+    hidePhrase();
+    check.hidden = false;
+    const prompt = document.createElement("p");
+    prompt.className = "vault-subtitle";
+    prompt.textContent = "Quick check — type the words at these positions from your saved copy:";
+    check.appendChild(prompt);
+    const inputs = positions.map((position) => {
+      const input = document.createElement("input");
+      input.className = "vault-input";
+      input.type = "text";
+      input.autocomplete = "off";
+      input.autocapitalize = "none";
+      input.spellcheck = false;
+      input.placeholder = `Word ${position}`;
+      input.dataset.position = String(position);
+      check.appendChild(input);
+      return input;
+    });
+    const verify = () => {
+      const ok = inputs.every((input) => window.txCentral.phrase.normalizeWord(input.value) === words[Number(input.dataset.position) - 1]);
+      continueButton.disabled = !ok;
+      note.textContent = ok ? "Matches — you can continue." : inputs.some((input) => input.value.trim()) ? "Not quite — check your saved copy." : "";
+    };
+    inputs.forEach((input) => input.addEventListener("input", verify));
+    inputs[0].focus();
+  };
+  showPhrase();
+  resetCheck();
+  vaultOverlay.querySelector('[data-action="show"]').addEventListener("click", () => {
+    showPhrase();
+    resetCheck();
+    note.textContent = "Phrase shown again — save it, then repeat the check.";
+  });
+  vaultOverlay.querySelector('[data-action="copy"]').addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(words.join(" "));
+      note.textContent = "Copied. Paste it into a NEW secure note in your password manager — not inside your Txtshell login item.";
+      armSpotCheck();
+    } catch {
+      note.textContent = "Couldn't access the clipboard here — use Download instead.";
+    }
+  });
+  vaultOverlay.querySelector('[data-action="download"]').addEventListener("click", () => {
+    const blob = new Blob([`Txtshell recovery phrase (keep this separate from your login):\n\n${words.join(" ")}\n`], { type: "text/plain" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "txtshell-recovery-phrase.txt";
+    link.click();
+    URL.revokeObjectURL(link.href);
+    note.textContent = "Downloaded. Move the file somewhere deliberate — Downloads syncs to iCloud Drive / OneDrive and lives there forever.";
+    armSpotCheck();
+  });
+  continueButton.addEventListener("click", () => {
+    if (continueButton.disabled) return;
+    state.vaultView = "central-busy";
+    state.vaultPending = { ...(state.vaultPending || {}), forcedSave: null, busy: "Setting up" };
+    renderVault();
+    settleCentralCard(undefined);
+  });
+  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", cancelCentralCard);
+}
+
+function renderCentralRung2Card() {
+  const errorText = state.vaultPending?.rung2Error || "";
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG}
+      <p class="vault-title">Enter your recovery phrase</p>
+      <p class="vault-subtitle">This passkey is new to your account. Your 12-word recovery phrase sets it up — once; after this, the passkey alone unlocks.</p>
+      <p class="vault-error" ${errorText ? "" : "hidden"}>${escapeHtml(errorText)}</p>
+      <textarea class="vault-input phrase-input" data-field="phrase" rows="3" placeholder="twelve words separated by spaces" autocomplete="off" autocapitalize="none" spellcheck="false"></textarea>
+      <button class="vault-button" type="button" data-action="submit">Unlock with phrase</button>
+      <button class="vault-link" type="button" data-action="fork">Don't have your phrase?</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+  const input = vaultOverlay.querySelector('[data-field="phrase"]');
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const submit = async () => {
+    try {
+      const parsed = await window.txCentral.phrase.toEntropy(input.value); // checksum: most typos die here, no network
+      state.vaultView = "central-busy";
+      state.vaultPending = { ...(state.vaultPending || {}), busy: "Checking your phrase" };
+      renderVault();
+      settleCentralCard({ kind: "phrase", entropy: parsed.entropy });
+    } catch (error) {
+      errorLine.textContent = error.message;
+      errorLine.hidden = false;
+    }
+  };
+  input.addEventListener("input", () => { errorLine.hidden = true; });
+  vaultOverlay.querySelector('[data-action="submit"]').addEventListener("click", submit);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      submit();
+    }
+  });
+  vaultOverlay.querySelector('[data-action="fork"]').addEventListener("click", () => {
+    state.vaultView = "central-abandon";
+    renderVault();
+  });
+  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", cancelCentralCard);
+  window.requestAnimationFrame(() => input.focus());
+}
+
+// The fork on the rung-2 screen: start the account's vault over. Typed email
+// confirms it; other devices' copies become unreadable until they re-join.
+function renderCentralAbandonCard() {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG}
+      <p class="vault-title">Start this account's vault over?</p>
+      <p class="wipe-warning">Without the phrase, nothing can open the vault this account holds now. Starting over deletes the cloud copy and every device's access to it; each device keeps whatever it has locally and re-joins with the new phrase. Type the account's email to confirm.</p>
+      <p class="vault-error" hidden></p>
+      <input class="vault-input" data-field="email" type="email" placeholder="you@example.com" autocomplete="off" spellcheck="false" />
+      <button class="vault-button danger" type="button" data-action="submit">Start over</button>
+      <button class="vault-link" type="button" data-action="back">Back</button>
+    </div>
+  `;
+  const input = vaultOverlay.querySelector('[data-field="email"]');
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const submitButton = vaultOverlay.querySelector('[data-action="submit"]');
+  submitButton.addEventListener("click", async () => {
+    submitButton.disabled = true;
+    try {
+      await window.txCentral.ladder.abandon(state.central.session, input.value.trim());
+      await clearSyncState();
+      state.vaultView = "central-busy";
+      state.vaultPending = { ...(state.vaultPending || {}), busy: "Starting a new vault" };
+      renderVault();
+      settleCentralCard({ kind: "abandoned" });
+    } catch (error) {
+      errorLine.textContent = error.code === "confirm-mismatch" ? "That doesn't match this account's email." : "Couldn't start over. Try again.";
+      errorLine.hidden = false;
+      submitButton.disabled = false;
+    }
+  });
+  vaultOverlay.querySelector('[data-action="back"]').addEventListener("click", () => {
+    state.vaultView = "central-rung2";
+    renderVault();
+  });
+  window.requestAnimationFrame(() => input.focus());
+}
+
+// ---------- sign in / sign up ----------
+
+function renderCentralStartCard() {
+  const hasLocal = state.encryption.enabled || state.entries.length > 0;
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG_DOT}
+      <p class="vault-title">Txtshell account</p>
+      <p class="vault-subtitle">Sync across your devices with a passkey. Your blocks stay end-to-end encrypted — we never hold a key.${hasLocal ? " The blocks on this browser come with you." : ""}</p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="signin">Sign in with passkey</button>
+      <p class="vault-subtitle">New account, or adding this device? Start with your email.</p>
+      <input class="vault-input" data-field="email" type="email" placeholder="you@example.com" autocomplete="email" spellcheck="false" />
+      <button class="vault-button secondary" type="button" data-action="email">Send a code</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const showError = (message) => { errorLine.textContent = message; errorLine.hidden = !message; };
+  const signinButton = vaultOverlay.querySelector('[data-action="signin"]');
+  const emailButton = vaultOverlay.querySelector('[data-action="email"]');
+  const emailInput = vaultOverlay.querySelector('[data-field="email"]');
+  signinButton.addEventListener("click", async () => {
+    signinButton.disabled = true;
+    emailButton.disabled = true;
+    try {
+      await centralJoin({ via: "signin" });
+    } catch (error) {
+      centralFlowFailed(error, "central-start");
+    }
+  });
+  const sendCode = async () => {
+    const email = emailInput.value.trim();
+    if (!email) { showError("Enter your email."); return; }
+    showError("");
+    emailButton.disabled = true;
+    try {
+      const result = await window.txCentral.webauthn.signup(email);
+      state.vaultPending = { email, echoCode: typeof result.code === "string" ? result.code : "" };
+      state.vaultView = "central-code";
+      renderVault();
+    } catch (error) {
+      console.error(error);
+      showError(error.code === "invalid-email" ? "That doesn't look like an email address." : "Couldn't send a code. Try again.");
+      emailButton.disabled = false;
+    }
+  };
+  emailButton.addEventListener("click", sendCode);
+  emailInput.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); sendCode(); } });
+  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", exitVaultToNormal);
+}
+
+function renderCentralCodeCard() {
+  const pending = state.vaultPending || {};
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG_DOT}
+      <p class="vault-title">Check your email</p>
+      <p class="vault-subtitle">Enter the 6-digit code sent to ${escapeHtml(pending.email || "")}. Then this browser's passkey is registered to your account.</p>
+      <p class="vault-error" hidden></p>
+      <input class="vault-input" data-field="code" type="text" inputmode="numeric" placeholder="6-digit code" autocomplete="one-time-code" spellcheck="false" />
+      <button class="vault-button" type="button" data-action="submit">Verify and register passkey</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+  const input = vaultOverlay.querySelector('[data-field="code"]');
+  if (pending.echoCode) input.value = pending.echoCode; // dev deployments echo the code; production never does
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const submitButton = vaultOverlay.querySelector('[data-action="submit"]');
+  const submit = async () => {
+    const code = input.value.trim();
+    if (!/^\d{6}$/.test(code)) { errorLine.textContent = "Enter the 6-digit code."; errorLine.hidden = false; return; }
+    submitButton.disabled = true;
+    try {
+      const { signupToken } = await window.txCentral.webauthn.verifyEmail(pending.email, code);
+      state.vaultView = "central-busy";
+      state.vaultPending = { ...pending, busy: "Registering your passkey" };
+      renderVault();
+      const registered = await window.txCentral.webauthn.register(signupToken);
+      await centralJoin({ via: "register", registered });
+    } catch (error) {
+      if (error.code === "code-invalid" || error.code === "code-locked" || error.status === 400) {
+        state.vaultView = "central-code";
+        renderVault();
+        const line = vaultOverlay.querySelector(".vault-error");
+        line.textContent = error.code === "code-locked" ? "Too many attempts — request a new code." : "That code didn't work.";
+        line.hidden = false;
+        return;
+      }
+      centralFlowFailed(error, "central-code");
+    }
+  };
+  submitButton.addEventListener("click", submit);
+  input.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); submit(); } });
+  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", exitVaultToNormal);
+  window.requestAnimationFrame(() => input.focus());
+}
+
+// Any failure inside a flow lands back on a card with a message, or (on
+// cancel) back in the normal view. Nothing local has changed unless the one
+// rekeyVault transaction completed, and then the state was updated with it.
+function centralFlowFailed(error, view) {
+  if (error?.message === "cancelled") {
+    exitVaultToNormal();
+    return;
+  }
+  console.error("[txtshell] account flow failed", error);
+  let message = "Something went wrong. Try again.";
+  if (error?.name === "NotAllowedError") message = "The passkey prompt was cancelled or timed out.";
+  else if (error?.code === "unknown-credential") message = "This passkey isn't on the account any more — it was removed. Use your email to add this device again (you'll need your recovery phrase).";
+  else if (error?.code === "no-prf") message = "This passkey can't derive a key on this browser. Try another browser, or a different passkey.";
+  else if (error?.status === 0 || error?.name === "TypeError") message = "Can't reach the account service. Check your connection.";
+  if (view) {
+    state.vaultView = view;
+    renderVault();
+    const line = vaultOverlay.querySelector(".vault-error");
+    if (line) { line.textContent = message; line.hidden = false; }
+    vaultOverlay.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+  } else {
+    exitVaultToNormal();
+  }
+  composerHint.textContent = message;
+}
+
+// ---------- joining: the four starting states (plan §6) ----------
+
+// Sign in (passkey ceremony → session → KEK_prf), then bring this browser's
+// vault into the account:
+//   account has no vault + passphrase vault here  → ADOPT: VK := this vault's key, no re-key (§6.1)
+//   account has no vault + plaintext/fresh here   → new VK, every record under it in one transaction
+//   account has a vault  + same key here          → meta swap only (an import of a central export)
+//   account has a vault  + different key here     → re-key card → one transaction → first-join card on the next pull (§6.2)
+async function centralJoin({ via, registered } = {}) {
+  state.vaultView = "central-busy";
+  state.vaultPending = { ...(state.vaultPending || {}), busy: "Signing in" };
+  renderVault();
+  const login = await window.txCentral.webauthn.login();
+  setCentralSession(login);
+  const kekWrap = await window.txCentral.keys.kekFromPrf(login.prf, login.hkdfSalt);
+  login.prf.fill(0);
+  const rpId = login.rpId || registered?.rpId || "";
+  const identity = { credentialId: login.credentialId, hkdfSalt: login.hkdfSalt, rpId };
+  const hadVault = state.encryption.enabled; // a passphrase vault, unlocked (commands run unlocked)
+
+  if (!login.hasRecovery && hadVault) {
+    // ADOPT. The passphrase gives an extractable handle of the master key so it can be wrapped.
+    const extractable = await centralAskPassphrase({
+      title: "Move this browser's vault to your account",
+      subtitle: "Enter this browser's passphrase. Your blocks keep their key — nothing is re-encrypted — and from now on your passkey unlocks them.",
+      buttonText: "Continue",
+    }, { extractable: true });
+    state.vaultView = "central-busy";
+    state.vaultPending = { ...(state.vaultPending || {}), busy: "Setting up your account's vault" };
+    renderVault();
+    const out = await window.txCentral.ladder.bootstrap({ session: login.session, kekWrap, vk: extractable }, centralUi);
+    if (out) {
+      await rekeyVault({
+        entries: null, // same key: no record is rewritten (enc-verify already valid)
+        key: null,
+        metaPuts: centralMetaRows({ ...identity, prfWrap: out.prfWrap }),
+        metaDeletes: [...CENTRAL_PASSPHRASE_ROWS, SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY],
+      });
+      state.encryption.mode = "central";
+      state.encryption.masterKey = out.vk;
+      state.central.firstJoin = false;
+      finishCentralJoin("Vault moved to your account — your passkey unlocks it from now on.");
+      return;
+    }
+    // Raced: another device bootstrapped first. Fall through with the account's vault.
+    login.hasRecovery = true;
+  }
+
+  if (!login.hasRecovery) {
+    // Plaintext or fresh install: a new VK, every record under it, one transaction.
+    const out = await window.txCentral.ladder.bootstrap({ session: login.session, kekWrap }, centralUi);
+    if (out) {
+      const verify = await encryptPlaintext(ENC_VERIFY_PLAINTEXT, out.vk);
+      await rekeyVault({
+        entries: state.entries,
+        key: out.vk,
+        metaPuts: [...centralMetaRows({ ...identity, prfWrap: out.prfWrap }), [ENC_VERIFY_KEY, verify]],
+        metaDeletes: [DRAFT_KEY, DRAFT_STASH_KEY, SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY],
+      });
+      state.encryption.enabled = true;
+      state.encryption.unlocked = true;
+      state.encryption.mode = "central";
+      state.encryption.masterKey = out.vk;
+      state.central.firstJoin = false;
+      finishCentralJoin(state.entries.length > 0 ? "Account set up — your blocks are encrypted and will sync." : "Account set up.");
+      return;
+    }
+    login.hasRecovery = true;
+  }
+
+  // The account has a vault: rung 1 (this passkey has a wrap) or rung 2 (phrase).
+  const out = await window.txCentral.ladder.run({ session: login.session, kekWrap, hasPrfWrap: login.hasPrfWrap, hasRecovery: true }, centralUi);
+  if (out.abandoned) await clearSyncState();
+  if (hadVault && await verifyMasterKey(out.vk)) {
+    // Same key already (e.g. this install was set up from a central export): swap the mode rows only.
+    await rekeyVault({
+      entries: null,
+      key: null,
+      metaPuts: centralMetaRows({ ...identity, prfWrap: out.prfWrap }),
+      metaDeletes: [...CENTRAL_PASSPHRASE_ROWS, SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY],
+    });
+    state.encryption.mode = "central";
+    state.encryption.masterKey = out.vk;
+    state.central.firstJoin = false;
+    finishCentralJoin("Joined — this browser already had your account's key.");
+    return;
+  }
+  if (hadVault) {
+    // Different key: confirm with the passphrase before this browser's blocks move under VK.
+    await centralAskPassphrase({
+      title: "Join with this browser's blocks",
+      subtitle: `This browser's ${pluralCount(state.entries.length, "block")} ${state.entries.length === 1 ? "is" : "are"} encrypted under a different key. Enter the passphrase for this browser to move them into your account. Nothing is uploaded until you choose on the next screen.`,
+      buttonText: "Move my blocks",
+    });
+    state.vaultView = "central-busy";
+    state.vaultPending = { ...(state.vaultPending || {}), busy: "Moving your blocks" };
+    renderVault();
+  }
+  const verify = await encryptPlaintext(ENC_VERIFY_PLAINTEXT, out.vk);
+  await rekeyVault({
+    entries: state.entries,
+    key: out.vk,
+    metaPuts: [...centralMetaRows({ ...identity, prfWrap: out.prfWrap }), [ENC_VERIFY_KEY, verify]],
+    metaDeletes: [...CENTRAL_PASSPHRASE_ROWS, DRAFT_KEY, DRAFT_STASH_KEY, SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY],
+  });
+  state.encryption.enabled = true;
+  state.encryption.unlocked = true;
+  state.encryption.mode = "central";
+  state.encryption.masterKey = out.vk;
+  state.central.firstJoin = state.entries.length > 0; // the next pull meets the cloud on the first-join card
+  finishCentralJoin(state.entries.length > 0 ? "Joined — checking the cloud for your other devices' blocks…" : "Joined.");
+  void beginPull({ quiet: true });
+}
+
+function finishCentralJoin(hint) {
+  state.vaultView = null;
+  state.vaultPending = null;
+  renderVault();
+  updateLockButton();
+  composerHint.textContent = hint;
+  render();
+  entryInput.focus();
+  signalReady();
+  scheduleCloudSync();
+}
+
+// Asks for this browser's passphrase on a confirm card and verifies it against
+// the stored wrap. Resolves with the master key handle (extractable on request).
+function centralAskPassphrase({ title, subtitle, buttonText }, { extractable = false } = {}) {
+  return new Promise((resolve, reject) => {
+    state.vaultView = "central-passphrase";
+    state.vaultPending = {
+      ...(state.vaultPending || {}),
+      passphraseCard: {
+        title, subtitle, buttonText,
+        onSubmit: async (passphrase) => {
+          const saltBase64 = await getMeta(ENC_SALT_PASS_KEY);
+          const wrappedBase64 = await getMeta(ENC_WRAPPED_PASS_KEY);
+          if (!saltBase64 || !wrappedBase64) throw new Error("missing-meta");
+          const iterations = await readIterations(ENC_ITERATIONS_PASS_KEY);
+          const wrappingKey = await deriveWrappingKey(passphrase, base64ToBytes(saltBase64), iterations);
+          let masterKey;
+          try {
+            masterKey = await unwrapMasterKey(wrappedBase64, wrappingKey, extractable);
+          } catch {
+            throw new Error("wrong-key");
+          }
+          resolve(masterKey);
+        },
+        onCancel: () => reject(new Error("cancelled")),
+      },
+    };
+    renderVault();
+  });
+}
+
+function renderCentralPassphraseCard() {
+  const card = state.vaultPending?.passphraseCard;
+  if (!card) {
+    exitVaultToNormal();
+    return;
+  }
+  renderPassphraseConfirmCard({
+    title: card.title,
+    subtitle: card.subtitle,
+    buttonText: card.buttonText,
+    onSubmit: card.onSubmit,
+    onCancel: card.onCancel,
+  });
+}
+
+// ---------- unlock (central mode, vault locked) ----------
+
+function renderCentralUnlockCard() {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG}
+      <p class="vault-title">Vault locked</p>
+      <p class="vault-subtitle">Unlock with your passkey.</p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="unlock">Unlock with passkey</button>
+      <button class="vault-link" type="button" data-action="wipe">Wipe all data</button>
+    </div>
+  `;
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const unlockButton = vaultOverlay.querySelector('[data-action="unlock"]');
+  unlockButton.addEventListener("click", async () => {
+    unlockButton.disabled = true;
+    unlockButton.textContent = "Unlocking…";
+    errorLine.hidden = true;
+    try {
+      await handleCentralUnlock();
+    } catch (error) {
+      if (state.vaultView !== "unlock") {
+        centralFlowFailed(error, "unlock");
+        return;
+      }
+      console.error(error);
+      errorLine.textContent = error?.name === "NotAllowedError"
+        ? "The passkey prompt was cancelled or timed out."
+        : (error?.message === "wrong-key" ? "This passkey doesn't open the vault on this browser." : "Couldn't unlock. Try again.");
+      errorLine.hidden = false;
+      unlockButton.disabled = false;
+      unlockButton.textContent = "Unlock with passkey";
+    }
+  });
+  vaultOverlay.querySelector('[data-action="wipe"]').addEventListener("click", () => {
+    state.vaultView = "wipe-confirm";
+    renderVault();
+  });
+}
+
+// Online: the ceremony is a sign-in (session + fresh wrap). Offline (the
+// options request fails): the passkey alone opens the cached wrap — no session,
+// pushes wait. Either way VK lands in state.encryption.masterKey.
+async function handleCentralUnlock() {
+  const stored = await readCentralMeta();
+  let login = null;
+  try {
+    login = await window.txCentral.webauthn.login();
+  } catch (error) {
+    // Only a transport failure means "offline"; a refused ceremony or a server
+    // answer is a real outcome.
+    if (!(error?.name === "TypeError" || error?.status === 0)) throw error;
+  }
+  if (!login) {
+    if (!stored.credentialId || !stored.prfWrap || !stored.hkdfSalt || !stored.rpId) throw new Error("offline-no-cache");
+    const { prf } = await window.txCentral.webauthn.assertOffline({ credentialId: stored.credentialId, rpId: stored.rpId });
+    const kekWrap = await window.txCentral.keys.kekFromPrf(prf, stored.hkdfSalt);
+    prf.fill(0);
+    let vk;
+    try {
+      vk = await window.txCentral.keys.unwrapVK(stored.prfWrap, kekWrap, false);
+    } catch {
+      throw new Error("wrong-key");
+    }
+    if (!(await verifyMasterKey(vk))) throw new Error("wrong-key");
+    await finishCentralUnlock(vk, { offline: true });
+    return;
+  }
+
+  setCentralSession(login);
+  const kekWrap = await window.txCentral.keys.kekFromPrf(login.prf, login.hkdfSalt);
+  login.prf.fill(0);
+  const identity = { credentialId: login.credentialId, hkdfSalt: login.hkdfSalt, rpId: login.rpId || stored.rpId };
+  state.vaultView = "central-busy";
+  state.vaultPending = { busy: "Unlocking" };
+  renderVault();
+  const out = await window.txCentral.ladder.run({ session: login.session, kekWrap, hasPrfWrap: login.hasPrfWrap, hasRecovery: login.hasRecovery }, centralUi);
+  if (out.abandoned) await clearSyncState();
+
+  if (await verifyMasterKey(out.vk)) {
+    // The key that made this store. Refresh the cached wrap (and identity) if anything changed.
+    if (out.prfWrap !== stored.prfWrap || identity.credentialId !== stored.credentialId || identity.hkdfSalt !== stored.hkdfSalt || identity.rpId !== stored.rpId) {
+      await rekeyVault({ entries: null, key: null, metaPuts: centralMetaRows({ ...identity, prfWrap: out.prfWrap }) });
+    }
+    await finishCentralUnlock(out.vk, { offline: false });
+    return;
+  }
+
+  // The account handed a different key (the vault was started over elsewhere,
+  // or this passkey was re-set-up). The old key is the cached wrap, which the
+  // passkey ceremony that just ran can open — if it is this credential's wrap.
+  let oldKey = null;
+  if (stored.prfWrap && stored.credentialId === login.credentialId) {
+    try {
+      oldKey = await window.txCentral.keys.unwrapVK(stored.prfWrap, kekWrap, false);
+      if (!(await verifyMasterKey(oldKey))) oldKey = null;
+    } catch {
+      oldKey = null;
+    }
+  }
+  if (oldKey) {
+    // Re-key: decrypt everything under the old key in memory, then one transaction under the new one.
+    state.vaultPending = { busy: "Moving your blocks to the account's new key" };
+    renderVault();
+    state.encryption.masterKey = oldKey;
+    state.encryption.unlocked = true;
+    const outcome = await decryptAllEntriesIntoState();
+    void outcome;
+    const verify = await encryptPlaintext(ENC_VERIFY_PLAINTEXT, out.vk);
+    await rekeyVault({
+      entries: state.entries,
+      key: out.vk,
+      metaPuts: [...centralMetaRows({ ...identity, prfWrap: out.prfWrap }), [ENC_VERIFY_KEY, verify]],
+      metaDeletes: [SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY],
+    });
+    state.encryption.masterKey = out.vk;
+    state.central.firstJoin = state.entries.length > 0;
+    await finishCentralUnlock(out.vk, { offline: false, rekeyed: true });
+    return;
+  }
+  // The one dead end (plan §6.3): cached wrap gone and the server wrap gone. The
+  // records are kept, flagged unreadable, and carried in the blob; a device that
+  // can read them heals this one on its next push.
+  const verify = await encryptPlaintext(ENC_VERIFY_PLAINTEXT, out.vk);
+  await rekeyVault({
+    entries: null,
+    key: null,
+    metaPuts: [...centralMetaRows({ ...identity, prfWrap: out.prfWrap }), [ENC_VERIFY_KEY, verify]],
+    metaDeletes: [SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY],
+  });
+  await finishCentralUnlock(out.vk, { offline: false, deadEnd: true });
+}
+
+async function finishCentralUnlock(vk, { offline = false, rekeyed = false, deadEnd = false } = {}) {
+  state.encryption.masterKey = vk;
+  state.encryption.unlocked = true;
+  const outcome = await decryptAllEntriesIntoState();
+  state.vaultView = null;
+  state.vaultPending = null;
+  renderVault();
+  updateLockButton();
+  const outcomeText = describeUnlockOutcome(outcome);
+  let hint = outcomeText ? `Vault unlocked — ${outcomeText}` : "Vault unlocked";
+  if (rekeyed) hint = `Vault unlocked — your blocks moved to the account's new key${outcomeText ? ` · ${outcomeText}` : ""}`;
+  if (deadEnd && outcome.unreadable > 0) hint = `Vault unlocked — ${pluralCount(outcome.unreadable, "block")} on this browser can't be opened with the account's current key (kept; another device that reads them will sync them back)`;
+  composerHint.textContent = hint;
+  render();
+  entryInput.focus();
+  signalReady();
+  void reencryptRecovered(outcome);
+  if (offline) {
+    setSyncStatus("central-offline");
+    return;
+  }
+  void autoPullOnUnlock();
+}
+
+// ---------- /account family ----------
+
+function beginAccount() {
+  if (!centralAvailable()) {
+    composerHint.textContent = CENTRAL_UNAVAILABLE;
+    return;
+  }
+  setEditorValue("");
+  clearDraft();
+  if (!isCentral()) {
+    state.vaultPending = null;
+    state.vaultView = "central-start";
+    renderVault();
+    composerHint.textContent = "Txtshell account";
+    return;
+  }
+  if (!state.central.session) {
+    void centralResume();
+    return;
+  }
+  beginAccountDevices();
+}
+
+// Central mode, unlocked, session gone (expired, revoked, signed out, or an
+// offline unlock): a passkey ceremony restores it. If the account's key moved
+// meanwhile (abandon elsewhere), the ladder runs and local blocks are re-keyed
+// from the key already in memory.
+async function centralResume() {
+  state.vaultView = "central-busy";
+  state.vaultPending = { busy: "Signing in" };
+  renderVault();
+  try {
+    const stored = await readCentralMeta();
+    const login = await window.txCentral.webauthn.login();
+    setCentralSession(login);
+    const kekWrap = await window.txCentral.keys.kekFromPrf(login.prf, login.hkdfSalt);
+    login.prf.fill(0);
+    const identity = { credentialId: login.credentialId, hkdfSalt: login.hkdfSalt, rpId: login.rpId || stored.rpId };
+    const out = await window.txCentral.ladder.run({ session: login.session, kekWrap, hasPrfWrap: login.hasPrfWrap, hasRecovery: login.hasRecovery }, centralUi);
+    if (out.abandoned) await clearSyncState();
+    if (await verifyMasterKey(out.vk)) {
+      if (out.prfWrap !== stored.prfWrap || identity.credentialId !== stored.credentialId) {
+        await rekeyVault({ entries: null, key: null, metaPuts: centralMetaRows({ ...identity, prfWrap: out.prfWrap }) });
+      }
+      state.encryption.masterKey = out.vk;
+    } else {
+      // The account's key changed under us; the current key (in memory) opens everything.
+      const verify = await encryptPlaintext(ENC_VERIFY_PLAINTEXT, out.vk);
+      await rekeyVault({
+        entries: state.entries,
+        key: out.vk,
+        metaPuts: [...centralMetaRows({ ...identity, prfWrap: out.prfWrap }), [ENC_VERIFY_KEY, verify]],
+        metaDeletes: [SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY],
+      });
+      state.encryption.masterKey = out.vk;
+      state.central.firstJoin = state.entries.length > 0;
+    }
+    state.vaultView = null;
+    state.vaultPending = null;
+    renderVault();
+    setSyncStatus("ok");
+    composerHint.textContent = "Signed in — sync resumed.";
+    scheduleCloudSync();
+    void beginPull({ quiet: true });
+  } catch (error) {
+    centralFlowFailed(error, null);
+  }
+}
+
+async function beginAccountDevices() {
+  if (!isCentral()) {
+    composerHint.textContent = "No Txtshell account on this browser — run /account to sign in.";
+    return;
+  }
+  if (!state.central.session) {
+    composerHint.textContent = "Sign in first — run /account.";
+    return;
+  }
+  setEditorValue("");
+  clearDraft();
+  state.vaultPending = null;
+  state.vaultView = "central-devices";
+  renderVault();
+  composerHint.textContent = "Your account";
+}
+
+async function renderCentralDevicesCard() {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG_DOT}
+      <p class="vault-title">Your account</p>
+      <p class="vault-subtitle">Passkeys that can open this account's vault. Removing one keeps whatever that device already has; it just can't sign in or fetch new changes.</p>
+      <p class="vault-error" hidden></p>
+      <ul class="devices-list" data-field="devices"><li class="vault-subtitle">Loading…</li></ul>
+      <button class="vault-button secondary" type="button" data-action="phrase">New recovery phrase</button>
+      <button class="vault-button secondary" type="button" data-action="signout">Sign out on this device</button>
+      <button class="vault-link" type="button" data-action="leave">Leave the account (keep a passphrase vault)</button>
+      <button class="vault-link" type="button" data-action="close">Close</button>
+    </div>
+  `;
+  const list = vaultOverlay.querySelector('[data-field="devices"]');
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const showError = (message) => { errorLine.textContent = message; errorLine.hidden = !message; };
+  const load = async () => {
+    try {
+      const devices = await window.txCentral.devices.list(state.central.session);
+      list.innerHTML = "";
+      for (const device of devices) {
+        const li = document.createElement("li");
+        const label = document.createElement("span");
+        label.textContent = `${device.id.slice(0, 10)}… · ${device.backedUp ? "synced passkey" : "this device only"} · ${device.hasPrfWrap ? "set up" : "needs phrase"} · last used ${device.lastUsedAt ? device.lastUsedAt.slice(0, 16).replace("T", " ") : "—"}${device.isCurrent ? " · this device" : ""}`;
+        li.appendChild(label);
+        if (!device.isCurrent) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "vault-link inline";
+          button.textContent = "Remove";
+          button.addEventListener("click", async () => {
+            button.disabled = true;
+            try {
+              await window.txCentral.devices.revoke(state.central.session, device.id);
+              showError("");
+              await load();
+            } catch (error) {
+              showError(error.code === "last-device" ? "That's your last passkey — it can't be removed." : "Couldn't remove it. Try again.");
+              button.disabled = false;
+            }
+          });
+          li.appendChild(button);
+        }
+        list.appendChild(li);
+      }
+      if (devices.length === 0) list.innerHTML = `<li class="vault-subtitle">No passkeys listed.</li>`;
+    } catch (error) {
+      list.innerHTML = "";
+      showError(error.status === 401 ? "Session ended — run /account to sign in again." : "Couldn't load your passkeys.");
+    }
+  };
+  void load();
+  vaultOverlay.querySelector('[data-action="phrase"]').addEventListener("click", () => { void beginAccountPhrase(); });
+  vaultOverlay.querySelector('[data-action="signout"]').addEventListener("click", () => { void accountSignOut(); });
+  vaultOverlay.querySelector('[data-action="leave"]').addEventListener("click", () => { void beginAccountLeave(); });
+  vaultOverlay.querySelector('[data-action="close"]').addEventListener("click", exitVaultToNormal);
+}
+
+// A passkey ceremony on this device that yields VK EXTRACTABLE (for wrapping:
+// export, leave, rotate). Deliberately a fresh ceremony — an unlocked tab is
+// not enough to hand the raw key anywhere.
+async function centralExtractableKey() {
+  const stored = await readCentralMeta();
+  if (!stored.credentialId || !stored.prfWrap || !stored.hkdfSalt || !stored.rpId) throw new Error("missing-meta");
+  const { prf } = await window.txCentral.webauthn.assertOffline({ credentialId: stored.credentialId, rpId: stored.rpId });
+  const kekWrap = await window.txCentral.keys.kekFromPrf(prf, stored.hkdfSalt);
+  prf.fill(0);
+  let vk;
+  try {
+    vk = await window.txCentral.keys.unwrapVK(stored.prfWrap, kekWrap, true);
+  } catch {
+    throw new Error("wrong-key");
+  }
+  if (!(await verifyMasterKey(vk))) throw new Error("wrong-key");
+  return vk;
+}
+
+async function beginAccountPhrase() {
+  if (!isCentral()) { composerHint.textContent = "No Txtshell account on this browser — run /account to sign in."; return; }
+  if (!state.central.session) { composerHint.textContent = "Sign in first — run /account."; return; }
+  setEditorValue("");
+  clearDraft();
+  state.vaultView = "central-busy";
+  state.vaultPending = { busy: "Confirm with your passkey" };
+  renderVault();
+  try {
+    const vk = await centralExtractableKey();
+    await window.txCentral.ladder.rotate({ session: state.central.session, vkExtractable: vk }, centralUi);
+    state.vaultView = null;
+    state.vaultPending = null;
+    renderVault();
+    composerHint.textContent = "Recovery phrase rotated — the old phrase no longer works.";
+    entryInput.focus();
+  } catch (error) {
+    centralFlowFailed(error, null);
+  }
+}
+
+async function accountSignOut() {
+  if (!isCentral()) { composerHint.textContent = "No Txtshell account on this browser."; return; }
+  setEditorValue("");
+  clearDraft();
+  if (state.central.session) {
+    await window.txCentral.devices.signOut(state.central.session).catch(() => {});
+  }
+  clearCentralSession();
+  state.vaultView = null;
+  state.vaultPending = null;
+  renderVault();
+  setSyncStatus("central-signin");
+  composerHint.textContent = "Signed out — your blocks stay on this device; run /account to sync again.";
+  entryInput.focus();
+}
+
+// Convert back to an ordinary passphrase vault with the SAME key: no record is
+// rewritten; the account and its other devices are unaffected.
+async function beginAccountLeave() {
+  if (!isCentral()) { composerHint.textContent = "No Txtshell account on this browser."; return; }
+  setEditorValue("");
+  clearDraft();
+  state.vaultView = "central-busy";
+  state.vaultPending = { busy: "Confirm with your passkey" };
+  renderVault();
+  try {
+    const vk = await centralExtractableKey();
+    state.vaultView = "central-leave";
+    state.vaultPending = { leaveKey: vk };
+    renderVault();
+  } catch (error) {
+    centralFlowFailed(error, null);
+  }
+}
+
+async function handleAccountLeaveSubmit(passphrase) {
+  const vk = state.vaultPending?.leaveKey;
+  if (!vk) throw new Error("missing-key");
+  const saltPass = randomBytes(16);
+  const wrappingKey = await deriveWrappingKey(passphrase, saltPass, PBKDF2_ITERATIONS);
+  const wrappedPass = await wrapMasterKey(vk, wrappingKey);
+  const sessionKey = await unwrapMasterKey(wrappedPass, wrappingKey);
+  await rekeyVault({
+    entries: null, // same key: no record is rewritten; enc-verify stays valid
+    key: null,
+    metaPuts: [
+      [ENC_SALT_PASS_KEY, bytesToBase64(saltPass)],
+      [ENC_WRAPPED_PASS_KEY, wrappedPass],
+      [ENC_ITERATIONS_PASS_KEY, String(PBKDF2_ITERATIONS)],
+    ],
+    metaDeletes: [...CENTRAL_ROWS, SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY],
+  });
+  if (state.central.session) {
+    await window.txCentral.devices.signOut(state.central.session).catch(() => {});
+  }
+  clearCentralSession();
+  state.central.firstJoin = false;
+  state.encryption.mode = "passphrase";
+  state.encryption.masterKey = sessionKey;
+  state.vaultView = null;
+  state.vaultPending = null;
+  renderVault();
+  updateLockButton();
+  setSyncStatus("ok");
+  composerHint.textContent = "Left the account — this is now a passphrase vault with the same blocks. /sync setup works from here.";
+  render();
+  entryInput.focus();
+}
+
+// ---------- /export in central mode (plan §9) ----------
+// The unchanged txtshell-encrypted-v1 file, with wrappedPass = VK under an
+// export passphrase the user chooses now. Any install opens it with /import.
+async function exportCentralEncrypted(passphrase, exportEntriesList, exportedLabel) {
+  const vk = await centralExtractableKey();
+  const saltPass = randomBytes(16);
+  const wrappingKey = await deriveWrappingKey(passphrase, saltPass, PBKDF2_ITERATIONS);
+  const wrappedPass = await wrapMasterKey(vk, wrappingKey);
+  const verify = await getMeta(ENC_VERIFY_KEY);
+  const combined = await encryptPlaintext(JSON.stringify(exportEntriesList), state.encryption.masterKey);
+  const combinedBytes = base64ToBytes(combined);
+  const fileObj = {
+    format: "txtshell-encrypted-v1",
+    createdAt: new Date().toISOString(),
+    saltPass: bytesToBase64(saltPass),
+    iterationsPass: PBKDF2_ITERATIONS,
+    wrappedPass,
+    verify,
+    iv: bytesToBase64(combinedBytes.slice(0, 12)),
+    ciphertext: bytesToBase64(combinedBytes.slice(12)),
+  };
+  const timestamp = new Date().toISOString().slice(0, 10);
+  const blob = new Blob([JSON.stringify(fileObj, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `txtshell-encrypted-${timestamp}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+  composerHint.textContent = exportedLabel("encrypted");
+}
+
+function beginCentralExport(exportEntriesList, exportedLabel) {
+  state.vaultPending = { exportEntriesList, exportedLabel };
+  state.vaultView = "central-export-pass";
+  renderVault();
+  composerHint.textContent = "Choose an export passphrase";
+}
+
+// ---------- the first-join card (plan §6.2 step 6) ----------
+// Cloud and local are two unrelated histories here, not a stale copy of each
+// other; the primary action keeps both. The classifier's output is only used
+// for the counts; the two existing actions remain with their existing warnings.
+function renderFirstJoinCard() {
+  const cloudEntries = state.vaultPending?.pullEntries;
+  if (!Array.isArray(cloudEntries)) {
+    exitVaultToNormal();
+    return;
+  }
+  const cloudSet = Array.isArray(state.vaultPending.pullCloud) ? state.vaultPending.pullCloud : cloudEntries;
+  const localSet = Array.isArray(state.vaultPending.pullLocal) ? state.vaultPending.pullLocal : state.entries;
+  const diff = classifyPullDivergence(cloudSet, localSet, false);
+  const shared = diff.cloudNewer.length + diff.localNewer.length + diff.ambiguous.length;
+  const detail = `In your account: ${pluralCount(cloudSet.length, "block")}. On this browser: ${pluralCount(localSet.length, "block")}.${diff.cloudOnly.length ? ` ${pluralCount(diff.cloudOnly.length, "block")} only in the account.` : ""}${diff.localOnly.length ? ` ${pluralCount(diff.localOnly.length, "block")} only here.` : ""}${shared ? ` ${pluralCount(shared, "block")} on both sides with different content (the newer edit wins).` : ""}`;
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG}
+      <p class="vault-title">Your account already has blocks</p>
+      <p class="vault-subtitle">This browser's blocks and the account's were kept separately until now. Keep both, or choose one side.</p>
+      <p class="vault-subtitle pull-diff-detail">${escapeHtml(detail)}</p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="merge">Merge — keep both</button>
+      <button class="vault-button secondary" type="button" data-action="replace">Replace this browser's blocks with the account's</button>
+      <p class="wipe-warning">Keep this browser's blocks only: the account's ${pluralCount(cloudSet.length, "block")} will be gone from every device.</p>
+      <button class="vault-button secondary" type="button" data-action="keep">Keep this browser's blocks only, overwrite the account</button>
+    </div>
+  `;
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const buttons = [...vaultOverlay.querySelectorAll("button")];
+  const fail = (message) => { errorLine.textContent = message; errorLine.hidden = false; buttons.forEach((button) => { button.disabled = false; }); };
+  vaultOverlay.querySelector('[data-action="merge"]').addEventListener("click", async () => {
+    buttons.forEach((button) => { button.disabled = true; });
+    try {
+      const cloudGeneration = state.vaultPending?.pullGeneration;
+      await mergeImportedEntries(cloudEntries); // union; newer edit wins on a shared id; re-encrypts under VK
+      if (Number.isInteger(cloudGeneration)) await recordSyncedGeneration(cloudGeneration);
+      state.central.firstJoin = false;
+      state.vaultView = null;
+      state.vaultPending = null;
+      renderVault(); // lifts the hold; the merge's saves scheduled the push
+      scheduleCloudSync();
+      composerHint.textContent = `Merged — ${pluralCount(state.entries.length, "block")} on this browser, syncing to your account.`;
+    } catch (error) {
+      console.error(error);
+      fail("Merge failed. Try again.");
+    }
+  });
+  vaultOverlay.querySelector('[data-action="replace"]').addEventListener("click", async () => {
+    buttons.forEach((button) => { button.disabled = true; });
+    try {
+      state.central.firstJoin = false;
+      await applyCloudReplaceLocal(cloudEntries);
+    } catch (error) {
+      console.error(error);
+      fail("Replace failed. Try again.");
+    }
+  });
+  vaultOverlay.querySelector('[data-action="keep"]').addEventListener("click", async () => {
+    const cloudGeneration = state.vaultPending?.pullGeneration;
+    if (Number.isInteger(cloudGeneration)) await recordSyncedGeneration(cloudGeneration);
+    state.central.firstJoin = false;
+    state.vaultPending = null;
+    exitVaultToNormal();
+    scheduleCloudSync();
+    composerHint.textContent = "Kept this browser's blocks — overwriting the account's copy.";
+  });
 }
 
 // ---------------------------------------------------------------------------

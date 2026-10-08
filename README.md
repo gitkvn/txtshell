@@ -105,3 +105,10 @@ local-first tool with encrypted export/import.
 - **txtshell** (this repo) — the app.
 - **[txtshell-sync](https://github.com/gitkvn/txtshell-sync)** — the optional, self-hosted
   Cloudflare Worker for technical users who want live sync.
+- **Txtshell account** (`/account`) — hosted sync with a passkey instead of a passphrase and a
+  self-deployed Worker. Only reachable where the app is served with the account API under its own
+  origin (`/v1/*`); on a plain static deployment the command is present but the service is not,
+  and nothing else changes. Your blocks stay end-to-end encrypted: the account's vault key is
+  wrapped under your passkey (WebAuthn PRF) and under a 12-word recovery phrase you keep; the
+  server stores only those wraps and ciphertext. `/account leave` turns the browser back into an
+  ordinary passphrase vault with the same blocks. Design and gates: txtshell-central `docs/`.
