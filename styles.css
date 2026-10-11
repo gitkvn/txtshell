@@ -1433,6 +1433,60 @@ kbd {
   opacity: 0.7;
 }
 
+/* Phrase entry on a cold device: twelve numbered boxes (the textarea on narrow screens). */
+.phrase-cells {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 6px;
+}
+
+.phrase-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: var(--bg);
+  min-width: 0;
+}
+
+.phrase-cell:focus-within {
+  border-color: var(--accent);
+}
+
+.phrase-cell.is-invalid {
+  border-color: #d1242f;
+}
+
+.phrase-cell span {
+  font-size: 0.72rem;
+  color: var(--muted);
+  min-width: 1.4em;
+  text-align: right;
+}
+
+.phrase-cell input {
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  width: 100%;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  padding: 2px 0;
+}
+
+.phrase-hint {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-align: center;
+  min-height: 1.1em;
+  margin: 0 0 10px;
+}
+
 /* A soft, non-alarming note under the unlock button when the browser is offline. */
 .vault-advisory {
   font-size: 0.78rem;

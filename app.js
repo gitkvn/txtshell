@@ -5149,20 +5149,21 @@ function renderImportPhraseCard() {
       <p class="vault-title">Import encrypted blocks</p>
       <p class="vault-subtitle">This backup is from a Txtshell account. Enter the 12 recovery words you had when it was made.</p>
       <p class="vault-error" hidden></p>
-      <textarea class="vault-input phrase-input" data-field="phrase" rows="3" placeholder="twelve words separated by spaces" autocomplete="off" autocapitalize="none" spellcheck="false"></textarea>
+      ${phraseEntryHtml()}
       <button class="vault-button" type="button" data-action="submit">Import</button>
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
     </div>
   `;
-  const input = vaultOverlay.querySelector('[data-field="phrase"]');
   const errorLine = vaultOverlay.querySelector(".vault-error");
   const submitButton = vaultOverlay.querySelector('[data-action="submit"]');
   const showError = (message) => { errorLine.textContent = message; errorLine.hidden = !message; };
+  let entry = null;
   const submit = async () => {
     let parsed;
     try {
-      parsed = await window.txCentral.phrase.toEntropy(input.value); // checksum first: most typos stop here
+      parsed = await window.txCentral.phrase.toEntropy(entry.getText()); // checksum first: most typos stop here
     } catch (error) {
+      if (error?.position) entry.markInvalid(error.position);
       showError(error.message);
       return;
     }
@@ -5180,11 +5181,10 @@ function renderImportPhraseCard() {
       submitButton.textContent = "Import";
     }
   };
-  input.addEventListener("input", () => showError(""));
+  entry = bindPhraseEntry({ onChange: () => showError(""), onSubmit: submit });
   submitButton.addEventListener("click", submit);
-  input.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(); } });
   vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", exitVaultToNormal);
-  window.requestAnimationFrame(() => input.focus());
+  window.requestAnimationFrame(() => entry.focus());
 }
 
 // 12 words → KEK_rec (with the wrap's own salt) → the account's VK → the file. Nothing reaches a
@@ -7413,6 +7413,115 @@ function renderCentralForcedSaveCard() {
   vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", cancelCentralCard);
 }
 
+// ---------- phrase entry (batch item 3): twelve inputs on a cold device ----------
+// Twelve boxes, one word each. Pasting several words into ANY box spreads them: a full phrase fills
+// all twelve from box 1, a fragment fills onward from that box. A BIP-39 word is fixed by its first
+// letters, so a prefix that matches exactly one word completes on space, Tab, Enter or leaving the
+// box (a full word that is also a prefix of others — "act" — is left as typed). Narrow screens get
+// the single textarea instead. Both shapes feed the same checksum (toEntropy) before any network.
+const PHRASE_NARROW_QUERY = "(max-width: 480px)";
+
+function phraseEntryHtml() {
+  if (window.matchMedia && window.matchMedia(PHRASE_NARROW_QUERY).matches) {
+    return `<textarea class="vault-input phrase-input" data-field="phrase" rows="3" placeholder="twelve words separated by spaces" autocomplete="off" autocapitalize="none" spellcheck="false"></textarea>`;
+  }
+  const cells = Array.from({ length: 12 }, (_, i) => `<label class="phrase-cell"><span aria-hidden="true">${i + 1}</span><input type="text" data-position="${i + 1}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" aria-label="Word ${i + 1}" /></label>`).join("");
+  return `<div class="phrase-cells" data-field="phrase-cells">${cells}</div><p class="phrase-hint" data-field="phrase-hint" aria-live="polite"></p>`;
+}
+
+// Wires whichever shape phraseEntryHtml() rendered. onChange: any edit; onSubmit: Enter when the
+// phrase is complete. Returns { getText, markInvalid, focus }.
+function bindPhraseEntry({ onChange = () => {}, onSubmit = () => {} } = {}) {
+  const textarea = vaultOverlay.querySelector('[data-field="phrase"]');
+  if (textarea) {
+    textarea.addEventListener("input", onChange);
+    textarea.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); onSubmit(); }
+    });
+    return { getText: () => textarea.value, markInvalid: () => {}, focus: () => textarea.focus() };
+  }
+  const WORDS = window.BIP39_ENGLISH || [];
+  const WORDSET = new Set(WORDS);
+  const cells = [...vaultOverlay.querySelectorAll('[data-field="phrase-cells"] input')];
+  const hint = vaultOverlay.querySelector('[data-field="phrase-hint"]');
+  const norm = (v) => window.txCentral.phrase.normalizeWord(v || "");
+  const matchesOf = (prefix) => (prefix ? WORDS.filter((w) => w.startsWith(prefix)) : []);
+  const uniqueCompletion = (value) => {
+    const v = norm(value);
+    if (!v || WORDSET.has(v)) return null;
+    const m = matchesOf(v);
+    return m.length === 1 ? m[0] : null;
+  };
+  const setInvalid = (cell, invalid) => cell.closest(".phrase-cell").classList.toggle("is-invalid", invalid);
+  const refresh = (cell) => {
+    const v = norm(cell.value);
+    const m = matchesOf(v);
+    setInvalid(cell, Boolean(v) && m.length === 0);
+    if (!hint) return;
+    if (!v || WORDSET.has(v)) hint.textContent = "";
+    else if (m.length === 0) hint.textContent = `“${v}” isn't a recovery word`;
+    else if (m.length === 1) hint.textContent = `${v} → ${m[0]} (space or Tab)`;
+    else hint.textContent = m.length <= 4 ? m.join(" · ") : "";
+  };
+  const complete = (cell) => {
+    const full = uniqueCompletion(cell.value);
+    if (full) cell.value = full;
+    refresh(cell);
+    return Boolean(full);
+  };
+  const next = (index) => cells[Math.min(index + 1, cells.length - 1)];
+  const spread = (startIndex, words) => {
+    const start = words.length >= cells.length ? 0 : startIndex;
+    words.slice(0, cells.length - start).forEach((w, i) => { cells[start + i].value = norm(w); refresh(cells[start + i]); });
+    const firstEmpty = cells.find((c) => !c.value);
+    (firstEmpty || cells[Math.min(start + words.length, cells.length) - 1]).focus();
+    onChange();
+  };
+  cells.forEach((cell, index) => {
+    cell.addEventListener("input", () => {
+      // Typing (or an IME, or autofill) put spaces into one box: spread the words onward.
+      const words = window.txCentral.phrase.splitWords(cell.value);
+      if (/\s/.test(cell.value) && words.length > 1) { spread(index, words); return; }
+      if (/\s$/.test(cell.value)) { cell.value = norm(cell.value); complete(cell); next(index).focus(); onChange(); return; }
+      refresh(cell);
+      onChange();
+    });
+    cell.addEventListener("paste", (event) => {
+      const text = event.clipboardData?.getData("text/plain") || event.clipboardData?.getData("text") || "";
+      const words = window.txCentral.phrase.splitWords(text);
+      if (words.length <= 1) return; // one word: the browser pastes it as usual
+      event.preventDefault();
+      spread(index, words);
+    });
+    cell.addEventListener("keydown", (event) => {
+      if (event.key === " ") {
+        event.preventDefault();
+        complete(cell);
+        if (cell.value) next(index).focus();
+        onChange();
+      } else if (event.key === "Tab" && !event.shiftKey) {
+        complete(cell); // the browser moves focus
+        onChange();
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        complete(cell);
+        onChange();
+        const firstEmpty = cells.find((c) => !c.value);
+        if (firstEmpty) firstEmpty.focus(); else onSubmit();
+      } else if (event.key === "Backspace" && !cell.value && index > 0) {
+        event.preventDefault();
+        cells[index - 1].focus();
+      }
+    });
+    cell.addEventListener("blur", () => { if (complete(cell)) onChange(); });
+  });
+  return {
+    getText: () => cells.map((c) => norm(c.value)).join(" "),
+    markInvalid: (position) => { const cell = cells[position - 1]; if (cell) { setInvalid(cell, true); cell.focus(); } },
+    focus: () => (cells.find((c) => !c.value) || cells[0]).focus(),
+  };
+}
+
 function renderCentralRung2Card() {
   const errorText = state.vaultPending?.rung2Error || "";
   vaultOverlay.innerHTML = `
@@ -7421,40 +7530,35 @@ function renderCentralRung2Card() {
       <p class="vault-title">Enter your recovery phrase</p>
       <p class="vault-subtitle">This passkey is new to your account. Your 12-word recovery phrase sets it up — once; after this, the passkey alone unlocks.</p>
       <p class="vault-error" ${errorText ? "" : "hidden"}>${escapeHtml(errorText)}</p>
-      <textarea class="vault-input phrase-input" data-field="phrase" rows="3" placeholder="twelve words separated by spaces" autocomplete="off" autocapitalize="none" spellcheck="false"></textarea>
+      ${phraseEntryHtml()}
       <button class="vault-button" type="button" data-action="submit">Unlock with phrase</button>
       <button class="vault-link" type="button" data-action="fork">Don't have your phrase?</button>
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
     </div>
   `;
-  const input = vaultOverlay.querySelector('[data-field="phrase"]');
   const errorLine = vaultOverlay.querySelector(".vault-error");
+  let entry = null;
   const submit = async () => {
     try {
-      const parsed = await window.txCentral.phrase.toEntropy(input.value); // checksum: most typos die here, no network
+      const parsed = await window.txCentral.phrase.toEntropy(entry.getText()); // checksum: most typos die here, no network
       state.vaultView = "central-busy";
       state.vaultPending = { ...(state.vaultPending || {}), busy: "Checking your phrase" };
       renderVault();
       settleCentralCard({ kind: "phrase", entropy: parsed.entropy });
     } catch (error) {
+      if (error?.position) entry.markInvalid(error.position);
       errorLine.textContent = error.message;
       errorLine.hidden = false;
     }
   };
-  input.addEventListener("input", () => { errorLine.hidden = true; });
+  entry = bindPhraseEntry({ onChange: () => { errorLine.hidden = true; }, onSubmit: submit });
   vaultOverlay.querySelector('[data-action="submit"]').addEventListener("click", submit);
-  input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      submit();
-    }
-  });
   vaultOverlay.querySelector('[data-action="fork"]').addEventListener("click", () => {
     state.vaultView = "central-abandon";
     renderVault();
   });
   vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", cancelCentralCard);
-  window.requestAnimationFrame(() => input.focus());
+  window.requestAnimationFrame(() => entry.focus());
 }
 
 // The fork on the rung-2 screen: start the account's vault over. Typed email
