@@ -5651,7 +5651,7 @@ function normalizeWorkerUrl(value) {
 // signal; `full` is the hover tooltip and the one-shot transition toast.
 const SYNC_STATUS_LABELS = {
   "push-auth": { short: "Sync: check token", full: "Sync failed — auth rejected, check your token" },
-  "push-blocked": { short: "Sync: can't reach Worker", full: "Sync failed — can't reach Worker (offline or blocked)" },
+  "push-blocked": { short: "Sync: waiting for connection", full: "Saved on this device — will sync when you're back online." },
   "push-encrypt": { short: "Sync: encrypt error", full: "Sync failed — couldn't encrypt blocks" },
   "push-server": { short: "Sync: server error", full: "Sync failed — Worker rejected the upload" },
   "push-too-large": { short: "Sync: vault too large", full: "Sync failed — the vault exceeds the Worker's size limit" },
@@ -7668,16 +7668,30 @@ function renderCentralStartCard() {
   vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", exitVaultToNormal);
 }
 
+// The name a person knows this device's passkey by, for the setup copy. Best effort from the user
+// agent: iPhone → Face ID, a Mac → Touch ID, Windows → Windows Hello; anything else (Android, Linux,
+// an iPad, which may have either) gets the plain word. Some Macs have no Touch ID and a person may
+// still pick a phone or a security key in the sheet — the copy names what is likely, the ceremony
+// shows what is real. `env` is injectable for the gate.
+function passkeyPlatformName(env = { userAgent: navigator.userAgent, maxTouchPoints: navigator.maxTouchPoints || 0 }) {
+  const ua = env.userAgent || "";
+  if (/iPhone|iPod/.test(ua)) return "Face ID";
+  if (/iPad/.test(ua) || (/Macintosh/.test(ua) && (env.maxTouchPoints || 0) > 1)) return null; // iPadOS reports a Mac user agent
+  if (/Macintosh|Mac OS X/.test(ua)) return "Touch ID";
+  if (/Windows/.test(ua)) return "Windows Hello";
+  return null;
+}
+
 function renderCentralCodeCard() {
   const pending = state.vaultPending || {};
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG_DOT}
       <p class="vault-title">Check your email</p>
-      <p class="vault-subtitle">Enter the 6-digit code sent to ${escapeHtml(pending.email || "")}. Then this browser's passkey is registered to your account.</p>
+      <p class="vault-subtitle">Enter the 6-digit code sent to ${escapeHtml(pending.email || "")}. Then you'll set up ${escapeHtml(passkeyPlatformName() || "a passkey")} for this browser.</p>
       <p class="vault-error" hidden></p>
       <input class="vault-input" data-field="code" type="text" inputmode="numeric" placeholder="6-digit code" autocomplete="one-time-code" spellcheck="false" />
-      <button class="vault-button" type="button" data-action="submit">Verify and register passkey</button>
+      <button class="vault-button" type="button" data-action="submit">${escapeHtml(passkeyPlatformName() ? `Set up ${passkeyPlatformName()}` : "Set up your passkey")}</button>
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
     </div>
   `;
@@ -7692,7 +7706,7 @@ function renderCentralCodeCard() {
     try {
       const { signupToken } = await window.txCentral.webauthn.verifyEmail(pending.email, code);
       state.vaultView = "central-busy";
-      state.vaultPending = { ...pending, busy: "Registering your passkey" };
+      state.vaultPending = { ...pending, busy: `Setting up ${passkeyPlatformName() || "your passkey"}` };
       renderVault();
       const registered = await window.txCentral.webauthn.register(signupToken);
       if (centralLocked()) {
@@ -7737,10 +7751,10 @@ function renderCentralRegisteredCard() {
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG_DOT}
-      <p class="vault-title">Your passkey is ready</p>
-      <p class="vault-subtitle">Sign in to finish setting up.</p>
+      <p class="vault-title">${escapeHtml(passkeyPlatformName() ? `${passkeyPlatformName()} is set up.` : "Your passkey is set up.")}</p>
+      <p class="vault-subtitle">Tap to continue.</p>
       <p class="vault-error" hidden></p>
-      <button class="vault-button" type="button" data-action="signin">Sign in</button>
+      <button class="vault-button" type="button" data-action="signin">Continue</button>
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
     </div>
   `;
