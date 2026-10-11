@@ -396,6 +396,18 @@ button {
   position: relative;
 }
 
+.sync-indicator.is-actionable {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.sync-indicator.is-actionable:hover,
+.sync-indicator.is-actionable:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
 .sync-indicator[hidden] {
   display: none;
 }

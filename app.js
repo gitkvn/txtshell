@@ -5567,6 +5567,11 @@ const SYNC_STATUS_LABELS = {
 // in-flight "syncing" flips the visual but does not forget the active failure.
 let syncIndicatorState = "idle"; // "idle" | "syncing" | "ok" | "failed"
 let lastFailureReason = null;
+// The failure reasons a person acts on by signing in — the indicator becomes a button that runs
+// the same path as typing /account, and the toast/tooltip say so (plan §8, decision 2026-10-09).
+const CENTRAL_ACTION_REASONS = ["central-signin", "central-offline", "central-setup"];
+const CENTRAL_ACTION_HINT = "click here, or type /account";
+let syncIndicatorActionBound = false;
 
 function setSyncStatus(status) {
   if (status === "syncing") {
@@ -5591,7 +5596,8 @@ function setSyncStatus(status) {
   // One-shot toast only when newly broken or the reason changed — never on a repeat
   // of the same standing failure. The indicator itself carries the persistent signal.
   if (isNewFailure) {
-    showStatusToast(syncStatusFull(reason), { isHint: true });
+    const base = syncStatusFull(reason);
+    showStatusToast(CENTRAL_ACTION_REASONS.includes(reason) ? `${base} — ${CENTRAL_ACTION_HINT}` : base, { isHint: true });
   }
 }
 
@@ -5617,9 +5623,26 @@ function renderSyncIndicator() {
   syncIndicator.classList.toggle("is-failed", state === "failed");
   syncIndicator.hidden = state === "idle";
 
+  const actionable = state === "failed" && CENTRAL_ACTION_REASONS.includes(lastFailureReason);
+  syncIndicator.classList.toggle("is-actionable", actionable);
+  if (actionable) {
+    // A real control: focusable, Enter/Space, and one bound click that runs /account's own code.
+    syncIndicator.setAttribute("role", "button");
+    syncIndicator.setAttribute("tabindex", "0");
+    if (!syncIndicatorActionBound) {
+      syncIndicatorActionBound = true;
+      const act = () => { if (syncIndicatorState === "failed" && CENTRAL_ACTION_REASONS.includes(lastFailureReason)) beginAccount(); };
+      syncIndicator.addEventListener("click", act);
+      syncIndicator.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); act(); } });
+    }
+  } else {
+    syncIndicator.classList.remove("is-actionable");
+    syncIndicator.setAttribute("role", "status");
+    syncIndicator.removeAttribute("tabindex");
+  }
   if (state === "failed") {
     const label = SYNC_STATUS_LABELS[lastFailureReason] || SYNC_STATUS_LABELS["push-server"];
-    const full = syncStatusFull(lastFailureReason);
+    const full = actionable ? `${syncStatusFull(lastFailureReason)} — ${CENTRAL_ACTION_HINT}` : syncStatusFull(lastFailureReason);
     labelEl.textContent = label.short;
     syncIndicator.setAttribute("data-tooltip", full);
     syncIndicator.setAttribute("aria-label", full);
