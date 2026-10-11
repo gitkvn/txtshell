@@ -7454,6 +7454,12 @@ async function centralToldRemoved(error, stored) {
   return true;
 }
 
+// Statements about how signing in BEHAVES hold on every platform, so they never name one: only some
+// sign-in methods need a connection (a Microsoft-synced Windows Hello passkey did, 2026-10-09; iCloud
+// Keychain and device-bound passkeys open offline). Instructions ("Unlock with Touch ID") may name it.
+const CENTRAL_OFFLINE_REFUSED = "Some sign-in methods need this device to be online. Your notes are safe here — connect and try again.";
+const CENTRAL_OFFLINE_ADVISORY = "You're offline. Your notes are safe on this device. Some sign-in methods need a connection — if yours does, connect and try again.";
+
 const CENTRAL_REMOVED_SENTENCE = "This device was removed from your account. To add it back, use your email and then your 12 words.";
 
 function setCentralSession(login) {
@@ -8009,12 +8015,12 @@ function renderCentralHasPasskeyCard() {
 // One sentence for a person, per failure; the technical name goes to the console.
 function centralFailureMessage(error) {
   if (error?.code === "unknown-credential") return CENTRAL_REMOVED_SENTENCE;
-  if (error?.code === "no-prf") return platformOr((n) => `This browser can't lock your notes with ${n}. Try an up-to-date Safari, Chrome or Edge.`, "This browser can't lock your notes with this sign-in. Try an up-to-date Safari, Chrome or Edge.");
+  if (error?.code === "no-prf") return "That sign-in can't lock your notes in this browser. Try an up-to-date Safari, Chrome or Edge, or another way to sign in.";
   if (error?.status === 429 || error?.code === "rate-limited") return "Too many tries — wait a minute and try again.";
   switch (error?.name) {
     case "InvalidStateError": return "This device is already set up for your account. Sign in instead.";
-    case "NotAllowedError": return `${passkeyPlatformName() || "Signing in"} didn't finish — the prompt was closed, or the page lost focus. Click the page, then try again.`;
-    case "AbortError": return `${passkeyPlatformName() || "Signing in"} was interrupted. Try again.`;
+    case "NotAllowedError": return "Signing in didn't finish — the prompt was closed, or the page lost focus. Click the page, then try again.";
+    case "AbortError": return "Signing in was interrupted. Try again.";
     case "SecurityError": return "Something's off with this page's address — try opening txtshell.com directly.";
     case "NotSupportedError": return "This browser can't sign in here. Try an up-to-date Safari, Chrome or Edge.";
     case "TypeError": return "Can't reach Txtshell right now. Check your connection and try again.";
@@ -8244,7 +8250,7 @@ function renderCentralUnlockCard() {
       <p class="vault-subtitle">${escapeHtml(platformOr((n) => `Unlock with ${n}.`, "Sign in to unlock."))}</p>
       <p class="vault-error" hidden></p>
       <button class="vault-button" type="button" data-action="unlock">${escapeHtml(platformOr((n) => `Unlock with ${n}`, "Unlock"))}</button>
-      ${navigator.onLine === false ? `<p class="vault-advisory" data-field="offline-advisory">${escapeHtml(platformOr((n) => `You're offline. Your notes are safe on this device; if ${n} won't open them here, connect and try again.`, "You're offline. Your notes are safe on this device; if they won't open here, connect and try again."))}</p>` : ""}
+      ${navigator.onLine === false ? `<p class="vault-advisory" data-field="offline-advisory">${escapeHtml(CENTRAL_OFFLINE_ADVISORY)}</p>` : ""}
       ${promote
         ? `<button class="vault-button secondary" type="button" data-action="words">Use your 12 words instead</button>`
         : `<button class="vault-link" type="button" data-action="words">${escapeHtml(platformOr((n) => `Can't use ${n}? Use your 12 words instead`, "Can't sign in? Use your 12 words instead"))}</button>`}
@@ -8392,7 +8398,7 @@ function centralUnlockFailed(error) {
 function centralUnlockFailureMessage(error) {
   if (error?.message === "wrong-key") return "That sign-in doesn't open the notes on this browser.";
   if (error?.message === "offline-no-cache") return "You're offline and this browser has nothing saved to unlock with yet — connect and try again.";
-  if (error?.message === "offline-ceremony-refused") return `${passkeyPlatformName() || "Signing in"} needs this device to be online. Your notes are safe here — connect and try again.`;
+  if (error?.message === "offline-ceremony-refused") return CENTRAL_OFFLINE_REFUSED;
   if (error?.code === "unknown-credential") return "That sign-in isn't on your account. Pick another one, or use your 12 words instead.";
   if (error?.name === "NotAllowedError" && navigator.onLine !== false && !/focus/i.test(error.message || "")) {
     return "No sign-in found on this device. Use your 12 words instead.";
