@@ -3421,7 +3421,8 @@ async function exportEntries({ plain = false } = {}) {
   };
 
   if (!plain && isCentral() && state.encryption.unlocked && state.encryption.masterKey) {
-    // Plan §9: an export passphrase of the user's choosing wraps VK into the unchanged file format.
+    // Plan §9 (revised 2026-10-09): the file carries the account's recovery wrap — it opens with the
+    // 12 words. No export passphrase; nothing new is asked for.
     setEditorValue("");
     clearDraft();
     beginCentralExport(exportEntriesList, exportedLabel);
@@ -3644,8 +3645,15 @@ async function mergeImportedEntries(items) {
 
 function beginEncryptedImport(fileData) {
   state.vaultPending = { importFileData: fileData };
-  state.vaultView = "import-unlock";
+  // A Txtshell-account export carries the account's recovery wrap instead of a passphrase wrap: it
+  // opens with the 12 words, and no passphrase field or recovery-key toggle is shown (plan §9).
+  state.vaultView = isPhraseWrappedExport(fileData) ? "import-phrase" : "import-unlock";
   renderVault();
+}
+
+function isPhraseWrappedExport(file) {
+  return Boolean(file && !file.wrappedPass && file.wrappedPhrase
+    && typeof file.wrappedPhrase.blob === "string" && typeof file.wrappedPhrase.hkdfSalt === "string");
 }
 
 // Same day of the month as today, in any earlier month or year.
@@ -4316,6 +4324,17 @@ function renderVault() {
     renderImportUnlockCard(true);
   } else if (view === "import-adopt") {
     renderImportAdoptCard();
+  } else if (view === "import-phrase") {
+    renderImportPhraseCard();
+  } else if (view === "import-phrase-passphrase") {
+    renderSetupCard({
+      title: "Choose a passphrase for this browser",
+      subtitle: "The blocks stay encrypted with your account's key; this passphrase unlocks them on this browser. Joining your account from here later needs no re-encryption.",
+      buttonText: "Set up vault",
+      skipRecovery: true,
+      onSubmit: handleImportPhraseAdoptSubmit,
+      onCancel: exitVaultToNormal,
+    });
   } else if (view === "wipe-confirm") {
     renderWipeCard(false);
   } else if (view === "wipe-confirm-recovery") {
@@ -4378,23 +4397,8 @@ function renderVault() {
       onSubmit: handleAccountLeaveSubmit,
       onCancel: exitVaultToNormal,
     });
-  } else if (view === "central-export-pass") {
-    renderSetupCard({
-      title: "Export passphrase",
-      subtitle: "The file holds a copy of your account's vault key, locked under this passphrase. Anyone with the file and the passphrase can read every block in your account, now and later. Keep it like you keep the recovery phrase. Any Txtshell install opens it with /import.",
-      buttonText: "Confirm with passkey and export",
-      skipRecovery: true,
-      onSubmit: async (passphrase) => {
-        const { exportEntriesList, exportedLabel } = state.vaultPending || {};
-        if (!exportEntriesList) throw new Error("missing-export");
-        await exportCentralEncrypted(passphrase, exportEntriesList, exportedLabel);
-        state.vaultView = null;
-        state.vaultPending = null;
-        renderVault();
-        entryInput.focus();
-      },
-      onCancel: exitVaultToNormal,
-    });
+  } else if (view === "central-export") {
+    renderCentralExportCard();
   } else if (view === "first-join") {
     renderFirstJoinCard();
   }
@@ -5003,7 +5007,8 @@ function renderImportUnlockCard(isRecovery) {
   const placeholder = isRecovery ? "Recovery key" : "Passphrase";
   const linkText = isRecovery ? "Use passphrase instead" : "Use recovery key instead";
   // A file without a recovery wrap (a /port-paired browser's export, or a Txtshell account's
-  // export under an export passphrase) can only be opened with its passphrase: no dead toggle.
+  // export from before 2026-10-11, made under an export passphrase) opens only with its passphrase:
+  // no dead toggle. Current account exports never reach this card (they take the 12 words).
   const file = state.vaultPending?.importFileData;
   const hasRecoveryWrap = Boolean(file?.saltRecovery && file?.wrappedRecovery);
 
@@ -5101,19 +5106,7 @@ async function handleImportUnlockSubmit(value, isRecovery) {
     throw new Error("wrong-key");
   }
 
-  const ivBytes = base64ToBytes(file.iv);
-  const ctBytes = base64ToBytes(file.ciphertext);
-  const combined = new Uint8Array(ivBytes.length + ctBytes.length);
-  combined.set(ivBytes, 0);
-  combined.set(ctBytes, ivBytes.length);
-  const blocksJson = await decryptCiphertext(bytesToBase64(combined), masterKey);
-  let entries;
-  try {
-    entries = JSON.parse(blocksJson);
-    if (!Array.isArray(entries)) throw new Error("not-array");
-  } catch {
-    throw new Error("malformed-payload");
-  }
+  const entries = await decryptImportPayload(file, masterKey);
 
   if (state.encryption.enabled) {
     await mergeImportedEntries(entries);
@@ -5130,12 +5123,127 @@ async function handleImportUnlockSubmit(value, isRecovery) {
   renderVault();
 }
 
+// The block list inside an encrypted export, decrypted with the file's master key.
+async function decryptImportPayload(file, masterKey) {
+  const ivBytes = base64ToBytes(file.iv);
+  const ctBytes = base64ToBytes(file.ciphertext);
+  const combined = new Uint8Array(ivBytes.length + ctBytes.length);
+  combined.set(ivBytes, 0);
+  combined.set(ctBytes, ivBytes.length);
+  const blocksJson = await decryptCiphertext(bytesToBase64(combined), masterKey);
+  try {
+    const entries = JSON.parse(blocksJson);
+    if (!Array.isArray(entries)) throw new Error("not-array");
+    return entries;
+  } catch {
+    throw new Error("malformed-payload");
+  }
+}
+
+// ---------- /import of a Txtshell-account export: the 12 words (plan §9) ----------
+
+function renderImportPhraseCard() {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG}
+      <p class="vault-title">Import encrypted blocks</p>
+      <p class="vault-subtitle">This backup is from a Txtshell account. Enter the 12 recovery words you had when it was made.</p>
+      <p class="vault-error" hidden></p>
+      <textarea class="vault-input phrase-input" data-field="phrase" rows="3" placeholder="twelve words separated by spaces" autocomplete="off" autocapitalize="none" spellcheck="false"></textarea>
+      <button class="vault-button" type="button" data-action="submit">Import</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+  const input = vaultOverlay.querySelector('[data-field="phrase"]');
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const submitButton = vaultOverlay.querySelector('[data-action="submit"]');
+  const showError = (message) => { errorLine.textContent = message; errorLine.hidden = !message; };
+  const submit = async () => {
+    let parsed;
+    try {
+      parsed = await window.txCentral.phrase.toEntropy(input.value); // checksum first: most typos stop here
+    } catch (error) {
+      showError(error.message);
+      return;
+    }
+    showError("");
+    submitButton.disabled = true;
+    submitButton.textContent = "Importing…";
+    try {
+      await handleImportPhraseSubmit(parsed.entropy);
+    } catch (error) {
+      console.error(error);
+      showError(error?.message === "wrong-key"
+        ? "Those words don't open this file. If you got new words after it was made, it still needs the old ones."
+        : "Couldn't read this file. Try again.");
+      submitButton.disabled = false;
+      submitButton.textContent = "Import";
+    }
+  };
+  input.addEventListener("input", () => showError(""));
+  submitButton.addEventListener("click", submit);
+  input.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(); } });
+  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", exitVaultToNormal);
+  window.requestAnimationFrame(() => input.focus());
+}
+
+// 12 words → KEK_rec (with the wrap's own salt) → the account's VK → the file. Nothing reaches a
+// server. Into an existing vault the blocks merge under that vault's key; into a fresh install the
+// adopt card offers a passphrase vault whose key IS the account's VK (no re-key when it joins).
+async function handleImportPhraseSubmit(entropy) {
+  const file = state.vaultPending?.importFileData;
+  if (!isPhraseWrappedExport(file) || !file.verify || !file.iv || !file.ciphertext) throw new Error("malformed-file");
+  const kek = await window.txCentral.keys.kekFromEntropy(entropy, file.wrappedPhrase.hkdfSalt);
+  entropy.fill(0);
+  let masterKey;
+  try {
+    masterKey = await window.txCentral.keys.unwrapVK(file.wrappedPhrase.blob, kek, false);
+  } catch {
+    throw new Error("wrong-key"); // the GCM tag is the check
+  }
+  let verifyPlain;
+  try {
+    verifyPlain = await decryptCiphertext(file.verify, masterKey);
+  } catch {
+    throw new Error("wrong-key");
+  }
+  if (verifyPlain !== ENC_VERIFY_PLAINTEXT) throw new Error("wrong-key");
+  const entries = await decryptImportPayload(file, masterKey);
+  if (state.encryption.enabled) {
+    await mergeImportedEntries(entries);
+    exitVaultToNormal();
+    return;
+  }
+  state.vaultPending = { importFileData: file, importMasterKey: masterKey, importEntries: entries, importPhraseKek: kek };
+  state.vaultView = "import-adopt";
+  renderVault();
+}
+
+// Adopting a phrase-wrapped export on a fresh install: the file has no passphrase, so this browser's
+// vault gets one now. VK is unwrapped extractable only for this one wrap; the vault keeps the
+// non-extractable handle. The meta is then written by the ordinary adopt (one transaction).
+async function handleImportPhraseAdoptSubmit(passphrase) {
+  const pending = state.vaultPending;
+  if (!pending?.importPhraseKek || !isPhraseWrappedExport(pending.importFileData)) throw new Error("missing-import-data");
+  const file = pending.importFileData;
+  const vkExtractable = await window.txCentral.keys.unwrapVK(file.wrappedPhrase.blob, pending.importPhraseKek, true);
+  const saltPass = randomBytes(16);
+  const wrappingKey = await deriveWrappingKey(passphrase, saltPass, PBKDF2_ITERATIONS);
+  const wrappedPass = await wrapMasterKey(vkExtractable, wrappingKey);
+  pending.importFileData = { format: file.format, saltPass: bytesToBase64(saltPass), wrappedPass, iterationsPass: PBKDF2_ITERATIONS, verify: file.verify };
+  pending.importPhraseKek = null;
+  await handleImportAdoptVault();
+}
+
 function renderImportAdoptCard() {
+  const fromAccount = Boolean(state.vaultPending?.importPhraseKek);
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG_DOT}
       <p class="vault-title">Set up vault on this browser?</p>
-      <p class="vault-subtitle">This file is from an encrypted Txtshell vault. Use it to set up encryption on this browser too?</p>
+      <p class="vault-subtitle">${fromAccount
+        ? "This file is from a Txtshell account. Keep its blocks encrypted on this browser? You'll choose a passphrase for this browser next."
+        : "This file is from an encrypted Txtshell vault. Use it to set up encryption on this browser too?"}</p>
       <p class="vault-error" hidden></p>
       <button class="vault-button" type="button" data-action="setup">Set up vault</button>
       <button class="vault-button secondary" type="button" data-action="plain">Just import blocks (no encryption)</button>
@@ -5149,6 +5257,11 @@ function renderImportAdoptCard() {
   const setupButton = vaultOverlay.querySelector('[data-action="setup"]');
   const plainButton = vaultOverlay.querySelector('[data-action="plain"]');
   setupButton.addEventListener("click", async () => {
+    if (fromAccount) {
+      state.vaultView = "import-phrase-passphrase";
+      renderVault();
+      return;
+    }
     setupButton.disabled = true;
     plainButton.disabled = true;
     try {
@@ -8458,23 +8571,27 @@ async function handleAccountLeaveSubmit(passphrase) {
   entryInput.focus();
 }
 
-// ---------- /export in central mode (plan §9) ----------
-// The unchanged txtshell-encrypted-v1 file, with wrappedPass = VK under an
-// export passphrase the user chooses now. Any install opens it with /import.
-async function exportCentralEncrypted(passphrase, exportEntriesList, exportedLabel) {
-  const vk = await centralExtractableKey();
-  const saltPass = randomBytes(16);
-  const wrappingKey = await deriveWrappingKey(passphrase, saltPass, PBKDF2_ITERATIONS);
-  const wrappedPass = await wrapMasterKey(vk, wrappingKey);
+// ---------- /export in central mode (plan §9, revised 2026-10-09) ----------
+// A txtshell-encrypted-v1 file that carries the account's recovery wrap VERBATIM (VK under the
+// 12 words' KEK, the container rung 2 opens): it opens with the words the account has today. The
+// passkey ceremony — on this device's own credential, so the wrap is this vault's account's — is
+// the consent and yields the live session the wrap is read over. Nothing new is asked for, and
+// nothing new reaches the server (GET /v1/keys/recovery is the rung-2 read).
+async function exportCentralEncrypted(exportEntriesList, exportedLabel) {
+  const stored = await readCentralMeta();
+  if (!stored.credentialId) throw new Error("missing-meta");
+  const login = await window.txCentral.webauthn.login({ allowCredentialIds: [stored.credentialId] });
+  login.prf.fill(0); // not needed: the file does not re-wrap anything
+  setCentralSession(login);
+  const recovery = await window.txCentral.api("/v1/keys/recovery", "GET", undefined, login.session);
+  if (!recovery || typeof recovery.blob !== "string" || typeof recovery.hkdfSalt !== "string") throw new Error("no-recovery-wrap");
   const verify = await getMeta(ENC_VERIFY_KEY);
   const combined = await encryptPlaintext(JSON.stringify(exportEntriesList), state.encryption.masterKey);
   const combinedBytes = base64ToBytes(combined);
   const fileObj = {
     format: "txtshell-encrypted-v1",
     createdAt: new Date().toISOString(),
-    saltPass: bytesToBase64(saltPass),
-    iterationsPass: PBKDF2_ITERATIONS,
-    wrappedPass,
+    wrappedPhrase: { blob: recovery.blob, hkdfSalt: recovery.hkdfSalt },
     verify,
     iv: bytesToBase64(combinedBytes.slice(0, 12)),
     ciphertext: bytesToBase64(combinedBytes.slice(12)),
@@ -8492,9 +8609,50 @@ async function exportCentralEncrypted(passphrase, exportEntriesList, exportedLab
 
 function beginCentralExport(exportEntriesList, exportedLabel) {
   state.vaultPending = { exportEntriesList, exportedLabel };
-  state.vaultView = "central-export-pass";
+  state.vaultView = "central-export";
   renderVault();
-  composerHint.textContent = "Choose an export passphrase";
+  composerHint.textContent = "Export an encrypted backup";
+}
+
+const CENTRAL_EXPORT_NOTE = "This file opens with the recovery words you have today. If you get new words later, this file still needs today's.";
+
+function renderCentralExportCard() {
+  const { exportEntriesList, exportedLabel } = state.vaultPending || {};
+  if (!exportEntriesList) {
+    exitVaultToNormal();
+    return;
+  }
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG_DOT}
+      <p class="vault-title">Export an encrypted backup</p>
+      <p class="vault-subtitle" data-field="export-note">${escapeHtml(CENTRAL_EXPORT_NOTE)}</p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="submit">Confirm with passkey and export</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const button = vaultOverlay.querySelector('[data-action="submit"]');
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    errorLine.hidden = true;
+    try {
+      await exportCentralEncrypted(exportEntriesList, exportedLabel);
+      state.vaultView = null;
+      state.vaultPending = null;
+      renderVault();
+      entryInput.focus();
+    } catch (error) {
+      console.error("[txtshell] export failed", error?.name || "", error?.code || "", error);
+      errorLine.textContent = error?.message === "no-recovery-wrap" || error?.status === 404
+        ? "Your account has no recovery words yet, so there is nothing for the file to open with."
+        : centralFailureMessage(error);
+      errorLine.hidden = false;
+      button.disabled = false;
+    }
+  });
+  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", exitVaultToNormal);
 }
 
 // ---------- the first-join card (plan §6.2 step 6) ----------
