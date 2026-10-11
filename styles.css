@@ -1487,6 +1487,31 @@ kbd {
   margin: 0 0 10px;
 }
 
+/* The signed-out card: "— or —" between the two questions, and the small print at the foot. */
+.vault-or {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin: 18px 0 14px;
+}
+
+.vault-or::before,
+.vault-or::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--line);
+}
+
+.vault-fine {
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-align: center;
+  margin: 12px 0 0;
+  line-height: 1.4;
+}
+
 /* A soft, non-alarming note under the unlock button when the browser is offline. */
 .vault-advisory {
   font-size: 0.78rem;

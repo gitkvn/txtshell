@@ -7731,7 +7731,6 @@ function renderCentralAbandonCard() {
 // ---------- sign in / sign up ----------
 
 function renderCentralStartCard() {
-  const hasLocal = state.encryption.enabled || state.entries.length > 0;
   // Locked account vault: the same cards run as a re-add (plan §8). Email first — the passkey
   // this device has is revoked, missing or failing, which is why the user is here.
   const readd = centralLocked();
@@ -7748,13 +7747,15 @@ function renderCentralStartCard() {
   ` : `
     <div class="vault-card">
       ${LOCK_ICON_SVG_DOT}
-      <p class="vault-title">Txtshell account</p>
-      <p class="vault-subtitle">Sync across your devices with a passkey. Your blocks stay end-to-end encrypted — we never hold a key.${hasLocal ? " The blocks on this browser come with you." : ""}</p>
+      <p class="vault-title">Txtshell sync</p>
       <p class="vault-error" hidden></p>
-      <button class="vault-button" type="button" data-action="signin">Sign in with passkey</button>
-      <p class="vault-subtitle">New account, or adding this device? Start with your email.</p>
+      <p class="vault-subtitle" data-field="returning">Used Txtshell sync on this device before?</p>
+      <button class="vault-button secondary" type="button" data-action="signin">${escapeHtml(passkeyPlatformName() ? `Sign in with ${passkeyPlatformName()}` : "Sign in")}</button>
+      <p class="vault-or" aria-hidden="true"><span>or</span></p>
+      <p class="vault-subtitle" data-field="new">New here, or on a new device?</p>
       <input class="vault-input" data-field="email" type="email" placeholder="you@example.com" autocomplete="email" spellcheck="false" />
-      <button class="vault-button secondary" type="button" data-action="email">Send a code</button>
+      <button class="vault-button" type="button" data-action="email">Continue</button>
+      <p class="vault-fine" data-field="fine">Your notes stay encrypted. We can't read them.</p>
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
     </div>
   `;
@@ -7770,6 +7771,18 @@ function renderCentralStartCard() {
       try {
         await centralJoin({ via: "signin" });
       } catch (error) {
+        if (error?.name === "NotAllowedError" && !/focus/i.test(error?.message || "")) {
+          // Nothing on this device to sign in with (the sheet offered a phone or a key and nothing
+          // came, or it was closed): point to the email path, which serves a new device too.
+          console.warn("[txtshell] sign-in refused", error?.name || "", error);
+          state.vaultView = "central-start";
+          renderVault();
+          const line = vaultOverlay.querySelector(".vault-error");
+          line.textContent = "No sign-in found on this device. Use your email instead.";
+          line.hidden = false;
+          vaultOverlay.querySelector('[data-field="email"]').focus();
+          return;
+        }
         centralFlowFailed(error, "central-start");
       }
     });
@@ -8538,7 +8551,7 @@ function beginAccount() {
     state.vaultPending = null;
     state.vaultView = "central-start";
     renderVault();
-    composerHint.textContent = "Txtshell account";
+    composerHint.textContent = "Txtshell sync";
     return;
   }
   if (!state.central.session) {
