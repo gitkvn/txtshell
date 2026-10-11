@@ -8398,12 +8398,11 @@ async function accountSignOut() {
     await window.txCentral.devices.signOut(state.central.session).catch(() => {});
   }
   clearCentralSession();
-  state.vaultView = null;
-  state.vaultPending = null;
-  renderVault();
-  setSyncStatus("central-signin");
-  composerHint.textContent = "Signed out — your blocks stay on this device; run /account to sync again.";
-  entryInput.focus();
+  // A sign-out on a shared machine must not leave the blocks on screen: drop VK and show the
+  // unlock card. The cached wrap stays, so the next unlock is a sign-in (plan §8, manual-run
+  // finding 4).
+  lockVault();
+  composerHint.textContent = "Signed out and locked — your blocks stay on this device. Unlock with your passkey to sign back in.";
 }
 
 // Convert back to an ordinary passphrase vault with the SAME key: no record is
