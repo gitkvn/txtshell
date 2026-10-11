@@ -123,12 +123,7 @@
     if (cs !== await checksumBits(entropy)) throw Object.assign(new Error("That phrase doesn't check out — one of the words is off"), { code: "checksum" });
     return { entropy, words };
   }
-  function spotPositions() {
-    const set = new Set();
-    while (set.size < 3) set.add(1 + (crypto.getRandomValues(new Uint32Array(1))[0] % 12));
-    return [...set].sort((a, b) => a - b);
-  }
-  const phrase = { generate: generatePhrase, fromEntropy, toEntropy, normalizeWord, splitWords, spotPositions };
+  const phrase = { generate: generatePhrase, fromEntropy, toEntropy, normalizeWord, splitWords, WORDS };
 
   // ---------- WebAuthn: register / login with PRF, and the offline assertion ----------
   const prfEvalSalt = () => sha256(enc.encode(PRF_EVAL_CONTEXT));
@@ -251,7 +246,7 @@
   // ctx: { session, kekWrap, hasPrfWrap, hasRecovery, vk? }
   //   vk: an EXTRACTABLE existing key to adopt as VK at bootstrap (an install's passphrase master
   //       key — plan §6.1); absent → a fresh VK is generated.
-  // ui:  { forcedSave(words, { title, intro }) → Promise<void>,
+  // ui:  { forcedSave(words, { kind: "signup" | "abandon" | "rotate" }) → Promise<void>,
   //        askPhrase(errorText) → Promise<{ kind: "phrase", entropy } | { kind: "abandoned" }>,
   //        note?(text) }
   // Resolves to { vk (non-extractable), prfWrap (this credential's 60-byte wrap), via }.
@@ -270,10 +265,7 @@
       if (e.code === "keys-exist") return null;                     // another device won; the caller falls through to rung 1/2
       throw e;
     }
-    await ui.forcedSave(words, {
-      title: afterAbandon ? "New vault — save your new recovery phrase" : "Save your recovery phrase",
-      intro: "Your notes are end-to-end encrypted. We can't read them and we can't reset them. This phrase — together with access to your email — is the only way back in. Store it somewhere separate from your login: together they can unlock everything.",
-    });
+    await ui.forcedSave(words, { kind: afterAbandon ? "abandon" : "signup" });   // the copy lives in app.js
     return { vk: await unwrapVK(prfWrap, ctx.kekWrap, false), prfWrap, via: afterAbandon ? "abandon" : "bootstrap", abandoned: afterAbandon === true };
   }
 
@@ -325,7 +317,7 @@
     const salt = keys.newSalt();
     const recWrap = await wrapVK(vkExtractable, await kekFromEntropy(entropy, salt));
     await api("/v1/keys/recovery", "PUT", { blob: recWrap, hkdfSalt: salt }, session);
-    await ui.forcedSave(words, { title: "New recovery phrase — save it", intro: "Your previous phrase no longer works. Save this one somewhere separate from your login." });
+    await ui.forcedSave(words, { kind: "rotate" });
   }
 
   const ladder = { run, bootstrap, rung2, abandon, rotate };

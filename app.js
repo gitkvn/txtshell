@@ -7302,12 +7302,13 @@ function cancelCentralCard() {
 }
 
 const centralUi = {
-  // Forced-save: the 12 words, Copy (primary) or Download, then a 3-word spot
-  // check answered from the SAVED copy (the words leave the screen first).
-  forcedSave(words, { title, intro }) {
+  // Forced-save (decision 2026-10-10): the 12 words at signup, after the passkey step. Download
+  // (primary) or Copy (secondary); Continue stays disabled until one of them has actually run. No
+  // spot check. `kind`: "signup" | "rotate" | "abandon" picks the heading; the body is the same.
+  forcedSave(words, { kind = "signup" } = {}) {
     return new Promise((resolve, reject) => {
       centralCardSettle = { resolve, reject };
-      state.vaultPending = { ...(state.vaultPending || {}), forcedSave: { words, title, intro } };
+      state.vaultPending = { ...(state.vaultPending || {}), forcedSave: { words, kind } };
       state.vaultView = "central-forced-save";
       renderVault();
     });
@@ -7330,113 +7331,77 @@ function renderCentralBusyCard(label) {
   `;
 }
 
+const FORCED_SAVE_COPY = {
+  body: "If you ever lose all your devices, these 12 words are the only way to get your notes back. We can't reset them — nobody can read your notes, including us.",
+  keep: "Keep them somewhere safe — a password manager, or printed and put away. Don't keep them only on this device, and never share them.",
+  synced: "If your passkey is synced (iCloud Keychain, Google, 1Password…), your other devices won't need these words.",
+};
+
+function forcedSaveHeading(kind) {
+  if (kind === "rotate") return { title: "Your new recovery words", lead: "Your previous words no longer work." };
+  if (kind === "abandon") return { title: "Your new recovery words", lead: "This is a new vault — the old words no longer open it." };
+  return { title: "Your recovery words", lead: "" };
+}
+
 function renderCentralForcedSaveCard() {
   const pending = state.vaultPending?.forcedSave;
   if (!pending) {
     exitVaultToNormal();
     return;
   }
-  const { words, title, intro } = pending;
+  const { words, kind } = pending;
+  const { title, lead } = forcedSaveHeading(kind);
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG_DOT}
       <p class="vault-title">${escapeHtml(title)}</p>
-      <p class="vault-subtitle">${escapeHtml(intro)}</p>
+      ${lead ? `<p class="vault-subtitle" data-field="lead">${escapeHtml(lead)}</p>` : ""}
+      <p class="vault-subtitle" data-field="body">${escapeHtml(FORCED_SAVE_COPY.body)}</p>
       <ol class="phrase-words" data-field="words"></ol>
-      <p class="vault-subtitle" data-field="hidden" hidden>Phrase hidden — answer the check from your saved copy. <button class="vault-link inline" type="button" data-action="show">Show it again</button></p>
-      <p class="vault-error" hidden></p>
-      <button class="vault-button" type="button" data-action="copy">Copy to your password manager</button>
-      <button class="vault-button secondary" type="button" data-action="download">Download as a file</button>
-      <div class="phrase-check" data-field="check" hidden></div>
+      <p class="vault-subtitle" data-field="keep">${escapeHtml(FORCED_SAVE_COPY.keep)}</p>
+      <p class="vault-subtitle" data-field="synced">${escapeHtml(FORCED_SAVE_COPY.synced)}</p>
+      <button class="vault-button" type="button" data-action="download">Download the words</button>
+      <button class="vault-button secondary" type="button" data-action="copy">Copy</button>
       <p class="vault-subtitle" data-field="note"></p>
       <button class="vault-button" type="button" data-action="continue" disabled>Continue</button>
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
     </div>
   `;
   const list = vaultOverlay.querySelector('[data-field="words"]');
-  const hiddenNote = vaultOverlay.querySelector('[data-field="hidden"]');
-  const check = vaultOverlay.querySelector('[data-field="check"]');
+  words.forEach((word, index) => {
+    const li = document.createElement("li");
+    li.dataset.word = word;
+    li.textContent = `${index + 1}. ${word}`;
+    list.appendChild(li);
+  });
   const note = vaultOverlay.querySelector('[data-field="note"]');
   const continueButton = vaultOverlay.querySelector('[data-action="continue"]');
-  let saved = false;
-  let positions = window.txCentral.phrase.spotPositions();
-  const showPhrase = () => {
-    list.innerHTML = "";
-    words.forEach((word, index) => {
-      const li = document.createElement("li");
-      li.dataset.word = word;
-      li.textContent = `${index + 1}. ${word}`;
-      list.appendChild(li);
-    });
-    list.hidden = false;
-    hiddenNote.hidden = true;
+  // Continue opens only once the words have actually left the screen by one of the two routes: the
+  // download was issued, or the clipboard write resolved. A failed copy does not count.
+  const markSaved = (message) => {
+    note.textContent = message;
+    continueButton.disabled = false;
   };
-  const hidePhrase = () => {
-    list.innerHTML = "";
-    list.hidden = true;
-    hiddenNote.hidden = false;
-  };
-  const resetCheck = () => {
-    check.hidden = true;
-    check.innerHTML = "";
-    continueButton.disabled = true;
-    saved = false;
-    positions = window.txCentral.phrase.spotPositions();
-  };
-  const armSpotCheck = () => {
-    if (saved) return;
-    saved = true;
-    hidePhrase();
-    check.hidden = false;
-    const prompt = document.createElement("p");
-    prompt.className = "vault-subtitle";
-    prompt.textContent = "Quick check — type the words at these positions from your saved copy:";
-    check.appendChild(prompt);
-    const inputs = positions.map((position) => {
-      const input = document.createElement("input");
-      input.className = "vault-input";
-      input.type = "text";
-      input.autocomplete = "off";
-      input.autocapitalize = "none";
-      input.spellcheck = false;
-      input.placeholder = `Word ${position}`;
-      input.dataset.position = String(position);
-      check.appendChild(input);
-      return input;
-    });
-    const verify = () => {
-      const ok = inputs.every((input) => window.txCentral.phrase.normalizeWord(input.value) === words[Number(input.dataset.position) - 1]);
-      continueButton.disabled = !ok;
-      note.textContent = ok ? "Matches — you can continue." : inputs.some((input) => input.value.trim()) ? "Not quite — check your saved copy." : "";
-    };
-    inputs.forEach((input) => input.addEventListener("input", verify));
-    inputs[0].focus();
-  };
-  showPhrase();
-  resetCheck();
-  vaultOverlay.querySelector('[data-action="show"]').addEventListener("click", () => {
-    showPhrase();
-    resetCheck();
-    note.textContent = "Phrase shown again — save it, then repeat the check.";
+  vaultOverlay.querySelector('[data-action="download"]').addEventListener("click", () => {
+    try {
+      const blob = new Blob([`Txtshell recovery words — keep these somewhere safe, not only on this device:\n\n${words.join(" ")}\n`], { type: "text/plain" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "txtshell-recovery-words.txt";
+      link.click();
+      URL.revokeObjectURL(link.href);
+      markSaved("Downloaded. Move the file somewhere deliberate — a Downloads folder often syncs to iCloud Drive or OneDrive.");
+    } catch {
+      note.textContent = "Couldn't download here — use Copy instead.";
+    }
   });
   vaultOverlay.querySelector('[data-action="copy"]').addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(words.join(" "));
-      note.textContent = "Copied. Paste it into a NEW secure note in your password manager — not inside your Txtshell login item.";
-      armSpotCheck();
+      markSaved("Copied. Paste them into a new secure note in your password manager.");
     } catch {
-      note.textContent = "Couldn't access the clipboard here — use Download instead.";
+      note.textContent = "Couldn't copy here — use Download instead.";
     }
-  });
-  vaultOverlay.querySelector('[data-action="download"]').addEventListener("click", () => {
-    const blob = new Blob([`Txtshell recovery phrase (keep this separate from your login):\n\n${words.join(" ")}\n`], { type: "text/plain" });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = "txtshell-recovery-phrase.txt";
-    link.click();
-    URL.revokeObjectURL(link.href);
-    note.textContent = "Downloaded. Move the file somewhere deliberate — Downloads syncs to iCloud Drive / OneDrive and lives there forever.";
-    armSpotCheck();
   });
   continueButton.addEventListener("click", () => {
     if (continueButton.disabled) return;
