@@ -1544,9 +1544,13 @@ function handleGlobalShortcut(event) {
 }
 
 function render() {
-  savedCount.textContent = state.unreadable.length > 0
-    ? `Saved (${state.entries.length}) · ${state.unreadable.length} unreadable`
-    : `Saved (${state.entries.length})`;
+  // A locked vault has no readable blocks to count — the footer says so, rather than "Saved (0)",
+  // which read as data loss on the manual run (plan §3). Covers both modes.
+  savedCount.textContent = isVaultLocked()
+    ? "Locked"
+    : (state.unreadable.length > 0
+      ? `Saved (${state.entries.length}) · ${state.unreadable.length} unreadable`
+      : `Saved (${state.entries.length})`);
   entryInput.placeholder = state.entries.length
     ? COMPOSER_PLACEHOLDER_HAS_BLOCKS
     : COMPOSER_PLACEHOLDER_EMPTY;
@@ -7808,6 +7812,7 @@ function renderCentralUnlockCard() {
       <p class="vault-subtitle">Unlock with your passkey.</p>
       <p class="vault-error" hidden></p>
       <button class="vault-button" type="button" data-action="unlock">Unlock with passkey</button>
+      ${navigator.onLine === false ? `<p class="vault-advisory" data-field="offline-advisory">You're offline. Your notes are safe on this device; if your passkey won't open here, connect and try again.</p>` : ""}
       ${promote
         ? `<button class="vault-button secondary" type="button" data-action="words">Use your 12 words instead</button>`
         : `<button class="vault-link" type="button" data-action="words">Can't use your passkey? Use your 12 words instead</button>`}
@@ -7955,6 +7960,7 @@ function centralUnlockFailed(error) {
 function centralUnlockFailureMessage(error) {
   if (error?.message === "wrong-key") return "This passkey doesn't open the vault on this browser.";
   if (error?.message === "offline-no-cache") return "You're offline and this browser has nothing saved to unlock with yet — connect and try again.";
+  if (error?.message === "offline-ceremony-refused") return "Your passkey needs this device to be online. Your notes are safe here — connect and try again.";
   if (error?.code === "unknown-credential") return "That passkey isn't on your account. Pick another one, or use your 12 words instead.";
   if (error?.name === "NotAllowedError" && navigator.onLine !== false && !/focus/i.test(error.message || "")) {
     return "No passkey found on this device. Use your 12 words instead.";
@@ -7981,7 +7987,16 @@ async function handleCentralUnlock() {
   }
   if (!login) {
     if (!stored.credentialId || !stored.prfWrap || !stored.hkdfSalt || !stored.rpId) throw new Error("offline-no-cache");
-    const { prf } = await window.txCentral.webauthn.assertOffline({ credentialId: stored.credentialId, rpId: stored.rpId });
+    let prf;
+    try {
+      ({ prf } = await window.txCentral.webauthn.assertOffline({ credentialId: stored.credentialId, rpId: stored.rpId }));
+    } catch (error) {
+      // Offline AND the authenticator would not release the passkey without a network — a
+      // Microsoft-synced Hello passkey phones home to Microsoft and refuses. Not a wrong key and
+      // not a dead passkey: nothing local changes, the user connects and tries again (plan §3).
+      if (error?.name === "NotAllowedError" || error?.name === "AbortError") throw new Error("offline-ceremony-refused");
+      throw error;
+    }
     const kekWrap = await window.txCentral.keys.kekFromPrf(prf, stored.hkdfSalt);
     prf.fill(0);
     let vk;
