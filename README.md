@@ -110,5 +110,8 @@ local-first tool with encrypted export/import.
   origin (`/v1/*`); on a plain static deployment the command is present but the service is not,
   and nothing else changes. Your blocks stay end-to-end encrypted: the account's vault key is
   wrapped under your passkey (WebAuthn PRF) and under a 12-word recovery phrase you keep; the
-  server stores only those wraps and ciphertext. `/account leave` turns the browser back into an
-  ordinary passphrase vault with the same blocks. Design and gates: txtshell-central `docs/`.
+  server stores only those wraps and ciphertext. If the passkey can't be used (removed from the
+  account, deleted from the keychain, or failing), the lock screen offers the 12 words instead:
+  email → code → a new passkey → the phrase, and the blocks on this browser stay as they are.
+  `/account leave` turns the browser back into an ordinary passphrase vault with the same blocks.
+  Design and gates: txtshell-central `docs/`.

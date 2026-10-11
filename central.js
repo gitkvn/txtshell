@@ -182,11 +182,15 @@
 
   // Online sign-in: the server's challenge, a discoverable credential, PRF eval with the
   // frozen salt. The PRF output stays in this function's return value and is NEVER sent.
-  async function login() {
+  // `allowCredentialIds` (base64url) narrows the ceremony to given credentials: a re-add signs in
+  // with the passkey it just registered, never the removed one the authenticator may still hold.
+  async function login({ allowCredentialIds } = {}) {
     const o = await api("/v1/webauthn/login/options", "POST", {});
     const publicKey = {
       challenge: fromB64url(o.challenge), rpId: o.rpId, timeout: o.timeout, userVerification: o.userVerification,
-      allowCredentials: (o.allowCredentials || []).map((c) => ({ ...c, id: fromB64url(c.id) })),
+      allowCredentials: Array.isArray(allowCredentialIds) && allowCredentialIds.length
+        ? allowCredentialIds.map((id) => ({ type: "public-key", id: fromB64url(id) }))
+        : (o.allowCredentials || []).map((c) => ({ ...c, id: fromB64url(c.id) })),
       extensions: { prf: { eval: { first: fromB64url(o.extensions.prf.eval.first) } } },
     };
     await waitForFocus();
@@ -203,7 +207,15 @@
         userHandle: r.userHandle ? b64url(r.userHandle) : undefined,
       },
     });
-    const v = await api("/v1/webauthn/login/verify", "POST", { response });
+    let v;
+    try {
+      v = await api("/v1/webauthn/login/verify", "POST", { response });
+    } catch (e) {
+      // Which credential the server refused: app.js compares it to the one it cached to tell
+      // "this device was removed" from "a different passkey was picked".
+      if (e instanceof ApiError) e.credentialId = a.id;
+      throw e;
+    }
     if (!prf || prf.length !== 32) throw Object.assign(new Error("no PRF output from this passkey"), { code: "no-prf" });
     return { prf, session: v.sessionToken, credentialId: v.credentialId, hkdfSalt: v.hkdfSalt, userId: v.userId, hasPrfWrap: v.hasPrfWrap === true, hasRecovery: v.hasRecovery === true, rpId: o.rpId };
   }
@@ -224,7 +236,16 @@
     if (!prf || prf.length !== 32) throw Object.assign(new Error("no PRF output from this passkey"), { code: "no-prf" });
     return { prf };
   }
-  const webauthn = { signup, verifyEmail, register, login, assertOffline, waitForFocus };
+  // Tell the browser's passkey store that a credential is unknown to this site (revoked), so it
+  // stops offering it. Best effort: not every browser has it, and nothing depends on it.
+  async function signalUnknownCredential(rpId, credentialId) {
+    try {
+      if (window.PublicKeyCredential && typeof PublicKeyCredential.signalUnknownCredential === "function") {
+        await PublicKeyCredential.signalUnknownCredential({ rpId, credentialId });
+      }
+    } catch { /* advisory only */ }
+  }
+  const webauthn = { signup, verifyEmail, register, login, assertOffline, waitForFocus, signalUnknownCredential };
 
   // ---------- ladder: bootstrap | rung 1 | rung 2 | abandon ----------
   // ctx: { session, kekWrap, hasPrfWrap, hasRecovery, vk? }

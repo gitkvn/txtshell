@@ -102,7 +102,12 @@ for (let i = 0; i < lines.length; i++) {
 }
 console.log("--- rekeyVault callers");
 for (const [fn, n] of callers) console.log(`      ${fn} ×${n}`);
-const EXPECTED_CALLERS = ["handleRecoveryConfirm", "handleDisableSubmit", "handleImportAdoptVault", "centralJoin", "handleCentralUnlock", "centralResume", "handleAccountLeaveSubmit"];
+// settleCentralKey is the tail shared by the unlock and the lock-screen re-add (it took over
+// handleCentralUnlock's writes); writeCentralFlags writes the two flag rows (`central-removed`,
+// `central-readd-credential-id`) through the same transaction instead of a bare saveMeta.
+// applyReKeyOrDeadEnd is the different-key tail (re-key or the dead end), shared by the unlock and
+// the re-add; settleCentralKey keeps the same-VK meta swap.
+const EXPECTED_CALLERS = ["handleRecoveryConfirm", "handleDisableSubmit", "handleImportAdoptVault", "centralJoin", "settleCentralKey", "applyReKeyOrDeadEnd", "writeCentralFlags", "centralResume", "handleAccountLeaveSubmit"];
 check(EXPECTED_CALLERS.every((fn) => callers.has(fn)) && [...callers.keys()].every((fn) => EXPECTED_CALLERS.includes(fn)), `rekeyVault callers are exactly ${EXPECTED_CALLERS.join(", ")}`);
 
 console.log(`\n${failures === 0 ? "ALL PASSED" : failures + " FAILURE(S)"} · nothing skipped`);

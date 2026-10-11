@@ -30,11 +30,18 @@ const CENTRAL_CREDENTIAL_ID_KEY = "central-credential-id";
 const CENTRAL_HKDF_SALT_KEY = "central-hkdf-salt";
 const CENTRAL_PRF_WRAP_KEY = "central-prf-wrap"; // this device's 60-byte wrap of VK, sealed under its passkey's KEK
 const CENTRAL_RP_ID_KEY = "central-rp-id"; // the rpId the server named at sign-in, cached for the offline ceremony
+// Set the moment this device is told its passkey was removed from the account (`unknown-credential`
+// for the cached credential). While set, the lock screen is the removed card and the cached wrap is
+// not used, online or offline (plan §8). A product fact, not a security boundary.
+const CENTRAL_REMOVED_KEY = "central-removed";
+// The credential registered by a re-add that has not finished yet (crash or failure between the
+// registration and the settled key): the next sign-in uses exactly it, never the removed one.
+const CENTRAL_READD_CREDENTIAL_KEY = "central-readd-credential-id";
 const CENTRAL_PASSPHRASE_ROWS = [
   ENC_SALT_PASS_KEY, ENC_SALT_RECOVERY_KEY, ENC_WRAPPED_PASS_KEY, ENC_WRAPPED_RECOVERY_KEY,
   ENC_ITERATIONS_PASS_KEY, ENC_ITERATIONS_RECOVERY_KEY, ENC_UNLOCK_FAIL_COUNT, ENC_UNLOCK_LOCKED_UNTIL, ENC_UNLOCK_ESCALATION,
 ];
-const CENTRAL_ROWS = [ENC_MODE_KEY, CENTRAL_URL_KEY, CENTRAL_CREDENTIAL_ID_KEY, CENTRAL_HKDF_SALT_KEY, CENTRAL_PRF_WRAP_KEY, CENTRAL_RP_ID_KEY];
+const CENTRAL_ROWS = [ENC_MODE_KEY, CENTRAL_URL_KEY, CENTRAL_CREDENTIAL_ID_KEY, CENTRAL_HKDF_SALT_KEY, CENTRAL_PRF_WRAP_KEY, CENTRAL_RP_ID_KEY, CENTRAL_REMOVED_KEY, CENTRAL_READD_CREDENTIAL_KEY];
 const ENC_VERIFY_PLAINTEXT = "txtshell-verify-v1";
 const SYNC_WORKER_URL_KEY = "sync-worker-url";
 const SYNC_AUTH_TOKEN_KEY = "sync-auth-token";
@@ -177,6 +184,12 @@ const state = {
     // cloud different shows the first-join card (merge) instead of the
     // stale-copy card, because the two histories are unrelated.
     firstJoin: false,
+    // Mirrors the `central-removed` row (read in initialize(), set when told, cleared by a re-add).
+    removed: false,
+    // Mirrors `central-readd-credential-id` (a re-add that registered but did not settle).
+    readdCredentialId: null,
+    // Failed unlock ceremonies since the vault locked; two promote "use your 12 words" to a button.
+    unlockFailures: 0,
   },
   // Records in IndexedDB that the current key cannot open (see
   // decryptAllEntriesIntoState). Kept out of `entries` so they are never
@@ -1711,6 +1724,11 @@ async function initialize() {
     const encMode = await getMeta(ENC_MODE_KEY);
     state.encryption.mode = encMode === "central" ? "central" : "passphrase";
     state.encryption.enabled = Boolean(saltPassBase64) || state.encryption.mode === "central";
+    if (state.encryption.mode === "central") {
+      const [removed, readdCredentialId] = await Promise.all([getMeta(CENTRAL_REMOVED_KEY), getMeta(CENTRAL_READD_CREDENTIAL_KEY)]);
+      state.central.removed = Boolean(removed);
+      state.central.readdCredentialId = readdCredentialId || null;
+    }
 
     if (state.encryption.enabled) {
       state.vaultView = "unlock";
@@ -4218,6 +4236,8 @@ function lockVault() {
   mirrorPayload = null;
   state.vaultView = "unlock";
   state.vaultPending = null;
+  state.central.unlockFailures = 0;
+  centralRescuedKey = null;
   readySignalSent = false; // next unlock re-announces readiness so the extension drains its queue
   renderVault();
   updateLockButton();
@@ -4325,6 +4345,8 @@ function renderVault() {
     renderKeyMismatchCard();
   } else if (view === "central-start") {
     renderCentralStartCard();
+  } else if (view === "central-readd-rescue") {
+    renderCentralReaddRescueCard();
   } else if (view === "central-code") {
     renderCentralCodeCard();
   } else if (view === "central-registered") {
@@ -4679,9 +4701,15 @@ function renderUnlockCardLocked(lockout) {
 }
 
 const WIPE_CONFIRM_PHRASE = "DELETE EVERYTHING";
+// Txtshell account: the cloud keeps everything that synced, so the wipe needs no passkey — the
+// typed sentence is the confirmation (a revoked or passkey-less device must still be able to
+// wipe). The passkey stays as the fast path when one is available (decision 2026-10-11).
+const WIPE_CONFIRM_PHRASE_CENTRAL = "delete my notes on this device";
+const normalizeWipeSentence = (text) => String(text || "").trim().replace(/\s+/g, " ").toLowerCase();
 
 function renderWipeCard(isRecovery) {
-  const hasVault = state.encryption.enabled && !isCentral(); // central: the passkey confirms, not a passphrase
+  const central = isCentral();
+  const hasVault = state.encryption.enabled && !central; // central: the typed sentence (or the passkey) confirms, not a passphrase
   const placeholder = isRecovery ? "Recovery key" : "Passphrase";
   const linkText = isRecovery ? "Use passphrase instead" : "Use recovery key instead";
 
@@ -4691,16 +4719,20 @@ function renderWipeCard(isRecovery) {
   const toggleHtml = hasVault
     ? `<button class="vault-link" type="button" data-action="toggle">${escapeHtml(linkText)}</button>`
     : "";
+  const warning = central
+    ? "This deletes every block and your account's keys from this browser only. Your account and your other devices keep everything that has synced; anything not yet synced is lost. This cannot be undone."
+    : "This will permanently delete all your blocks and vault metadata from this browser. This cannot be undone.";
 
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG}
-      <p class="vault-title">Wipe all data</p>
-      <p class="wipe-warning">This will permanently delete all your blocks and vault metadata from this browser. This cannot be undone.${isCentral() ? " Your account and its other devices are not affected; you'll confirm with your passkey." : ""}</p>
+      <p class="vault-title">${central ? "Wipe this device" : "Wipe all data"}</p>
+      <p class="wipe-warning">${escapeHtml(warning)}</p>
       <p class="vault-error" hidden></p>
       ${authFieldHtml}
-      <input class="vault-input" data-field="confirm" type="text" placeholder="Type DELETE EVERYTHING" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+      <input class="vault-input" data-field="confirm" type="text" placeholder="${central ? `Type: ${WIPE_CONFIRM_PHRASE_CENTRAL}` : "Type DELETE EVERYTHING"}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
       <button class="vault-button danger" type="button" data-action="submit" disabled>Wipe everything</button>
+      ${central ? `<button class="vault-button secondary" type="button" data-action="passkey">Confirm with passkey instead</button>` : ""}
       ${toggleHtml}
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
     </div>
@@ -4710,6 +4742,7 @@ function renderWipeCard(isRecovery) {
   const confirmInput = vaultOverlay.querySelector('[data-field="confirm"]');
   const errorLine = vaultOverlay.querySelector(".vault-error");
   const submitButton = vaultOverlay.querySelector('[data-action="submit"]');
+  const passkeyButton = vaultOverlay.querySelector('[data-action="passkey"]');
   const toggleButton = vaultOverlay.querySelector('[data-action="toggle"]');
   const cancelButton = vaultOverlay.querySelector('[data-action="cancel"]');
 
@@ -4719,28 +4752,30 @@ function renderWipeCard(isRecovery) {
   };
 
   const updateEnabled = () => {
-    const phraseOk = confirmInput.value === WIPE_CONFIRM_PHRASE;
+    const phraseOk = central ? normalizeWipeSentence(confirmInput.value) === WIPE_CONFIRM_PHRASE_CENTRAL : confirmInput.value === WIPE_CONFIRM_PHRASE;
     const authOk = !hasVault || (passInput && passInput.value.trim().length > 0);
     submitButton.disabled = !(phraseOk && authOk);
   };
 
-  const submit = async () => {
-    if (submitButton.disabled) {
+  const submit = async ({ viaPasskey = false } = {}) => {
+    if (!viaPasskey && submitButton.disabled) {
       return;
     }
     showError("");
     submitButton.disabled = true;
-    submitButton.textContent = "Wiping…";
+    if (passkeyButton) passkeyButton.disabled = true;
+    if (viaPasskey) passkeyButton.textContent = "Confirming…"; else submitButton.textContent = "Wiping…";
     try {
-      await handleWipeSubmit(passInput ? passInput.value.trim() : "", isRecovery, confirmInput.value);
+      await handleWipeSubmit(passInput ? passInput.value.trim() : "", isRecovery, confirmInput.value, { viaPasskey });
     } catch (error) {
       const message = error?.message === "locked-out"
         ? "Too many attempts. Use the recovery key, or wait."
         : (error?.message === "wrong-key" || error?.message === "missing-meta"
-          ? "Couldn't verify — passphrase or recovery key may be wrong"
-          : "Something went wrong. Try again.");
+          ? (viaPasskey ? "Couldn't confirm with your passkey — type the sentence instead." : "Couldn't verify — passphrase or recovery key may be wrong")
+          : (viaPasskey ? "Couldn't confirm with your passkey — type the sentence instead." : "Something went wrong. Try again."));
       showError(message);
       submitButton.textContent = "Wipe everything";
+      if (passkeyButton) { passkeyButton.textContent = "Confirm with passkey instead"; passkeyButton.disabled = false; }
       updateEnabled();
       if (passInput) {
         passInput.select();
@@ -4752,7 +4787,8 @@ function renderWipeCard(isRecovery) {
     passInput.addEventListener("input", updateEnabled);
   }
   confirmInput.addEventListener("input", updateEnabled);
-  submitButton.addEventListener("click", submit);
+  submitButton.addEventListener("click", () => submit());
+  if (passkeyButton) passkeyButton.addEventListener("click", () => submit({ viaPasskey: true }));
   [passInput, confirmInput].filter(Boolean).forEach((input) => {
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
@@ -4771,14 +4807,15 @@ function renderWipeCard(isRecovery) {
   window.requestAnimationFrame(() => (passInput || confirmInput).focus());
 }
 
-async function handleWipeSubmit(value, isRecovery, confirmPhrase) {
-  if (confirmPhrase !== WIPE_CONFIRM_PHRASE) {
-    throw new Error("phrase-mismatch");
-  }
-
+async function handleWipeSubmit(value, isRecovery, confirmPhrase, { viaPasskey = false } = {}) {
   if (isCentral()) {
-    // A stolen unlocked tab cannot wipe without the authenticator.
-    await centralExtractableKey();
+    // Either confirmation stands on its own: the typed sentence (no passkey needed — the account
+    // keeps what synced, and a revoked or passkey-less device must still be able to wipe) or the
+    // passkey as the fast path.
+    if (viaPasskey) await centralExtractableKey();
+    else if (normalizeWipeSentence(confirmPhrase) !== WIPE_CONFIRM_PHRASE_CENTRAL) throw new Error("phrase-mismatch");
+  } else if (confirmPhrase !== WIPE_CONFIRM_PHRASE) {
+    throw new Error("phrase-mismatch");
   } else if (state.encryption.enabled) {
     if (!isRecovery) {
       const lockout = await readLockoutState();
@@ -4871,7 +4908,7 @@ async function performWipe() {
   state.entries = [];
   state.unreadable = [];
   state.encryption = { enabled: false, unlocked: false, masterKey: null, mode: "passphrase" };
-  state.central = { session: null, userId: null, credentialId: null, firstJoin: false };
+  state.central = { session: null, userId: null, credentialId: null, firstJoin: false, removed: false, readdCredentialId: null, unlockFailures: 0 };
   state.vaultView = null;
   state.vaultPending = null;
   state.editingEntryId = null;
@@ -5181,6 +5218,7 @@ async function handleImportPlainMerge() {
 }
 
 function exitVaultToNormal() {
+  centralRescuedKey = null;
   if (state.encryption.enabled && !state.encryption.unlocked) {
     state.vaultView = "unlock";
     renderVault();
@@ -7046,14 +7084,44 @@ function centralMetaRows({ credentialId, hkdfSalt, prfWrap, rpId }) {
 }
 
 async function readCentralMeta() {
-  const [credentialId, hkdfSalt, prfWrap, rpId] = await Promise.all([
+  const [credentialId, hkdfSalt, prfWrap, rpId, removed, readdCredentialId] = await Promise.all([
     getMeta(CENTRAL_CREDENTIAL_ID_KEY),
     getMeta(CENTRAL_HKDF_SALT_KEY),
     getMeta(CENTRAL_PRF_WRAP_KEY),
     getMeta(CENTRAL_RP_ID_KEY),
+    getMeta(CENTRAL_REMOVED_KEY),
+    getMeta(CENTRAL_READD_CREDENTIAL_KEY),
   ]);
-  return { credentialId, hkdfSalt, prfWrap, rpId };
+  return { credentialId, hkdfSalt, prfWrap, rpId, removed: Boolean(removed), readdCredentialId: readdCredentialId || null };
 }
+
+// The vault is a Txtshell account's and is locked: the account cards (email → code → register →
+// sign in → phrase) run as a re-add from the lock screen, and Cancel returns to it.
+function centralLocked() {
+  return isCentral() && state.encryption.enabled && !state.encryption.unlocked;
+}
+
+// The two flag rows (removed / re-add credential) are vault meta, so they go through the vault's
+// one meta transaction like every other central row — never a bare saveMeta.
+async function writeCentralFlags(metaPuts) {
+  await rekeyVault({ entries: null, key: null, metaPuts });
+}
+
+// Told by the server that the cached credential is unknown (revoked): record it, so the lock
+// screen refuses the cached wrap and offers the way back instead (plan §8). Only the cached
+// credential counts — a different passkey the user picked from the sheet says nothing about
+// this device.
+async function centralToldRemoved(error, stored) {
+  if (error?.code !== "unknown-credential") return false;
+  if (!error.credentialId || !stored?.credentialId || error.credentialId !== stored.credentialId) return false;
+  if (!state.central.removed) {
+    await writeCentralFlags([[CENTRAL_REMOVED_KEY, new Date().toISOString()]]);
+    state.central.removed = true;
+  }
+  return true;
+}
+
+const CENTRAL_REMOVED_SENTENCE = "This device was removed from your account. To add it back, use your email and then your 12 words.";
 
 function setCentralSession(login) {
   state.central.session = login.session;
@@ -7077,6 +7145,12 @@ document.addEventListener("txcentral:session-lost", () => {
 // Shared pending-promise plumbing: a card resolves or rejects the ladder's
 // question; Cancel rejects with "cancelled", which unwinds the whole flow.
 let centralCardSettle = null;
+// The old VK, captured by the re-add's "keep this device's notes" step BEFORE a new passkey is
+// registered. Registering a passkey for the same account evicts the old credential from this
+// authenticator (one resident credential per user handle), so the old key — which lives only in
+// the cached wrap under the old credential's KEK — must be read before that, or it is gone for
+// good (found 2026-10-11; plan §8). Memory only; dropped on unlock, cancel or lock.
+let centralRescuedKey = null;
 function settleCentralCard(value, error) {
   const settle = centralCardSettle;
   centralCardSettle = null;
@@ -7321,7 +7395,20 @@ function renderCentralAbandonCard() {
 
 function renderCentralStartCard() {
   const hasLocal = state.encryption.enabled || state.entries.length > 0;
-  vaultOverlay.innerHTML = `
+  // Locked account vault: the same cards run as a re-add (plan §8). Email first — the passkey
+  // this device has is revoked, missing or failing, which is why the user is here.
+  const readd = centralLocked();
+  vaultOverlay.innerHTML = readd ? `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG}
+      <p class="vault-title">${state.central.removed ? "Add this device again" : "Use your 12 words"}</p>
+      <p class="vault-subtitle">Enter your email for a code. This device then gets a new passkey, and your 12 words set it up — once. Your notes stay on this device.</p>
+      <p class="vault-error" hidden></p>
+      <input class="vault-input" data-field="email" type="email" placeholder="you@example.com" autocomplete="email" spellcheck="false" />
+      <button class="vault-button" type="button" data-action="email">Send a code</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  ` : `
     <div class="vault-card">
       ${LOCK_ICON_SVG_DOT}
       <p class="vault-title">Txtshell account</p>
@@ -7339,15 +7426,17 @@ function renderCentralStartCard() {
   const signinButton = vaultOverlay.querySelector('[data-action="signin"]');
   const emailButton = vaultOverlay.querySelector('[data-action="email"]');
   const emailInput = vaultOverlay.querySelector('[data-field="email"]');
-  signinButton.addEventListener("click", async () => {
-    signinButton.disabled = true;
-    emailButton.disabled = true;
-    try {
-      await centralJoin({ via: "signin" });
-    } catch (error) {
-      centralFlowFailed(error, "central-start");
-    }
-  });
+  if (signinButton) {
+    signinButton.addEventListener("click", async () => {
+      signinButton.disabled = true;
+      emailButton.disabled = true;
+      try {
+        await centralJoin({ via: "signin" });
+      } catch (error) {
+        centralFlowFailed(error, "central-start");
+      }
+    });
+  }
   const sendCode = async () => {
     const email = emailInput.value.trim();
     if (!email) { showError("Enter your email."); return; }
@@ -7360,7 +7449,8 @@ function renderCentralStartCard() {
       renderVault();
     } catch (error) {
       console.error(error);
-      showError(error.code === "invalid-email" ? "That doesn't look like an email address." : "Couldn't send a code. Try again.");
+      showError(error.code === "invalid-email" ? "That doesn't look like an email address."
+        : (error?.name === "TypeError" || error?.status === 0 ? "Can't reach Txtshell right now. Check your connection and try again." : "Couldn't send a code. Try again."));
       emailButton.disabled = false;
     }
   };
@@ -7396,6 +7486,12 @@ function renderCentralCodeCard() {
       state.vaultPending = { ...pending, busy: "Registering your passkey" };
       renderVault();
       const registered = await window.txCentral.webauthn.register(signupToken);
+      if (centralLocked()) {
+        // A re-add from the lock screen: the server now holds a credential this device must sign in
+        // with, whatever happens between here and the settled key (a crash included).
+        await writeCentralFlags([[CENTRAL_READD_CREDENTIAL_KEY, registered.credentialId]]);
+        state.central.readdCredentialId = registered.credentialId;
+      }
       // The sign-in is its own ceremony behind its own tap: Safari spends the user activation on
       // the registration, and every browser refuses a ceremony while the sheet's focus settles.
       state.vaultPending = { ...pending, registered };
@@ -7443,7 +7539,8 @@ function renderCentralRegisteredCard() {
   button.addEventListener("click", async () => {
     button.disabled = true;
     try {
-      await centralJoin({ via: "register", registered });
+      if (centralLocked()) await centralReadd({ via: "register", registered });
+      else await centralJoin({ via: "register", registered });
     } catch (error) {
       centralFlowFailed(error, "central-registered");
     }
@@ -7466,7 +7563,8 @@ function renderCentralHasPasskeyCard() {
   button.addEventListener("click", async () => {
     button.disabled = true;
     try {
-      await centralJoin({ via: "signin" });
+      if (centralLocked()) await centralReadd({ via: "signin" });
+      else await centralJoin({ via: "signin" });
     } catch (error) {
       centralFlowFailed(error, "central-has-passkey");
     }
@@ -7476,7 +7574,7 @@ function renderCentralHasPasskeyCard() {
 
 // One sentence for a person, per failure; the technical name goes to the console.
 function centralFailureMessage(error) {
-  if (error?.code === "unknown-credential") return "This passkey was removed from the account. Add this device again with your email — you'll need your recovery phrase.";
+  if (error?.code === "unknown-credential") return CENTRAL_REMOVED_SENTENCE;
   if (error?.code === "no-prf") return "This passkey can't protect your notes in this browser. Try another browser, or sign in with a different passkey.";
   if (error?.status === 429 || error?.code === "rate-limited") return "Too many tries — wait a minute and try again.";
   switch (error?.name) {
@@ -7689,7 +7787,20 @@ function renderCentralPassphraseCard() {
 
 // ---------- unlock (central mode, vault locked) ----------
 
+// Three shapes of one card (plan §8, decision 2026-10-09; scope 2026-10-11):
+//   · locked         — Unlock with passkey; "Can't use your passkey? Use your 12 words instead" as
+//                      a link; Wipe quiet at the bottom
+//   · failed twice   — the 12-words path is promoted to a button under the unlock button
+//   · removed (told) — no unlock button: the sentence, "Add this device again", Wipe quiet. The
+//                      cached wrap is not used while the row is set, online or offline.
+// "Use your 12 words" runs the same flow in every case: email → code → register → "ready" →
+// sign in → 12 words → re-wrap → unlock (centralReadd).
 function renderCentralUnlockCard() {
+  if (state.central.removed) {
+    renderCentralRemovedCard();
+    return;
+  }
+  const promote = (state.central.unlockFailures || 0) >= 2;
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG}
@@ -7697,7 +7808,10 @@ function renderCentralUnlockCard() {
       <p class="vault-subtitle">Unlock with your passkey.</p>
       <p class="vault-error" hidden></p>
       <button class="vault-button" type="button" data-action="unlock">Unlock with passkey</button>
-      <button class="vault-link" type="button" data-action="wipe">Wipe all data</button>
+      ${promote
+        ? `<button class="vault-button secondary" type="button" data-action="words">Use your 12 words instead</button>`
+        : `<button class="vault-link" type="button" data-action="words">Can't use your passkey? Use your 12 words instead</button>`}
+      <button class="vault-link quiet" type="button" data-action="wipe">Wipe this device</button>
     </div>
   `;
   const errorLine = vaultOverlay.querySelector(".vault-error");
@@ -7709,18 +7823,36 @@ function renderCentralUnlockCard() {
     try {
       await handleCentralUnlock();
     } catch (error) {
-      if (state.vaultView !== "unlock") {
-        centralFlowFailed(error, "unlock");
-        return;
-      }
-      console.error(error);
-      errorLine.textContent = error?.message === "wrong-key"
-        ? "This passkey doesn't open the vault on this browser."
-        : (error?.message === "offline-no-cache" ? "You're offline and this browser has nothing saved to unlock with yet — connect and try again." : centralFailureMessage(error));
-      errorLine.hidden = false;
-      unlockButton.disabled = false;
-      unlockButton.textContent = "Unlock with passkey";
+      centralUnlockFailed(error);
     }
+  });
+  vaultOverlay.querySelector('[data-action="words"]').addEventListener("click", beginCentralReadd);
+  vaultOverlay.querySelector('[data-action="wipe"]').addEventListener("click", () => {
+    state.vaultView = "wipe-confirm";
+    renderVault();
+  });
+}
+
+function renderCentralRemovedCard() {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG}
+      <p class="vault-title">This device was removed from your account</p>
+      <p class="vault-subtitle">To add it back, use your email and then your 12 words. Your notes are still on this device.</p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="readd">Add this device again</button>
+      <button class="vault-link quiet" type="button" data-action="wipe">Wipe this device</button>
+    </div>
+  `;
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  vaultOverlay.querySelector('[data-action="readd"]').addEventListener("click", () => {
+    if (navigator.onLine === false) {
+      // Adding back needs the account; the row is only cleared by a settled re-add.
+      errorLine.textContent = "Can't reach Txtshell right now. Check your connection and try again.";
+      errorLine.hidden = false;
+      return;
+    }
+    beginCentralReadd();
   });
   vaultOverlay.querySelector('[data-action="wipe"]').addEventListener("click", () => {
     state.vaultView = "wipe-confirm";
@@ -7728,15 +7860,121 @@ function renderCentralUnlockCard() {
   });
 }
 
+async function beginCentralReadd() {
+  centralRescuedKey = null;
+  let stored = null;
+  try { stored = await readCentralMeta(); } catch { stored = null; }
+  if (stored && stored.prfWrap && stored.credentialId && stored.hkdfSalt && stored.rpId) {
+    // This device has a vault key in its cached wrap. Offer to carry its notes across before the
+    // new passkey is registered (which would evict the old credential this wrap is sealed under).
+    state.vaultPending = { readdRescue: stored };
+    state.vaultView = "central-readd-rescue";
+    renderVault();
+    return;
+  }
+  state.vaultPending = null;
+  state.vaultView = "central-start"; // renders the re-add variant while the vault is locked
+  renderVault();
+}
+
+// The re-add's first step when this device still holds a cached wrap: one tap on the existing
+// passkey (which works locally even when the account has revoked it — the assertion never leaves
+// the device) unwraps the old VK and keeps it in memory, so a re-key after an abandon has a key
+// to move the blocks from. Its own tap, before registration — a ceremony chained onto another is
+// refused by the browser (manual-run finding 1). "Continue without it" proceeds without rescue.
+function renderCentralReaddRescueCard() {
+  const stored = state.vaultPending?.readdRescue;
+  if (!stored) {
+    state.vaultView = "central-start";
+    renderVault();
+    return;
+  }
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG}
+      <p class="vault-title">Keep this device's notes</p>
+      <p class="vault-subtitle">Confirm with the passkey this device already has, so the notes here come across when you add it back. You'll set up a new passkey next.</p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="confirm">Confirm with your current passkey</button>
+      <button class="vault-link" type="button" data-action="skip">Continue without it</button>
+    </div>
+  `;
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const button = vaultOverlay.querySelector('[data-action="confirm"]');
+  const toStart = () => { state.vaultPending = null; state.vaultView = "central-start"; renderVault(); };
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "Confirming…";
+    errorLine.hidden = true;
+    try {
+      const { prf } = await window.txCentral.webauthn.assertOffline({ credentialId: stored.credentialId, rpId: stored.rpId });
+      const kekWrap = await window.txCentral.keys.kekFromPrf(prf, stored.hkdfSalt);
+      prf.fill(0);
+      let vk = null;
+      try { vk = await window.txCentral.keys.unwrapVK(stored.prfWrap, kekWrap, false); } catch { vk = null; }
+      if (!vk || !(await verifyMasterKey(vk))) throw new Error("wrong-key");
+      centralRescuedKey = vk;
+      toStart();
+    } catch (error) {
+      console.warn("[txtshell] rescue of this device's key failed", error?.name || "", error);
+      errorLine.textContent = error?.message === "wrong-key"
+        ? "That passkey didn't open this device's notes. Continue without it, or try again."
+        : centralUnlockFailureMessage(error);
+      errorLine.hidden = false;
+      button.disabled = false;
+      button.textContent = "Confirm with your current passkey";
+    }
+  });
+  vaultOverlay.querySelector('[data-action="skip"]').addEventListener("click", () => { centralRescuedKey = null; toStart(); });
+}
+
+// A failed unlock ceremony: count it, land back on the lock card (the removed card if the server
+// just said so), say what happened in one sentence. Nothing local changed — handleCentralUnlock
+// writes only in settleCentralKey's one transaction, which either completed or did not.
+function centralUnlockFailed(error) {
+  const cancelled = error?.message === "cancelled";
+  if (!cancelled) state.central.unlockFailures = (state.central.unlockFailures || 0) + 1;
+  console.error("[txtshell] unlock failed", error?.name || "", error?.code || "", error);
+  clearCentralSession(); // a sign-in that did not end in an unlock leaves no session behind
+  state.vaultView = "unlock";
+  state.vaultPending = null;
+  renderVault();
+  if (cancelled || state.central.removed) return;
+  const line = vaultOverlay.querySelector(".vault-error");
+  if (line) {
+    line.textContent = centralUnlockFailureMessage(error);
+    line.hidden = false;
+  }
+}
+
+// The lock card's own copy. A NotAllowedError here is "no passkey the browser could use" (the
+// sheet offered a phone or a security key and was dismissed, or the prompt was closed): the
+// ceremony runs from a tap on a focused page, so the focus-lost sentence belongs only to the
+// browser saying so. Browsers do not distinguish "none available" from "dismissed", so a dismissed
+// prompt reads the same line — its action (try again, or the 12 words) is right either way.
+function centralUnlockFailureMessage(error) {
+  if (error?.message === "wrong-key") return "This passkey doesn't open the vault on this browser.";
+  if (error?.message === "offline-no-cache") return "You're offline and this browser has nothing saved to unlock with yet — connect and try again.";
+  if (error?.code === "unknown-credential") return "That passkey isn't on your account. Pick another one, or use your 12 words instead.";
+  if (error?.name === "NotAllowedError" && navigator.onLine !== false && !/focus/i.test(error.message || "")) {
+    return "No passkey found on this device. Use your 12 words instead.";
+  }
+  return centralFailureMessage(error);
+}
+
 // Online: the ceremony is a sign-in (session + fresh wrap). Offline (the
 // options request fails): the passkey alone opens the cached wrap — no session,
 // pushes wait. Either way VK lands in state.encryption.masterKey.
 async function handleCentralUnlock() {
   const stored = await readCentralMeta();
+  if (stored.removed) throw new Error("removed"); // the removed card has no unlock button; belt and braces
   let login = null;
   try {
     login = await window.txCentral.webauthn.login();
   } catch (error) {
+    // The server does not know the cached credential: this device was removed. Record it (the
+    // lock screen becomes the removed card) and refuse the cached wrap from now on.
+    await centralToldRemoved(error, stored);
     // Only a transport failure means "offline"; a refused ceremony or a server
     // answer is a real outcome.
     if (!(error?.name === "TypeError" || error?.status === 0)) throw error;
@@ -7766,68 +8004,142 @@ async function handleCentralUnlock() {
   renderVault();
   const out = await window.txCentral.ladder.run({ session: login.session, kekWrap, hasPrfWrap: login.hasPrfWrap, hasRecovery: login.hasRecovery }, centralUi);
   if (out.abandoned) await clearSyncState();
+  await settleCentralKey({ stored, login, kekWrap, out, identity, readd: false });
+}
 
+// Adding this device back from the lock screen (plan §8): the passkey it has is revoked, gone
+// or failing, so the account cards have just registered a new one (or found the one it has).
+// Sign in with exactly that credential — never the removed one, which the authenticator may
+// still offer — then settle the key the same way an unlock does. The old credential is
+// signalled to the browser as unknown only AFTER the key is settled: until then it is the one
+// thing that can still open the cached wrap if the account's key moved meanwhile.
+async function centralReadd({ via, registered } = {}) {
+  void via;
+  state.vaultView = "central-busy";
+  state.vaultPending = { busy: "Signing in" };
+  renderVault();
+  const stored = await readCentralMeta();
+  const preferred = registered?.credentialId || state.central.readdCredentialId || stored.readdCredentialId || null;
+  try {
+    const login = await window.txCentral.webauthn.login(preferred ? { allowCredentialIds: [preferred] } : {});
+    setCentralSession(login);
+    const kekWrap = await window.txCentral.keys.kekFromPrf(login.prf, login.hkdfSalt);
+    login.prf.fill(0);
+    const identity = { credentialId: login.credentialId, hkdfSalt: login.hkdfSalt, rpId: login.rpId || registered?.rpId || stored.rpId };
+    state.vaultView = "central-busy";
+    state.vaultPending = { busy: "Unlocking" };
+    renderVault();
+    const out = await window.txCentral.ladder.run({ session: login.session, kekWrap, hasPrfWrap: login.hasPrfWrap, hasRecovery: login.hasRecovery }, centralUi);
+    if (out.abandoned) await clearSyncState();
+    state.vaultView = "central-busy";
+    state.vaultPending = { busy: "Unlocking" };
+    renderVault();
+    await settleCentralKey({ stored, login, kekWrap, out, identity, readd: true });
+    if (stored.credentialId && stored.credentialId !== identity.credentialId) {
+      void window.txCentral.webauthn.signalUnknownCredential(identity.rpId, stored.credentialId);
+    }
+  } catch (error) {
+    clearCentralSession();
+    throw error;
+  }
+}
+
+// The tail shared by the unlock and the re-add: the account handed VK (`out`); bind this store
+// to it. Same key → refresh the cached wrap and identity if anything changed. Different key (the
+// vault was started over elsewhere) → the old key is in the cached wrap: opened by the ceremony
+// that just ran when it is this credential's wrap, else — on a re-add, where the credential is
+// new — by one extra offline-style assertion with the OLD credential, still on the authenticator
+// → every record moves under the new key in rekeyVault's one transaction. Old key unobtainable →
+// the one dead end (plan §6.3): records kept, flagged unreadable, never wiped. A transaction that
+// throws leaves the store exactly as it was (all under the old key) and the error reaches the
+// card, so the user can try again.
+async function settleCentralKey({ stored, login, kekWrap, out, identity, readd = false }) {
+  const flagDeletes = readd ? [CENTRAL_REMOVED_KEY, CENTRAL_READD_CREDENTIAL_KEY] : [];
   if (await verifyMasterKey(out.vk)) {
     // The key that made this store. Refresh the cached wrap (and identity) if anything changed.
-    if (out.prfWrap !== stored.prfWrap || identity.credentialId !== stored.credentialId || identity.hkdfSalt !== stored.hkdfSalt || identity.rpId !== stored.rpId) {
-      await rekeyVault({ entries: null, key: null, metaPuts: centralMetaRows({ ...identity, prfWrap: out.prfWrap }) });
+    if (readd || out.prfWrap !== stored.prfWrap || identity.credentialId !== stored.credentialId || identity.hkdfSalt !== stored.hkdfSalt || identity.rpId !== stored.rpId) {
+      await rekeyVault({ entries: null, key: null, metaPuts: centralMetaRows({ ...identity, prfWrap: out.prfWrap }), metaDeletes: flagDeletes });
     }
-    await finishCentralUnlock(out.vk, { offline: false });
+    await finishCentralUnlock(out.vk, { offline: false, readd });
     return;
   }
 
-  // The account handed a different key (the vault was started over elsewhere,
-  // or this passkey was re-set-up). The old key is the cached wrap, which the
-  // passkey ceremony that just ran can open — if it is this credential's wrap.
+  // The account handed a different key: the vault was started over (abandon) or this passkey was
+  // re-set-up. Moving this device's blocks to the new key needs the OLD VK.
   let oldKey = null;
-  if (stored.prfWrap && stored.credentialId === login.credentialId) {
-    try {
+  try {
+    if (stored.prfWrap && stored.credentialId && stored.credentialId === login.credentialId) {
+      // Same credential, re-set-up (an ordinary unlock — no registration happened): the ceremony
+      // that just ran is this credential's, so its KEK opens the cached wrap. No second prompt.
       oldKey = await window.txCentral.keys.unwrapVK(stored.prfWrap, kekWrap, false);
       if (!(await verifyMasterKey(oldKey))) oldKey = null;
-    } catch {
-      oldKey = null;
+    } else if (readd && centralRescuedKey) {
+      // Re-add after an abandon: registering the new passkey EVICTED the old credential from this
+      // authenticator, so the old key can no longer be asserted. It was captured up front, by the
+      // "keep this device's notes" step before registration (plan §8).
+      oldKey = (await verifyMasterKey(centralRescuedKey)) ? centralRescuedKey : null;
     }
+  } catch (error) {
+    console.warn("[txtshell] the old key could not be opened", error?.name || "", error);
+    oldKey = null;
   }
+  await applyReKeyOrDeadEnd({ oldKey, out, identity, flagDeletes, readd });
+}
+
+// The tail of a different-key settle, shared by the ordinary unlock and the re-add. `oldKey` set
+// → re-key every record under the new key in one transaction (decrypt in memory first); null →
+// the one dead end (plan §6.3): nothing is re-keyed, the records are kept and will read as
+// unreadable under the new key until another device that can read them syncs them back. Never a
+// wipe. A transaction that throws writes nothing (all-or-nothing): the store stays entirely under
+// the old key, the in-memory copy is dropped, and the error reaches the caller.
+async function applyReKeyOrDeadEnd({ oldKey, out, identity, flagDeletes = [], readd = false }) {
   if (oldKey) {
-    // Re-key: decrypt everything under the old key in memory, then one transaction under the new one.
     state.vaultPending = { busy: "Moving your blocks to the account's new key" };
     renderVault();
     state.encryption.masterKey = oldKey;
     state.encryption.unlocked = true;
-    const outcome = await decryptAllEntriesIntoState();
-    void outcome;
-    const verify = await encryptPlaintext(ENC_VERIFY_PLAINTEXT, out.vk);
-    await rekeyVault({
-      entries: state.entries,
-      key: out.vk,
-      metaPuts: [...centralMetaRows({ ...identity, prfWrap: out.prfWrap }), [ENC_VERIFY_KEY, verify]],
-      metaDeletes: [SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY],
-    });
+    try {
+      await decryptAllEntriesIntoState();
+      const verify = await encryptPlaintext(ENC_VERIFY_PLAINTEXT, out.vk);
+      await rekeyVault({
+        entries: state.entries,
+        key: out.vk,
+        metaPuts: [...centralMetaRows({ ...identity, prfWrap: out.prfWrap }), [ENC_VERIFY_KEY, verify]],
+        metaDeletes: [SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY, ...flagDeletes],
+      });
+    } catch (error) {
+      state.encryption.masterKey = null;
+      state.encryption.unlocked = false;
+      state.entries = [];
+      state.unreadable = [];
+      throw error;
+    }
     state.encryption.masterKey = out.vk;
     state.central.firstJoin = state.entries.length > 0;
-    await finishCentralUnlock(out.vk, { offline: false, rekeyed: true });
-    // The re-keyed blocks go up (plan §6.3): the unlock's pull holds this until it has settled
-    // the generation (0 after an abandon), so the first push is "g0" → 204, or meets the
-    // first-join card if another device filled the new vault meanwhile.
+    await finishCentralUnlock(out.vk, { offline: false, rekeyed: true, readd });
     scheduleCloudSync();
     return;
   }
-  // The one dead end (plan §6.3): cached wrap gone and the server wrap gone. The
-  // records are kept, flagged unreadable, and carried in the blob; a device that
-  // can read them heals this one on its next push.
   const verify = await encryptPlaintext(ENC_VERIFY_PLAINTEXT, out.vk);
   await rekeyVault({
     entries: null,
     key: null,
     metaPuts: [...centralMetaRows({ ...identity, prfWrap: out.prfWrap }), [ENC_VERIFY_KEY, verify]],
-    metaDeletes: [SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY],
+    metaDeletes: [SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY, ...flagDeletes],
   });
-  await finishCentralUnlock(out.vk, { offline: false, deadEnd: true });
+  await finishCentralUnlock(out.vk, { offline: false, deadEnd: true, readd });
 }
 
-async function finishCentralUnlock(vk, { offline = false, rekeyed = false, deadEnd = false } = {}) {
+async function finishCentralUnlock(vk, { offline = false, rekeyed = false, deadEnd = false, readd = false } = {}) {
   state.encryption.masterKey = vk;
   state.encryption.unlocked = true;
+  const wasRemoved = state.central.removed === true;
+  if (readd) {
+    state.central.removed = false;
+    state.central.readdCredentialId = null;
+  }
+  state.central.unlockFailures = 0;
+  centralRescuedKey = null;
   const outcome = await decryptAllEntriesIntoState();
   state.vaultView = null;
   state.vaultPending = null;
@@ -7837,6 +8149,7 @@ async function finishCentralUnlock(vk, { offline = false, rekeyed = false, deadE
   let hint = outcomeText ? `Vault unlocked — ${outcomeText}` : "Vault unlocked";
   if (rekeyed) hint = `Vault unlocked — your blocks moved to the account's new key${outcomeText ? ` · ${outcomeText}` : ""}`;
   if (deadEnd && outcome.unreadable > 0) hint = `Vault unlocked — ${pluralCount(outcome.unreadable, "block")} on this browser can't be opened with the account's current key (kept; another device that reads them will sync them back)`;
+  if (readd) hint = `${wasRemoved ? "Device added back" : "Vault unlocked"} — ${rekeyed ? "your blocks moved to the account's new key" : (wasRemoved ? "your passkey unlocks it from now on" : "this device is set up again")}${deadEnd && outcome.unreadable > 0 ? ` · ${pluralCount(outcome.unreadable, "block")} on this browser can't be opened with the account's current key (kept; another device that reads them will sync them back)` : ""}`;
   composerHint.textContent = hint;
   render();
   entryInput.focus();
@@ -7880,8 +8193,9 @@ async function centralResume() {
   state.vaultView = "central-busy";
   state.vaultPending = { busy: "Signing in" };
   renderVault();
+  let stored = null;
   try {
-    const stored = await readCentralMeta();
+    stored = await readCentralMeta();
     const login = await window.txCentral.webauthn.login();
     setCentralSession(login);
     const kekWrap = await window.txCentral.keys.kekFromPrf(login.prf, login.hkdfSalt);
@@ -7914,7 +8228,11 @@ async function centralResume() {
     scheduleCloudSync();
     void beginPull({ quiet: true });
   } catch (error) {
+    // Told while unlocked: the row is set now, VK stays until the vault locks (plan §8 — nothing
+    // local is deleted or rewritten); the next lock screen is the removed card.
+    const told = await centralToldRemoved(error, stored).catch(() => false);
     centralFlowFailed(error, null);
+    if (told) composerHint.textContent = `${CENTRAL_REMOVED_SENTENCE} /lock to start.`;
   }
 }
 

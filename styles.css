@@ -1414,6 +1414,13 @@ kbd {
   outline: none;
 }
 
+/* The last resort on a lock card (Wipe): present, never prominent. */
+.vault-link.quiet {
+  margin-top: 22px;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
 .recovery-key {
   background: var(--bg);
   border: 1px dashed var(--line);
