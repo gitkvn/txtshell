@@ -3641,14 +3641,120 @@ async function mergeImportedEntries(items) {
     if (updated > 0) parts.push(`${updated} updated`);
     composerHint.textContent = `Imported ${parts.concat(extras).join(", ")}`;
   }
+  return { added, updated, recovered, kept, skipped };
 }
 
 function beginEncryptedImport(fileData) {
+  if (isPhraseWrappedExport(fileData)) {
+    void beginAccountBackupImport(fileData);
+    return;
+  }
   state.vaultPending = { importFileData: fileData };
-  // A Txtshell-account export carries the account's recovery wrap instead of a passphrase wrap: it
-  // opens with the 12 words, and no passphrase field or recovery-key toggle is shown (plan §9).
-  state.vaultView = isPhraseWrappedExport(fileData) ? "import-phrase" : "import-unlock";
+  state.vaultView = "import-unlock";
   renderVault();
+}
+
+// An account backup (plan §17.1). Its notes are under the account's own key, which only changes when
+// the account is started over — so signing in opens it with nothing to type. On the account already:
+// try the key in memory first and merge at once. Otherwise lead with "Sign in to your account"; the 12
+// words are the fallback (offline, no account) and the answer when the key no longer opens it.
+async function beginAccountBackupImport(file) {
+  if (isCentral() && state.encryption.unlocked && state.encryption.masterKey) {
+    const entries = await openImportWithKey(file, state.encryption.masterKey);
+    if (entries) {
+      const counts = await mergeImportedEntries(entries);
+      composerHint.textContent = backupAddedHint(counts);
+      return;
+    }
+    state.vaultPending = { importFileData: file, importDifferentWords: true };
+    state.vaultView = "import-phrase";
+    renderVault();
+    return;
+  }
+  state.vaultPending = { importFileData: file };
+  state.vaultView = "import-account";
+  renderVault();
+}
+
+// The backup's entries if `key` is the key it was made under (its verify token opens), else null.
+async function openImportWithKey(file, key) {
+  if (!key || !file?.verify || !file.iv || !file.ciphertext) return null;
+  try {
+    if ((await decryptCiphertext(file.verify, key)) !== ENC_VERIFY_PLAINTEXT) return null;
+  } catch {
+    return null;
+  }
+  return decryptImportPayload(file, key);
+}
+
+function backupAddedHint({ added = 0, updated = 0 } = {}, { signedIn = false } = {}) {
+  const n = added + updated;
+  const body = n > 0 ? `${pluralCount(n, "note")} from the backup added.` : "everything in the backup was already here.";
+  return signedIn ? `Signed in — ${body}` : body.charAt(0).toUpperCase() + body.slice(1);
+}
+
+function renderImportAccountCard() {
+  const file = state.vaultPending?.importFileData;
+  if (!file) {
+    exitVaultToNormal();
+    return;
+  }
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG_DOT}
+      <p class="vault-title">Import a backup</p>
+      <p class="vault-subtitle">This backup is from your Txtshell account.</p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="signin">Sign in to your account</button>
+      <p class="vault-subtitle" data-field="signin-note">Your notes open and keep syncing. Nothing new to remember.</p>
+      <button class="vault-link" type="button" data-action="words">Open it on this device only, with your 12 words</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  vaultOverlay.querySelector('[data-action="signin"]').addEventListener("click", () => {
+    if (navigator.onLine === false) {
+      errorLine.textContent = "Signing in needs a connection. You can still open it on this device with your 12 words.";
+      errorLine.hidden = false;
+      return;
+    }
+    // The backup waits in memory behind the sign-in; finishCentralJoin opens and merges it.
+    centralPendingImport = file;
+    state.vaultPending = null;
+    state.vaultView = "central-start";
+    renderVault();
+  });
+  vaultOverlay.querySelector('[data-action="words"]').addEventListener("click", () => {
+    state.vaultPending = { importFileData: file };
+    state.vaultView = "import-phrase";
+    renderVault();
+  });
+  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", () => {
+    centralPendingImport = null;
+    exitVaultToNormal();
+  });
+}
+
+// After a join with a backup waiting: open it with the account's key and merge it BEFORE the first
+// pull, so the pull meets it as local notes (the first-join card offers to keep both). If the key
+// doesn't open it — started over since, or another account — ask for the backup's own words; the
+// pull waits until that card is answered or cancelled.
+async function finishPendingImport() {
+  const file = centralPendingImport;
+  centralPendingImport = null;
+  if (!file) return;
+  const entries = await openImportWithKey(file, state.encryption.masterKey);
+  if (entries) {
+    const counts = await mergeImportedEntries(entries);
+    state.central.firstJoin = state.entries.length > 0;
+    composerHint.textContent = backupAddedHint(counts, { signedIn: true });
+    return;
+  }
+  await new Promise((resolve) => {
+    state.vaultPending = { importFileData: file, importDifferentWords: true, importDone: resolve };
+    state.vaultView = "import-phrase";
+    renderVault();
+  });
 }
 
 function isPhraseWrappedExport(file) {
@@ -4326,6 +4432,8 @@ function renderVault() {
     renderImportAdoptCard();
   } else if (view === "import-phrase") {
     renderImportPhraseCard();
+  } else if (view === "import-account") {
+    renderImportAccountCard();
   } else if (view === "import-phrase-passphrase") {
     renderSetupCard({
       title: "Choose a passphrase for this browser",
@@ -5147,7 +5255,9 @@ function renderImportPhraseCard() {
     <div class="vault-card">
       ${LOCK_ICON_SVG}
       <p class="vault-title">Import encrypted blocks</p>
-      <p class="vault-subtitle">This backup is from a Txtshell account. Enter the 12 recovery words you had when it was made.</p>
+      <p class="vault-subtitle" data-field="import-lead">${state.vaultPending?.importDifferentWords
+        ? "This backup was made with different words. Enter the 12 words you had when you made it."
+        : "This backup is from a Txtshell account. Enter the 12 recovery words you had when it was made."}</p>
       <p class="vault-error" hidden></p>
       ${phraseEntryHtml()}
       <button class="vault-button" type="button" data-action="submit">Import</button>
@@ -5183,7 +5293,11 @@ function renderImportPhraseCard() {
   };
   entry = bindPhraseEntry({ onChange: () => showError(""), onSubmit: submit });
   submitButton.addEventListener("click", submit);
-  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", exitVaultToNormal);
+  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", () => {
+    const done = state.vaultPending?.importDone;
+    exitVaultToNormal();
+    done?.();
+  });
   window.requestAnimationFrame(() => entry.focus());
 }
 
@@ -5210,8 +5324,12 @@ async function handleImportPhraseSubmit(entropy) {
   if (verifyPlain !== ENC_VERIFY_PLAINTEXT) throw new Error("wrong-key");
   const entries = await decryptImportPayload(file, masterKey);
   if (state.encryption.enabled) {
-    await mergeImportedEntries(entries);
+    const done = state.vaultPending?.importDone;
+    const counts = await mergeImportedEntries(entries);
+    if (done) state.central.firstJoin = state.entries.length > 0; // a join is waiting: its first pull offers to keep both
     exitVaultToNormal();
+    composerHint.textContent = backupAddedHint(counts, { signedIn: Boolean(done) });
+    done?.();
     return;
   }
   state.vaultPending = { importFileData: file, importMasterKey: masterKey, importEntries: entries, importPhraseKek: kek };
@@ -5336,6 +5454,13 @@ async function handleImportPlainMerge() {
 
 function exitVaultToNormal() {
   centralRescuedKey = null;
+  if (centralPendingImport && !isCentral()) {
+    state.vaultPending = { importFileData: centralPendingImport };
+    centralPendingImport = null;
+    state.vaultView = "import-account";
+    renderVault();
+    return;
+  }
   if (state.encryption.enabled && !state.encryption.unlocked) {
     state.vaultView = "unlock";
     renderVault();
@@ -7291,6 +7416,9 @@ let centralCardSettle = null;
 // the cached wrap under the old credential's KEK — must be read before that, or it is gone for
 // good (found 2026-10-11; plan §8). Memory only; dropped on unlock, cancel or lock.
 let centralRescuedKey = null;
+// An account backup waiting for a sign-in to finish (plan §17.1); the merge that follows the join.
+let centralPendingImport = null;
+let centralImportMerge = null;
 function settleCentralCard(value, error) {
   const settle = centralCardSettle;
   centralCardSettle = null;
@@ -7946,7 +8074,7 @@ async function centralJoin({ via, registered } = {}) {
   state.encryption.masterKey = out.vk;
   state.central.firstJoin = state.entries.length > 0; // the next pull meets the cloud on the first-join card
   finishCentralJoin(state.entries.length > 0 ? "Joined — checking the cloud for your other devices' blocks…" : "Joined.");
-  void beginPull({ quiet: true });
+  void (centralImportMerge || Promise.resolve()).then(() => beginPull({ quiet: true }));
 }
 
 function finishCentralJoin(hint) {
@@ -7961,6 +8089,7 @@ function finishCentralJoin(hint) {
   // Nothing to upload from an empty install: pushing an empty blob would only move the account's
   // generation (and race the first real push from another device).
   if (state.entries.length > 0 || state.unreadable.length > 0) scheduleCloudSync();
+  centralImportMerge = centralPendingImport ? finishPendingImport() : null;
 }
 
 // Asks for this browser's passphrase on a confirm card and verifies it against
