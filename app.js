@@ -114,14 +114,14 @@ const COMPOSER_PLACEHOLDER_HAS_BLOCKS = "Type a block, or / for commands. Cmd/Ct
 
 const SLASH_COMMANDS = [
   { name: "/about", description: "First-time user guide" },
-  { name: "/encrypt", description: "Set up vault encryption with a passphrase" },
+  { name: "/encrypt", description: "Encrypt your notes with a passphrase" },
   { name: "/encrypt change", description: "Change your encryption passphrase" },
   { name: "/encrypt off", description: "Remove encryption and restore plaintext" },
-  { name: "/wipe", description: "Delete all blocks and vault metadata" },
+  { name: "/wipe", description: "Delete every block on this device" },
   { name: "/export", description: "Download an encrypted backup of your blocks" },
   { name: "/export plain", description: "Download an unencrypted plaintext backup" },
   { name: "/import", description: "Restore blocks from a JSON export" },
-  { name: "/lock", description: "Lock the vault" },
+  { name: "/lock", description: "Lock your notes" },
   { name: "/pin", description: "Show only pinned blocks" },
   { name: "/q", description: "Open the full shortcut reference" },
   { name: "/re", description: "Reopen your most recent block" },
@@ -136,11 +136,11 @@ const SLASH_COMMANDS = [
   { name: "/sync setup", description: "Set the sync Worker URL and auth token" },
   { name: "/port", description: "Set up this browser using pairing data from another browser" },
   { name: "/pull", description: "Fetch the latest blocks from cloud" },
-  { name: "/account", description: "Txtshell account: sign in with a passkey, or sign up" },
-  { name: "/account devices", description: "Passkeys on your account; remove one, rotate the phrase, sign out" },
-  { name: "/account phrase", description: "Get a new recovery phrase (the old one stops working)" },
-  { name: "/account signout", description: "End this device's account session; blocks stay here" },
-  { name: "/account leave", description: "Turn this browser back into a passphrase vault with the same blocks" },
+  { name: "/account", description: "Txtshell sync: sign in, or set it up on this device" },
+  { name: "/account devices", description: "Devices on your account; remove one" },
+  { name: "/account phrase", description: "Get new 12 words (the current ones stop working)" },
+  { name: "/account signout", description: "Sign out and lock this device; blocks stay here" },
+  { name: "/account leave", description: "Stop syncing this device; keep its blocks under a passphrase" },
   { name: "/inbox", description: "Triage captures synced from your phone" },
   { name: "/font", description: "Set note font size in px (11–24, default 14); /font reset restores default" },
   { name: "/sym", description: "Chemistry & math symbol palette (₂ → Δ ²⁺); ;; toggles it anywhere" },
@@ -190,6 +190,8 @@ const state = {
     readdCredentialId: null,
     // Failed unlock ceremonies since the vault locked; two promote "use your 12 words" to a button.
     unlockFailures: 0,
+    // The account's address, from the last sign-in (plan §17.3). Memory only, like the session.
+    email: null,
   },
   // Records in IndexedDB that the current key cannot open (see
   // decryptAllEntriesIntoState). Kept out of `entries` so they are never
@@ -1724,6 +1726,7 @@ function formatTimestamp(value) {
 async function initialize() {
   try {
     state.db = await openDatabase();
+    void refreshSyncDoor({ probe: true });
     const saltPassBase64 = await getMeta(ENC_SALT_PASS_KEY);
     const encMode = await getMeta(ENC_MODE_KEY);
     state.encryption.mode = encMode === "central" ? "central" : "passphrase";
@@ -3401,7 +3404,7 @@ function showHint(id, message) {
 
 async function exportEntries({ plain = false } = {}) {
   if (state.encryption.enabled && !state.encryption.unlocked) {
-    composerHint.textContent = "Unlock your vault to export.";
+    composerHint.textContent = "Unlock your notes to export.";
     return;
   }
 
@@ -3437,7 +3440,7 @@ async function exportEntries({ plain = false } = {}) {
       // The in-memory session key is non-extractable, so an encrypted export is
       // impossible without the stored wrapped-key blobs — but the blocks are
       // readable, so a deliberate plaintext export must always remain available.
-      composerHint.textContent = "Vault metadata unavailable — run /export plain to save an unencrypted copy.";
+      composerHint.textContent = "This device's encryption settings are missing — run /export plain to save an unencrypted copy.";
       return;
     }
     // Recovery metadata is optional: a /port-paired browser wraps the master key
@@ -4304,6 +4307,7 @@ function deleteEntryRecords(ids) {
 }
 
 function updateLockButton() {
+  renderSyncIndicator();
   if (!lockButton) {
     return;
   }
@@ -4315,8 +4319,8 @@ function updateLockButton() {
   lockButton.hidden = false;
   const locked = !state.encryption.unlocked;
   lockButton.dataset.state = locked ? "locked" : "unlocked";
-  lockButton.setAttribute("aria-label", locked ? "Vault locked" : "Lock vault");
-  lockButton.setAttribute("title", locked ? "Vault locked" : "Lock vault");
+  lockButton.setAttribute("aria-label", locked ? "Your notes are locked" : "Lock your notes");
+  lockButton.setAttribute("title", locked ? "Your notes are locked" : "Lock your notes");
   const shackle = lockButton.querySelector(".lock-shackle");
   if (shackle) {
     shackle.setAttribute(
@@ -4359,7 +4363,7 @@ function lockVault() {
   readySignalSent = false; // next unlock re-announces readiness so the extension drains its queue
   renderVault();
   updateLockButton();
-  composerHint.textContent = "Vault locked";
+  composerHint.textContent = "Your notes are locked";
   render();
 }
 
@@ -4438,7 +4442,7 @@ function renderVault() {
     renderSetupCard({
       title: "Choose a passphrase for this browser",
       subtitle: "The blocks stay encrypted with your account's key; this passphrase unlocks them on this browser. Joining your account from here later needs no re-encryption.",
-      buttonText: "Set up vault",
+      buttonText: "Set up encryption",
       skipRecovery: true,
       onSubmit: handleImportPhraseAdoptSubmit,
       onCancel: exitVaultToNormal,
@@ -4494,6 +4498,10 @@ function renderVault() {
     renderCentralAbandonCard();
   } else if (view === "central-passphrase") {
     renderCentralPassphraseCard();
+  } else if (view === "central-account") {
+    renderCentralAccountCard();
+  } else if (view === "central-new-words") {
+    renderCentralNewWordsCard();
   } else if (view === "central-devices") {
     void renderCentralDevicesCard();
   } else if (view === "central-leave") {
@@ -4704,7 +4712,7 @@ async function renderUnlockCard(isRecovery) {
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG}
-      <p class="vault-title">Vault locked</p>
+      <p class="vault-title">Your notes are locked</p>
       <p class="vault-subtitle">${escapeHtml(subtitle)}</p>
       <p class="vault-error" hidden></p>
       <input class="vault-input" data-field="pass" type="${isRecovery ? "text" : "password"}" placeholder="${escapeHtml(placeholder)}" autocomplete="off" />
@@ -4788,7 +4796,7 @@ function renderUnlockCardLocked(lockout) {
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG}
-      <p class="vault-title">Vault locked</p>
+      <p class="vault-title">Your notes are locked</p>
       <p class="vault-subtitle">Too many failed attempts.</p>
       <input class="vault-input" type="password" placeholder="Passphrase" autocomplete="off" disabled />
       <p class="vault-subtitle" data-field="countdown">${escapeHtml(label())}</p>
@@ -4837,7 +4845,7 @@ function renderWipeCard(isRecovery) {
     : "";
   const warning = central
     ? "This deletes every block and your account's keys from this browser only. Your account and your other devices keep everything that has synced; anything not yet synced is lost. This cannot be undone."
-    : "This will permanently delete all your blocks and vault metadata from this browser. This cannot be undone.";
+    : "This will permanently delete all your blocks and encryption settings from this browser. This cannot be undone.";
 
   vaultOverlay.innerHTML = `
     <div class="vault-card">
@@ -4848,7 +4856,7 @@ function renderWipeCard(isRecovery) {
       ${authFieldHtml}
       <input class="vault-input" data-field="confirm" type="text" placeholder="${central ? `Type: ${WIPE_CONFIRM_PHRASE_CENTRAL}` : "Type DELETE EVERYTHING"}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
       <button class="vault-button danger" type="button" data-action="submit" disabled>Wipe everything</button>
-      ${central ? `<button class="vault-button secondary" type="button" data-action="passkey">Confirm with passkey instead</button>` : ""}
+      ${central ? `<button class="vault-button secondary" type="button" data-action="passkey">${escapeHtml(platformOr((n) => `Confirm with ${n} instead`, "Confirm by signing in instead"))}</button>` : ""}
       ${toggleHtml}
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
     </div>
@@ -4887,11 +4895,11 @@ function renderWipeCard(isRecovery) {
       const message = error?.message === "locked-out"
         ? "Too many attempts. Use the recovery key, or wait."
         : (error?.message === "wrong-key" || error?.message === "missing-meta"
-          ? (viaPasskey ? "Couldn't confirm with your passkey — type the sentence instead." : "Couldn't verify — passphrase or recovery key may be wrong")
-          : (viaPasskey ? "Couldn't confirm with your passkey — type the sentence instead." : "Something went wrong. Try again."));
+          ? (viaPasskey ? "Couldn't confirm — type the sentence instead." : "Couldn't verify — passphrase or recovery key may be wrong")
+          : (viaPasskey ? "Couldn't confirm — type the sentence instead." : "Something went wrong. Try again."));
       showError(message);
       submitButton.textContent = "Wipe everything";
-      if (passkeyButton) { passkeyButton.textContent = "Confirm with passkey instead"; passkeyButton.disabled = false; }
+      if (passkeyButton) { passkeyButton.textContent = platformOr((n) => `Confirm with ${n} instead`, "Confirm by signing in instead"); passkeyButton.disabled = false; }
       updateEnabled();
       if (passInput) {
         passInput.select();
@@ -5024,7 +5032,7 @@ async function performWipe() {
   state.entries = [];
   state.unreadable = [];
   state.encryption = { enabled: false, unlocked: false, masterKey: null, mode: "passphrase" };
-  state.central = { session: null, userId: null, credentialId: null, firstJoin: false, removed: false, readdCredentialId: null, unlockFailures: 0 };
+  state.central = { session: null, userId: null, credentialId: null, firstJoin: false, removed: false, readdCredentialId: null, unlockFailures: 0, email: null };
   state.vaultView = null;
   state.vaultPending = null;
   state.editingEntryId = null;
@@ -5358,12 +5366,12 @@ function renderImportAdoptCard() {
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG_DOT}
-      <p class="vault-title">Set up vault on this browser?</p>
+      <p class="vault-title">Keep these notes encrypted on this browser?</p>
       <p class="vault-subtitle">${fromAccount
         ? "This file is from a Txtshell account. Keep its blocks encrypted on this browser? You'll choose a passphrase for this browser next."
-        : "This file is from an encrypted Txtshell vault. Use it to set up encryption on this browser too?"}</p>
+        : "This file is from an encrypted Txtshell backup. Use it to set up encryption on this browser too?"}</p>
       <p class="vault-error" hidden></p>
-      <button class="vault-button" type="button" data-action="setup">Set up vault</button>
+      <button class="vault-button" type="button" data-action="setup">Set up encryption</button>
       <button class="vault-button secondary" type="button" data-action="plain">Just import blocks (no encryption)</button>
     </div>
   `;
@@ -5438,7 +5446,7 @@ async function handleImportAdoptVault() {
   state.vaultView = null;
   state.vaultPending = null;
   renderVault();
-  composerHint.textContent = "Vault set up — blocks imported";
+  composerHint.textContent = "Encryption set up — blocks imported";
 }
 
 async function handleImportPlainMerge() {
@@ -5601,7 +5609,7 @@ async function handleUnlockSubmit(value, isRecovery) {
   renderVault();
   updateLockButton();
   const outcomeText = describeUnlockOutcome(outcome);
-  composerHint.textContent = outcomeText ? `Vault unlocked — ${outcomeText}` : "Vault unlocked";
+  composerHint.textContent = outcomeText ? `Unlocked — ${outcomeText}` : "Unlocked";
   render();
   entryInput.focus();
   signalReady();
@@ -5779,16 +5787,17 @@ const SYNC_STATUS_LABELS = {
   "push-blocked": { short: "Sync: waiting for connection", full: "Saved on this device — will sync when you're back online." },
   "push-encrypt": { short: "Sync: encrypt error", full: "Sync failed — couldn't encrypt blocks" },
   "push-server": { short: "Sync: server error", full: "Sync failed — Worker rejected the upload" },
-  "push-too-large": { short: "Sync: vault too large", full: "Sync failed — the vault exceeds the Worker's size limit" },
+  "push-too-large": { short: "Sync: too large", full: "Sync failed — your notes exceed the Worker's size limit" },
   "pull-auth": { short: "Pull: check token", full: "Pull failed — auth rejected, check your token" },
   "pull-blocked": { short: "Pull: can't reach cloud", full: "Pull failed — can't reach cloud (offline or blocked)" },
   "pull-decrypt": { short: "Pull: decrypt error", full: "Pull failed — couldn't decrypt cloud blocks" },
   "pull-key-mismatch": { short: "Pull: key mismatch", full: "Pull failed — cloud copy doesn't match this device's key" },
   // Txtshell account only. A 401 is "session gone" (expired, signed out elsewhere,
   // revoked), never "check your token"; saves continue, pushes wait for a sign-in.
-  "central-signin": { short: "Sync: sign in to resume", full: "Sync paused — sign in with your passkey to resume (/account)" },
-  "central-setup": { short: "Sync: finish setup", full: "Account setup incomplete — run /account" },
-  "central-offline": { short: "Sync: offline", full: "Unlocked with your passkey while offline — sign in to sync (/account)" },
+  "central-signin": { short: "Sync: sign in to resume", full: "Sync is paused — sign in to continue." },
+  "central-setup": { short: "Sync: finish setup", full: "Save your 12 words to finish setting up." },
+  "central-removed": { short: "Sync: device removed", full: "This device was removed from your account." },
+  "central-offline": { short: "Sync: offline", full: "You're offline. Your notes are saved here and will sync when you're back." },
 };
 
 // Drives the persistent ambient sync indicator in the footer.
@@ -5807,9 +5816,46 @@ let syncIndicatorState = "idle"; // "idle" | "syncing" | "ok" | "failed"
 let lastFailureReason = null;
 // The failure reasons a person acts on by signing in — the indicator becomes a button that runs
 // the same path as typing /account, and the toast/tooltip say so (plan §8, decision 2026-10-09).
-const CENTRAL_ACTION_REASONS = ["central-signin", "central-offline", "central-setup"];
+const CENTRAL_ACTION_REASONS = ["central-signin", "central-offline", "central-setup", "central-removed"];
 const CENTRAL_ACTION_HINT = "click here, or type /account";
 let syncIndicatorActionBound = false;
+// The last push or pull that reached the server and succeeded, this session (plan §17.3).
+let lastSyncedAt = 0;
+function markSynced() {
+  lastSyncedAt = Date.now();
+}
+function lastSyncedText(now = Date.now()) {
+  if (!lastSyncedAt) return "Not synced yet on this device";
+  const seconds = Math.max(0, Math.round((now - lastSyncedAt) / 1000));
+  if (seconds < 60) return "Last synced just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `Last synced ${pluralCount(minutes, "minute")} ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `Last synced ${pluralCount(hours, "hour")} ago`;
+  if (hours < 48) return "Last synced yesterday";
+  return `Last synced ${new Date(lastSyncedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+}
+// The door for a browser with no account (plan §17.3): shown only where the account service answers
+// on this origin, and never on an install that syncs through its own (self-hosted) Worker.
+let accountServiceAvailable = false;
+let selfHostedSyncConfigured = false;
+async function refreshSyncDoor({ probe = false } = {}) {
+  if (probe) {
+    try {
+      const response = await fetch(`${window.location.origin}/v1/health`, { cache: "no-store" });
+      const body = response.ok ? await response.json().catch(() => null) : null;
+      accountServiceAvailable = centralAvailable() && Boolean(body && body.ok === true);
+    } catch {
+      accountServiceAvailable = false;
+    }
+  }
+  try {
+    selfHostedSyncConfigured = !isCentral() && Boolean(await getMeta(SYNC_WORKER_URL_KEY));
+  } catch {
+    selfHostedSyncConfigured = false;
+  }
+  renderSyncIndicator();
+}
 
 function setSyncStatus(status) {
   if (status === "syncing") {
@@ -5854,44 +5900,61 @@ function syncStatusFull(reason) {
 function renderSyncIndicator() {
   if (!syncIndicator) return;
   const labelEl = syncIndicator.querySelector(".sync-label");
-  const state = syncIndicatorState;
+  const st = syncIndicatorState;
+  const locked = isVaultLocked();
+  const central = isCentral();
+  // A browser with no account and no self-hosted sync, where the service answers: an invitation.
+  const door = !central && !locked && accountServiceAvailable && !selfHostedSyncConfigured;
+  const accountReason = st === "failed" && CENTRAL_ACTION_REASONS.includes(lastFailureReason);
 
-  syncIndicator.classList.toggle("is-syncing", state === "syncing");
-  syncIndicator.classList.toggle("is-ok", state === "ok");
-  syncIndicator.classList.toggle("is-failed", state === "failed");
-  syncIndicator.hidden = state === "idle";
+  syncIndicator.classList.toggle("is-door", door);
+  syncIndicator.classList.toggle("is-syncing", !door && st === "syncing");
+  syncIndicator.classList.toggle("is-ok", !door && st === "ok");
+  syncIndicator.classList.toggle("is-failed", !door && st === "failed");
+  // In account mode the indicator is always there while unlocked: it is the door to the account card.
+  syncIndicator.hidden = locked || (!door && !central && st === "idle");
 
-  const actionable = state === "failed" && CENTRAL_ACTION_REASONS.includes(lastFailureReason);
+  const actionable = !locked && (door || central);
   syncIndicator.classList.toggle("is-actionable", actionable);
   if (actionable) {
-    // A real control: focusable, Enter/Space, and one bound click that runs /account's own code.
     syncIndicator.setAttribute("role", "button");
     syncIndicator.setAttribute("tabindex", "0");
     if (!syncIndicatorActionBound) {
       syncIndicatorActionBound = true;
-      const act = () => { if (syncIndicatorState === "failed" && CENTRAL_ACTION_REASONS.includes(lastFailureReason)) beginAccount(); };
+      const act = () => { if (syncIndicator.classList.contains("is-actionable")) beginAccount(); };
       syncIndicator.addEventListener("click", act);
       syncIndicator.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); act(); } });
     }
   } else {
-    syncIndicator.classList.remove("is-actionable");
     syncIndicator.setAttribute("role", "status");
     syncIndicator.removeAttribute("tabindex");
   }
-  if (state === "failed") {
+
+  if (door) {
+    labelEl.textContent = "Sync";
+    const tip = `Sync your notes across your devices — ${CENTRAL_ACTION_HINT}`;
+    syncIndicator.setAttribute("data-tooltip", tip);
+    syncIndicator.setAttribute("aria-label", tip);
+  } else if (st === "failed") {
     const label = SYNC_STATUS_LABELS[lastFailureReason] || SYNC_STATUS_LABELS["push-server"];
-    const full = actionable ? `${syncStatusFull(lastFailureReason)} — ${CENTRAL_ACTION_HINT}` : syncStatusFull(lastFailureReason);
+    // The "click here" hint where clicking is the fix (the account reasons).
+    const full = accountReason ? `${syncStatusFull(lastFailureReason)} — ${CENTRAL_ACTION_HINT}` : syncStatusFull(lastFailureReason);
     labelEl.textContent = label.short;
     syncIndicator.setAttribute("data-tooltip", full);
     syncIndicator.setAttribute("aria-label", full);
-  } else if (state === "syncing") {
+  } else if (st === "syncing") {
     labelEl.textContent = "Syncing…";
     syncIndicator.removeAttribute("data-tooltip");
     syncIndicator.setAttribute("aria-label", "Syncing");
-  } else if (state === "ok") {
+  } else {
     labelEl.textContent = ""; // passive: dot only
-    syncIndicator.removeAttribute("data-tooltip");
-    syncIndicator.setAttribute("aria-label", "Synced");
+    if (central) {
+      syncIndicator.setAttribute("data-tooltip", st === "ok" ? "Sync is on — click for your account" : "Txtshell sync — click for your account");
+      syncIndicator.setAttribute("aria-label", st === "ok" ? "Sync is on — open your account" : "Txtshell sync — open your account");
+    } else {
+      syncIndicator.removeAttribute("data-tooltip");
+      syncIndicator.setAttribute("aria-label", "Synced");
+    }
   }
 }
 
@@ -6078,6 +6141,7 @@ async function flushCloudSync() {
       setSyncStatus("push-server");
       return { status: "error", reason: "http-" + response.status };
     } else {
+      markSynced();
       setSyncStatus("ok");
       cloudSyncRetryAfterUsed = false;
       const newGeneration = generationFromResponse(response);
@@ -6113,8 +6177,8 @@ function describeSyncError(reason) {
       return "network error";
     case "http-413":
       return state.unreadable.length > 0
-        ? `vault exceeds the Worker's size limit (${pluralCount(state.unreadable.length, "unreadable block")} included)`
-        : "vault exceeds the Worker's size limit";
+        ? `your notes exceed the Worker's size limit (${pluralCount(state.unreadable.length, "unreadable block")} included)`
+        : "your notes exceed the Worker's size limit";
     default:
       if (typeof reason === "string" && reason.startsWith("http-")) {
         return `server error (${reason.slice(5)})`;
@@ -6193,6 +6257,7 @@ async function handleSyncSetupSubmit(workerUrl, authToken) {
     [SYNC_WORKER_URL_KEY, workerUrl],
     [SYNC_AUTH_TOKEN_KEY, authToken],
   ]);
+  void refreshSyncDoor();
   state.vaultView = null;
   state.vaultPending = null;
   renderVault();
@@ -6721,13 +6786,14 @@ function newestEntryStamp(entries) {
 // either no-ops ("up to date") or raises the conflict card.
 async function beginPull({ quiet = false } = {}) {
   if (!(state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey)) {
-    if (!quiet) composerHint.textContent = "Unlock your vault to pull.";
+    if (!quiet) composerHint.textContent = "Unlock your notes to pull.";
     return;
   }
   if (!quiet) composerHint.textContent = "Pulling…";
   pullHoldDepth++;
   try {
     const result = await fetchAndDecryptBlocks();
+    markSynced();
     setSyncStatus("ok"); // reachable + decrypted: the sync channel is healthy
     if (result.upToDate) {
       state.central.firstJoin = false;
@@ -6777,6 +6843,7 @@ async function autoPullOnUnlock() {
   pullHoldDepth++;
   try {
     const result = await fetchAndDecryptBlocks();
+    markSynced();
     setSyncStatus("ok"); // reachable + decrypted: the sync channel is healthy
     if (result.upToDate) {
       state.central.firstJoin = false;
@@ -6826,7 +6893,7 @@ function pullErrorMessage(error) {
     case "decrypt":
       return "Couldn't decrypt cloud blocks.";
     case "locked":
-      return "Unlock your vault to pull.";
+      return "Unlock your notes to pull.";
     case "malformed":
       return "Cloud data decrypted but looks corrupt — the server may be misbehaving.";
     case "too-large":
@@ -7383,6 +7450,7 @@ async function centralToldRemoved(error, stored) {
     await writeCentralFlags([[CENTRAL_REMOVED_KEY, new Date().toISOString()]]);
     state.central.removed = true;
   }
+  if (state.encryption.unlocked) setSyncStatus("central-removed"); // the indicator opens the removed card
   return true;
 }
 
@@ -7392,12 +7460,14 @@ function setCentralSession(login) {
   state.central.session = login.session;
   state.central.userId = login.userId;
   state.central.credentialId = login.credentialId;
+  if (login.email) state.central.email = login.email;
 }
 
 function clearCentralSession() {
   state.central.session = null;
   state.central.userId = null;
   state.central.credentialId = null;
+  state.central.email = null;
 }
 
 // A 401 from any account request: the session is gone. Local state untouched.
@@ -7467,7 +7537,7 @@ const FORCED_SAVE_COPY = {
 
 function forcedSaveHeading(kind) {
   if (kind === "rotate") return { title: "Your new recovery words", lead: "Your previous words no longer work." };
-  if (kind === "abandon") return { title: "Your new recovery words", lead: "This is a new vault — the old words no longer open it." };
+  if (kind === "abandon") return { title: "Your new recovery words", lead: "Your account was started over — the old words no longer open it." };
   return { title: "Your recovery words", lead: "" };
 }
 
@@ -7655,12 +7725,12 @@ function renderCentralRung2Card() {
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG}
-      <p class="vault-title">Enter your recovery phrase</p>
-      <p class="vault-subtitle">This passkey is new to your account. Your 12-word recovery phrase sets it up — once; after this, the passkey alone unlocks.</p>
+      <p class="vault-title">Enter your 12 words</p>
+      <p class="vault-subtitle">${escapeHtml(platformOr((n) => `This device is new to your account. Your 12 words set it up once; after that, ${n} is enough.`, "This device is new to your account. Your 12 words set it up once; after that, signing in is enough."))}</p>
       <p class="vault-error" ${errorText ? "" : "hidden"}>${escapeHtml(errorText)}</p>
       ${phraseEntryHtml()}
-      <button class="vault-button" type="button" data-action="submit">Unlock with phrase</button>
-      <button class="vault-link" type="button" data-action="fork">Don't have your phrase?</button>
+      <button class="vault-button" type="button" data-action="submit">Continue</button>
+      <button class="vault-link" type="button" data-action="fork">Don't have your 12 words?</button>
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
     </div>
   `;
@@ -7670,7 +7740,7 @@ function renderCentralRung2Card() {
     try {
       const parsed = await window.txCentral.phrase.toEntropy(entry.getText()); // checksum: most typos die here, no network
       state.vaultView = "central-busy";
-      state.vaultPending = { ...(state.vaultPending || {}), busy: "Checking your phrase" };
+      state.vaultPending = { ...(state.vaultPending || {}), busy: "Checking your 12 words" };
       renderVault();
       settleCentralCard({ kind: "phrase", entropy: parsed.entropy });
     } catch (error) {
@@ -7695,8 +7765,8 @@ function renderCentralAbandonCard() {
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG}
-      <p class="vault-title">Start this account's vault over?</p>
-      <p class="wipe-warning">Without the phrase, nothing can open the vault this account holds now. Starting over deletes the cloud copy and every device's access to it; each device keeps whatever it has locally and re-joins with the new phrase. Type the account's email to confirm.</p>
+      <p class="vault-title">Start your account over?</p>
+      <p class="wipe-warning">Without your 12 words, nothing can open what your account holds now. Starting over deletes the copy in your account and every device's access to it; each device keeps the notes it has and joins again with new 12 words. Type your account's email to confirm.</p>
       <p class="vault-error" hidden></p>
       <input class="vault-input" data-field="email" type="email" placeholder="you@example.com" autocomplete="off" spellcheck="false" />
       <button class="vault-button danger" type="button" data-action="submit">Start over</button>
@@ -7712,7 +7782,7 @@ function renderCentralAbandonCard() {
       await window.txCentral.ladder.abandon(state.central.session, input.value.trim());
       await clearSyncState();
       state.vaultView = "central-busy";
-      state.vaultPending = { ...(state.vaultPending || {}), busy: "Starting a new vault" };
+      state.vaultPending = { ...(state.vaultPending || {}), busy: "Starting over" };
       renderVault();
       settleCentralCard({ kind: "abandoned" });
     } catch (error) {
@@ -7738,7 +7808,7 @@ function renderCentralStartCard() {
     <div class="vault-card">
       ${LOCK_ICON_SVG}
       <p class="vault-title">${state.central.removed ? "Add this device again" : "Use your 12 words"}</p>
-      <p class="vault-subtitle">Enter your email for a code. This device then gets a new passkey, and your 12 words set it up — once. Your notes stay on this device.</p>
+      <p class="vault-subtitle">${escapeHtml(platformOr((n) => `Enter your email for a code. Then set up ${n} again, and your 12 words add this device — once. Your notes stay on this device.`, "Enter your email for a code. Then set up this device again, and your 12 words add it — once. Your notes stay on this device."))}</p>
       <p class="vault-error" hidden></p>
       <input class="vault-input" data-field="email" type="email" placeholder="you@example.com" autocomplete="email" spellcheck="false" />
       <button class="vault-button" type="button" data-action="email">Send a code</button>
@@ -7829,10 +7899,10 @@ function renderCentralCodeCard() {
     <div class="vault-card">
       ${LOCK_ICON_SVG_DOT}
       <p class="vault-title">Check your email</p>
-      <p class="vault-subtitle">Enter the 6-digit code sent to ${escapeHtml(pending.email || "")}. Then you'll set up ${escapeHtml(passkeyPlatformName() || "a passkey")} for this browser.</p>
+      <p class="vault-subtitle">Enter the 6-digit code sent to ${escapeHtml(pending.email || "")}. Then you'll set up ${escapeHtml(passkeyPlatformName() || "sign-in")} for this browser.</p>
       <p class="vault-error" hidden></p>
       <input class="vault-input" data-field="code" type="text" inputmode="numeric" placeholder="6-digit code" autocomplete="one-time-code" spellcheck="false" />
-      <button class="vault-button" type="button" data-action="submit">${escapeHtml(passkeyPlatformName() ? `Set up ${passkeyPlatformName()}` : "Set up your passkey")}</button>
+      <button class="vault-button" type="button" data-action="submit">${escapeHtml(passkeyPlatformName() ? `Set up ${passkeyPlatformName()}` : "Set up sign-in")}</button>
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
     </div>
   `;
@@ -7847,7 +7917,7 @@ function renderCentralCodeCard() {
     try {
       const { signupToken } = await window.txCentral.webauthn.verifyEmail(pending.email, code);
       state.vaultView = "central-busy";
-      state.vaultPending = { ...pending, busy: `Setting up ${passkeyPlatformName() || "your passkey"}` };
+      state.vaultPending = { ...pending, busy: `Setting up ${passkeyPlatformName() || "sign-in"}` };
       renderVault();
       const registered = await window.txCentral.webauthn.register(signupToken);
       if (centralLocked()) {
@@ -7892,7 +7962,7 @@ function renderCentralRegisteredCard() {
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG_DOT}
-      <p class="vault-title">${escapeHtml(passkeyPlatformName() ? `${passkeyPlatformName()} is set up.` : "Your passkey is set up.")}</p>
+      <p class="vault-title">${escapeHtml(passkeyPlatformName() ? `${passkeyPlatformName()} is set up.` : "Sign-in is set up.")}</p>
       <p class="vault-subtitle">Tap to continue.</p>
       <p class="vault-error" hidden></p>
       <button class="vault-button" type="button" data-action="signin">Continue</button>
@@ -7916,10 +7986,10 @@ function renderCentralHasPasskeyCard() {
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG_DOT}
-      <p class="vault-title">This device already has a passkey for this account</p>
+      <p class="vault-title">This device is already set up for your account</p>
       <p class="vault-subtitle">Sign in with it — nothing else to set up.</p>
       <p class="vault-error" hidden></p>
-      <button class="vault-button" type="button" data-action="signin">Sign in with passkey</button>
+      <button class="vault-button" type="button" data-action="signin">${escapeHtml(platformOr((n) => `Sign in with ${n}`, "Sign in"))}</button>
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
     </div>
   `;
@@ -7939,14 +8009,14 @@ function renderCentralHasPasskeyCard() {
 // One sentence for a person, per failure; the technical name goes to the console.
 function centralFailureMessage(error) {
   if (error?.code === "unknown-credential") return CENTRAL_REMOVED_SENTENCE;
-  if (error?.code === "no-prf") return "This passkey can't protect your notes in this browser. Try another browser, or sign in with a different passkey.";
+  if (error?.code === "no-prf") return platformOr((n) => `This browser can't lock your notes with ${n}. Try an up-to-date Safari, Chrome or Edge.`, "This browser can't lock your notes with this sign-in. Try an up-to-date Safari, Chrome or Edge.");
   if (error?.status === 429 || error?.code === "rate-limited") return "Too many tries — wait a minute and try again.";
   switch (error?.name) {
-    case "InvalidStateError": return "This device already has a passkey for this account. Use \"Sign in with passkey\" instead.";
-    case "NotAllowedError": return "The passkey step didn't finish — the prompt was closed, or the page lost focus. Click the page, then try again.";
-    case "AbortError": return "The passkey step was interrupted. Try again.";
+    case "InvalidStateError": return "This device is already set up for your account. Sign in instead.";
+    case "NotAllowedError": return `${passkeyPlatformName() || "Signing in"} didn't finish — the prompt was closed, or the page lost focus. Click the page, then try again.`;
+    case "AbortError": return `${passkeyPlatformName() || "Signing in"} was interrupted. Try again.`;
     case "SecurityError": return "Something's off with this page's address — try opening txtshell.com directly.";
-    case "NotSupportedError": return "This browser can't use passkeys here. Try an up-to-date Safari, Chrome or Edge.";
+    case "NotSupportedError": return "This browser can't sign in here. Try an up-to-date Safari, Chrome or Edge.";
     case "TypeError": return "Can't reach Txtshell right now. Check your connection and try again.";
     default: break;
   }
@@ -7999,12 +8069,12 @@ async function centralJoin({ via, registered } = {}) {
   if (!login.hasRecovery && hadVault) {
     // ADOPT. The passphrase gives an extractable handle of the master key so it can be wrapped.
     const extractable = await centralAskPassphrase({
-      title: "Move this browser's vault to your account",
-      subtitle: "Enter this browser's passphrase. Your blocks keep their key — nothing is re-encrypted — and from now on your passkey unlocks them.",
+      title: "Move this browser's notes to your account",
+      subtitle: platformOr((n) => `Enter this browser's passphrase. Your blocks keep their encryption — nothing is redone — and from now on ${n} unlocks them.`, "Enter this browser's passphrase. Your blocks keep their encryption — nothing is redone — and from now on signing in unlocks them."),
       buttonText: "Continue",
     }, { extractable: true });
     state.vaultView = "central-busy";
-    state.vaultPending = { ...(state.vaultPending || {}), busy: "Setting up your account's vault" };
+    state.vaultPending = { ...(state.vaultPending || {}), busy: "Setting up your account" };
     renderVault();
     const out = await window.txCentral.ladder.bootstrap({ session: login.session, kekWrap, vk: extractable }, centralUi);
     if (out) {
@@ -8017,7 +8087,7 @@ async function centralJoin({ via, registered } = {}) {
       state.encryption.mode = "central";
       state.encryption.masterKey = out.vk;
       state.central.firstJoin = false;
-      finishCentralJoin("Vault moved to your account — your passkey unlocks it from now on.");
+      finishCentralJoin(platformOr((n) => `Your notes are now in your account — ${n} unlocks them from now on.`, "Your notes are now in your account — signing in unlocks them from now on."));
       return;
     }
     // Raced: another device bootstrapped first. Fall through with the account's vault.
@@ -8103,6 +8173,7 @@ function finishCentralJoin(hint) {
   // generation (and race the first real push from another device).
   if (state.entries.length > 0 || state.unreadable.length > 0) scheduleCloudSync();
   centralImportMerge = centralPendingImport ? finishPendingImport() : null;
+  void refreshSyncDoor();
 }
 
 // Asks for this browser's passphrase on a confirm card and verifies it against
@@ -8169,14 +8240,14 @@ function renderCentralUnlockCard() {
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG}
-      <p class="vault-title">Vault locked</p>
-      <p class="vault-subtitle">Unlock with your passkey.</p>
+      <p class="vault-title">Your notes are locked</p>
+      <p class="vault-subtitle">${escapeHtml(platformOr((n) => `Unlock with ${n}.`, "Sign in to unlock."))}</p>
       <p class="vault-error" hidden></p>
-      <button class="vault-button" type="button" data-action="unlock">Unlock with passkey</button>
-      ${navigator.onLine === false ? `<p class="vault-advisory" data-field="offline-advisory">You're offline. Your notes are safe on this device; if your passkey won't open here, connect and try again.</p>` : ""}
+      <button class="vault-button" type="button" data-action="unlock">${escapeHtml(platformOr((n) => `Unlock with ${n}`, "Unlock"))}</button>
+      ${navigator.onLine === false ? `<p class="vault-advisory" data-field="offline-advisory">${escapeHtml(platformOr((n) => `You're offline. Your notes are safe on this device; if ${n} won't open them here, connect and try again.`, "You're offline. Your notes are safe on this device; if they won't open here, connect and try again."))}</p>` : ""}
       ${promote
         ? `<button class="vault-button secondary" type="button" data-action="words">Use your 12 words instead</button>`
-        : `<button class="vault-link" type="button" data-action="words">Can't use your passkey? Use your 12 words instead</button>`}
+        : `<button class="vault-link" type="button" data-action="words">${escapeHtml(platformOr((n) => `Can't use ${n}? Use your 12 words instead`, "Can't sign in? Use your 12 words instead"))}</button>`}
       <button class="vault-link quiet" type="button" data-action="wipe">Wipe this device</button>
     </div>
   `;
@@ -8259,9 +8330,9 @@ function renderCentralReaddRescueCard() {
     <div class="vault-card">
       ${LOCK_ICON_SVG}
       <p class="vault-title">Keep this device's notes</p>
-      <p class="vault-subtitle">Confirm with the passkey this device already has, so the notes here come across when you add it back. You'll set up a new passkey next.</p>
+      <p class="vault-subtitle">${escapeHtml(platformOr((n) => `Confirm with ${n} once more, so the notes here come across when you add this device back. You'll set it up again next.`, "Confirm on this device once more, so the notes here come across when you add it back. You'll set it up again next."))}</p>
       <p class="vault-error" hidden></p>
-      <button class="vault-button" type="button" data-action="confirm">Confirm with your current passkey</button>
+      <button class="vault-button" type="button" data-action="confirm">${escapeHtml(platformOr((n) => `Confirm with ${n}`, "Confirm"))}</button>
       <button class="vault-link" type="button" data-action="skip">Continue without it</button>
     </div>
   `;
@@ -8284,11 +8355,11 @@ function renderCentralReaddRescueCard() {
     } catch (error) {
       console.warn("[txtshell] rescue of this device's key failed", error?.name || "", error);
       errorLine.textContent = error?.message === "wrong-key"
-        ? "That passkey didn't open this device's notes. Continue without it, or try again."
+        ? "That didn't open this device's notes. Continue without it, or try again."
         : centralUnlockFailureMessage(error);
       errorLine.hidden = false;
       button.disabled = false;
-      button.textContent = "Confirm with your current passkey";
+      button.textContent = platformOr((n) => `Confirm with ${n}`, "Confirm");
     }
   });
   vaultOverlay.querySelector('[data-action="skip"]').addEventListener("click", () => { centralRescuedKey = null; toStart(); });
@@ -8319,12 +8390,12 @@ function centralUnlockFailed(error) {
 // browser saying so. Browsers do not distinguish "none available" from "dismissed", so a dismissed
 // prompt reads the same line — its action (try again, or the 12 words) is right either way.
 function centralUnlockFailureMessage(error) {
-  if (error?.message === "wrong-key") return "This passkey doesn't open the vault on this browser.";
+  if (error?.message === "wrong-key") return "That sign-in doesn't open the notes on this browser.";
   if (error?.message === "offline-no-cache") return "You're offline and this browser has nothing saved to unlock with yet — connect and try again.";
-  if (error?.message === "offline-ceremony-refused") return "Your passkey needs this device to be online. Your notes are safe here — connect and try again.";
-  if (error?.code === "unknown-credential") return "That passkey isn't on your account. Pick another one, or use your 12 words instead.";
+  if (error?.message === "offline-ceremony-refused") return `${passkeyPlatformName() || "Signing in"} needs this device to be online. Your notes are safe here — connect and try again.`;
+  if (error?.code === "unknown-credential") return "That sign-in isn't on your account. Pick another one, or use your 12 words instead.";
   if (error?.name === "NotAllowedError" && navigator.onLine !== false && !/focus/i.test(error.message || "")) {
-    return "No passkey found on this device. Use your 12 words instead.";
+    return "No sign-in found on this device. Use your 12 words instead.";
   }
   return centralFailureMessage(error);
 }
@@ -8522,10 +8593,10 @@ async function finishCentralUnlock(vk, { offline = false, rekeyed = false, deadE
   renderVault();
   updateLockButton();
   const outcomeText = describeUnlockOutcome(outcome);
-  let hint = outcomeText ? `Vault unlocked — ${outcomeText}` : "Vault unlocked";
-  if (rekeyed) hint = `Vault unlocked — your blocks moved to the account's new key${outcomeText ? ` · ${outcomeText}` : ""}`;
-  if (deadEnd && outcome.unreadable > 0) hint = `Vault unlocked — ${pluralCount(outcome.unreadable, "block")} on this browser can't be opened with the account's current key (kept; another device that reads them will sync them back)`;
-  if (readd) hint = `${wasRemoved ? "Device added back" : "Vault unlocked"} — ${rekeyed ? "your blocks moved to the account's new key" : (wasRemoved ? "your passkey unlocks it from now on" : "this device is set up again")}${deadEnd && outcome.unreadable > 0 ? ` · ${pluralCount(outcome.unreadable, "block")} on this browser can't be opened with the account's current key (kept; another device that reads them will sync them back)` : ""}`;
+  let hint = outcomeText ? `Unlocked — ${outcomeText}` : "Unlocked";
+  if (rekeyed) hint = `Unlocked — your blocks moved to the account's new key${outcomeText ? ` · ${outcomeText}` : ""}`;
+  if (deadEnd && outcome.unreadable > 0) hint = `Unlocked — ${pluralCount(outcome.unreadable, "block")} on this browser can't be opened with the account's current key (kept; another device that reads them will sync them back)`;
+  if (readd) hint = `${wasRemoved ? "Device added back" : "Unlocked"} — ${rekeyed ? "your blocks moved to the account's new key" : (wasRemoved ? platformOr((n) => `${n} unlocks it from now on`, "signing in unlocks it from now on") : "this device is set up again")}${deadEnd && outcome.unreadable > 0 ? ` · ${pluralCount(outcome.unreadable, "block")} on this browser can't be opened with the account's current key (kept; another device that reads them will sync them back)` : ""}`;
   composerHint.textContent = hint;
   render();
   entryInput.focus();
@@ -8554,11 +8625,150 @@ function beginAccount() {
     composerHint.textContent = "Txtshell sync";
     return;
   }
-  if (!state.central.session) {
-    void centralResume();
-    return;
+  if (isVaultLocked()) return; // the lock screen is its own card
+  openAccountCard();
+}
+
+// Which account card fits this device now (plan §17.3).
+function accountCardState() {
+  if (state.central.removed) return "removed";
+  if (syncIndicatorState === "failed" && lastFailureReason === "central-setup" && state.central.session) return "setup";
+  if (state.central.session) return "signed-in";
+  return navigator.onLine === false ? "offline" : "paused";
+}
+
+function openAccountCard() {
+  state.vaultPending = { account: accountCardState() };
+  state.vaultView = "central-account";
+  renderVault();
+  composerHint.textContent = "Txtshell sync";
+}
+
+// "Touch ID" where it can be named; plain words otherwise (plan §17.4).
+function platformOr(withName, without) {
+  const name = passkeyPlatformName();
+  return name ? withName(name) : without;
+}
+
+function renderCentralAccountCard() {
+  const kind = state.vaultPending?.account || accountCardState();
+  const signInLabel = platformOr((n) => `Sign in with ${n}`, "Sign in");
+  const close = `<button class="vault-link" type="button" data-action="close">Close</button>`;
+  const quietSignOut = `<button class="vault-link" type="button" data-action="signout">Sign out</button>`;
+  const leave = `<button class="vault-link quiet" type="button" data-action="leave">Stop syncing this device</button>`;
+  let body;
+  if (kind === "signed-in") {
+    body = `
+      <p class="vault-title">Sync is on.</p>
+      <p class="vault-subtitle" data-field="last-synced">${escapeHtml(lastSyncedText())}</p>
+      ${state.central.email ? `<p class="vault-subtitle" data-field="email">Signed in as ${escapeHtml(state.central.email)}</p>` : ""}
+      <button class="vault-button secondary" type="button" data-action="signout">Sign out</button>
+      <p class="vault-fine">${escapeHtml(platformOr((n) => `Signing out locks your notes on this device. ${n} opens them again.`, "Signing out locks your notes on this device. Signing in opens them again."))}</p>
+      <button class="vault-link" type="button" data-action="new-words">Get new 12 words</button>
+      <button class="vault-link" type="button" data-action="devices">Your devices</button>
+      ${leave}
+      <p class="vault-fine">Stopping keeps your notes here, locked with a passphrase you choose.</p>
+      ${close}`;
+  } else if (kind === "paused") {
+    body = `
+      <p class="vault-title">Sync is paused.</p>
+      <p class="vault-subtitle">Sign in to continue.</p>
+      <button class="vault-button" type="button" data-action="signin">${escapeHtml(signInLabel)}</button>
+      ${quietSignOut}
+      ${close}`;
+  } else if (kind === "offline") {
+    body = `
+      <p class="vault-title">You're offline.</p>
+      <p class="vault-subtitle">Your notes are saved here and will sync when you're back.</p>
+      <button class="vault-button" type="button" data-action="close">Close</button>
+      ${quietSignOut}`;
+  } else if (kind === "setup") {
+    body = `
+      <p class="vault-title">Finish setting up sync.</p>
+      <p class="vault-subtitle">Save your 12 words to finish setting up.</p>
+      <button class="vault-button" type="button" data-action="save-words">Save your 12 words</button>
+      ${close}`;
+  } else {
+    body = `
+      <p class="vault-title">This device was removed from your account.</p>
+      <p class="vault-subtitle">To add it back, use your email and then your 12 words.</p>
+      <button class="vault-button" type="button" data-action="readd">Add this device again</button>
+      ${leave}
+      ${close}`;
   }
-  beginAccountDevices();
+  vaultOverlay.innerHTML = `
+    <div class="vault-card" data-account="${kind}">
+      ${LOCK_ICON_SVG_DOT}
+      ${body}
+      <p class="vault-error" hidden></p>
+    </div>
+  `;
+  const on = (action, fn) => vaultOverlay.querySelectorAll(`[data-action="${action}"]`).forEach((b) => b.addEventListener("click", fn));
+  on("close", exitVaultToNormal);
+  on("signout", () => { void accountSignOut(); });
+  on("signin", () => { void centralResume(); });
+  on("devices", () => { void beginAccountDevices(); });
+  on("leave", () => { void beginAccountLeave(); });
+  on("new-words", () => { state.vaultView = "central-new-words"; renderVault(); });
+  on("save-words", () => { void centralFinishSetup(); });
+  on("readd", () => { lockVault(); void beginCentralReadd(); });
+}
+
+function renderCentralNewWordsCard() {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG_DOT}
+      <p class="vault-title">Get new 12 words?</p>
+      <p class="vault-subtitle">Your current words stop working for adding a device. Backups you already made still open only with your current words, so keep those if you keep the backups.</p>
+      <button class="vault-button" type="button" data-action="confirm">Get new 12 words</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+  vaultOverlay.querySelector('[data-action="confirm"]').addEventListener("click", () => { void beginAccountPhrase(); });
+  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", openAccountCard);
+}
+
+// "Save your 12 words" (plan §17.3, decision 1): the account has no keys (an unfinished setup, e.g.
+// a start-over that never got its words). Sign in with this device's own passkey, open the local key
+// from the cached wrap, and make it the account's key — the notes keep their key — then the words
+// screen. If the account has keys after all (409 keys-exist), it is an ordinary sign-in.
+async function centralFinishSetup() {
+  state.vaultView = "central-busy";
+  state.vaultPending = { busy: platformOr((n) => `Confirm with ${n}`, "Confirm") };
+  renderVault();
+  try {
+    const stored = await readCentralMeta();
+    if (!stored.credentialId || !stored.prfWrap || !stored.hkdfSalt) throw new Error("missing-meta");
+    const login = await window.txCentral.webauthn.login({ allowCredentialIds: [stored.credentialId] });
+    setCentralSession(login);
+    const kekWrap = await window.txCentral.keys.kekFromPrf(login.prf, login.hkdfSalt);
+    login.prf.fill(0);
+    let vkExtractable;
+    try {
+      vkExtractable = await window.txCentral.keys.unwrapVK(stored.prfWrap, kekWrap, true);
+    } catch {
+      throw new Error("wrong-key");
+    }
+    if (!(await verifyMasterKey(vkExtractable))) throw new Error("wrong-key");
+    if (!login.hasRecovery) {
+      const out = await window.txCentral.ladder.bootstrap({ session: login.session, kekWrap, vk: vkExtractable }, centralUi);
+      if (out) {
+        // The account's data plane starts over with these keys (the server allows a bootstrap only
+        // when it holds no data): forget the old generation, so the first push is If-Match "g0".
+        await clearSyncState();
+        state.vaultView = null;
+        state.vaultPending = null;
+        renderVault();
+        setSyncStatus("ok");
+        composerHint.textContent = "Your 12 words are saved — sync is set up.";
+        scheduleCloudSync();
+        return;
+      }
+    }
+    await centralResume();
+  } catch (error) {
+    centralFlowFailed(error, null);
+  }
 }
 
 // Central mode, unlocked, session gone (expired, revoked, signed out, or an
@@ -8608,7 +8818,7 @@ async function centralResume() {
     // local is deleted or rewritten); the next lock screen is the removed card.
     const told = await centralToldRemoved(error, stored).catch(() => false);
     centralFlowFailed(error, null);
-    if (told) composerHint.textContent = `${CENTRAL_REMOVED_SENTENCE} /lock to start.`;
+    if (told) composerHint.textContent = CENTRAL_REMOVED_SENTENCE; // the sync indicator now opens the removed card
   }
 }
 
@@ -8633,13 +8843,13 @@ async function renderCentralDevicesCard() {
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG_DOT}
-      <p class="vault-title">Your account</p>
-      <p class="vault-subtitle">Passkeys that can open this account's vault. Removing one keeps whatever that device already has; it just can't sign in or fetch new changes.</p>
+      <p class="vault-title">Your devices</p>
+      <p class="vault-subtitle">Devices that can open your notes. Removing one keeps whatever that device already has; it just can't sign in or get new changes.</p>
       <p class="vault-error" hidden></p>
       <ul class="devices-list" data-field="devices"><li class="vault-subtitle">Loading…</li></ul>
-      <button class="vault-button secondary" type="button" data-action="phrase">New recovery phrase</button>
+      <button class="vault-button secondary" type="button" data-action="phrase">Get new 12 words</button>
       <button class="vault-button secondary" type="button" data-action="signout">Sign out on this device</button>
-      <button class="vault-link" type="button" data-action="leave">Leave the account (keep a passphrase vault)</button>
+      <button class="vault-link" type="button" data-action="leave">Stop syncing this device</button>
       <button class="vault-link" type="button" data-action="close">Close</button>
     </div>
   `;
@@ -8653,7 +8863,7 @@ async function renderCentralDevicesCard() {
       for (const device of devices) {
         const li = document.createElement("li");
         const label = document.createElement("span");
-        label.textContent = `${device.id.slice(0, 10)}… · ${device.backedUp ? "synced passkey" : "this device only"} · ${device.hasPrfWrap ? "set up" : "needs phrase"} · last used ${device.lastUsedAt ? device.lastUsedAt.slice(0, 16).replace("T", " ") : "—"}${device.isCurrent ? " · this device" : ""}`;
+        label.textContent = `${device.id.slice(0, 10)}… · ${device.backedUp ? "synced" : "this device only"} · ${device.hasPrfWrap ? "set up" : "needs the 12 words"} · last used ${device.lastUsedAt ? device.lastUsedAt.slice(0, 16).replace("T", " ") : "—"}${device.isCurrent ? " · this device" : ""}`;
         li.appendChild(label);
         if (!device.isCurrent) {
           const button = document.createElement("button");
@@ -8667,7 +8877,7 @@ async function renderCentralDevicesCard() {
               showError("");
               await load();
             } catch (error) {
-              showError(error.code === "last-device" ? "That's your last passkey — it can't be removed." : "Couldn't remove it. Try again.");
+              showError(error.code === "last-device" ? "That's your last device — it can't be removed." : "Couldn't remove it. Try again.");
               button.disabled = false;
             }
           });
@@ -8675,10 +8885,10 @@ async function renderCentralDevicesCard() {
         }
         list.appendChild(li);
       }
-      if (devices.length === 0) list.innerHTML = `<li class="vault-subtitle">No passkeys listed.</li>`;
+      if (devices.length === 0) list.innerHTML = `<li class="vault-subtitle">No devices listed.</li>`;
     } catch (error) {
       list.innerHTML = "";
-      showError(error.status === 401 ? "Session ended — run /account to sign in again." : "Couldn't load your passkeys.");
+      showError(error.status === 401 ? "Session ended — run /account to sign in again." : "Couldn't load your devices.");
     }
   };
   void load();
@@ -8713,7 +8923,7 @@ async function beginAccountPhrase() {
   setEditorValue("");
   clearDraft();
   state.vaultView = "central-busy";
-  state.vaultPending = { busy: "Confirm with your passkey" };
+  state.vaultPending = { busy: platformOr((n) => `Confirm with ${n}`, "Confirm") };
   renderVault();
   try {
     const vk = await centralExtractableKey();
@@ -8721,7 +8931,7 @@ async function beginAccountPhrase() {
     state.vaultView = null;
     state.vaultPending = null;
     renderVault();
-    composerHint.textContent = "Recovery phrase rotated — the old phrase no longer works.";
+    composerHint.textContent = "New 12 words saved — the old ones no longer work.";
     entryInput.focus();
   } catch (error) {
     centralFlowFailed(error, null);
@@ -8740,7 +8950,7 @@ async function accountSignOut() {
   // unlock card. The cached wrap stays, so the next unlock is a sign-in (plan §8, manual-run
   // finding 4).
   lockVault();
-  composerHint.textContent = "Signed out and locked — your blocks stay on this device. Unlock with your passkey to sign back in.";
+  composerHint.textContent = platformOr((n) => `Signed out and locked — your blocks stay on this device. Unlock with ${n} to sign back in.`, "Signed out and locked — your blocks stay on this device. Unlock to sign back in.");
 }
 
 // Convert back to an ordinary passphrase vault with the SAME key: no record is
@@ -8750,7 +8960,7 @@ async function beginAccountLeave() {
   setEditorValue("");
   clearDraft();
   state.vaultView = "central-busy";
-  state.vaultPending = { busy: "Confirm with your passkey" };
+  state.vaultPending = { busy: platformOr((n) => `Confirm with ${n}`, "Confirm") };
   renderVault();
   try {
     const vk = await centralExtractableKey();
@@ -8791,7 +9001,7 @@ async function handleAccountLeaveSubmit(passphrase) {
   renderVault();
   updateLockButton();
   setSyncStatus("ok");
-  composerHint.textContent = "Left the account — this is now a passphrase vault with the same blocks. /sync setup works from here.";
+  composerHint.textContent = "Stopped syncing — this device keeps the same blocks, locked with your passphrase. /sync setup works from here.";
   render();
   entryInput.focus();
 }
@@ -8853,7 +9063,7 @@ function renderCentralExportCard() {
       <p class="vault-title">Export an encrypted backup</p>
       <p class="vault-subtitle" data-field="export-note">${escapeHtml(CENTRAL_EXPORT_NOTE)}</p>
       <p class="vault-error" hidden></p>
-      <button class="vault-button" type="button" data-action="submit">Confirm with passkey and export</button>
+      <button class="vault-button" type="button" data-action="submit">${escapeHtml(platformOr((n) => `Confirm with ${n} and export`, "Confirm and export"))}</button>
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
     </div>
   `;

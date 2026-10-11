@@ -120,7 +120,7 @@
     const entropy = new Uint8Array(16);
     for (let i = 0; i < 16; i++) entropy[i] = parseInt(bits.slice(i * 8, i * 8 + 8), 2);
     const cs = parseInt(bits.slice(128, 132), 2);
-    if (cs !== await checksumBits(entropy)) throw Object.assign(new Error("That phrase doesn't check out — one of the words is off"), { code: "checksum" });
+    if (cs !== await checksumBits(entropy)) throw Object.assign(new Error("Those words don't check out — one of them is off"), { code: "checksum" });
     return { entropy, words };
   }
   const phrase = { generate: generatePhrase, fromEntropy, toEntropy, normalizeWord, splitWords, WORDS };
@@ -212,7 +212,7 @@
       throw e;
     }
     if (!prf || prf.length !== 32) throw Object.assign(new Error("no PRF output from this passkey"), { code: "no-prf" });
-    return { prf, session: v.sessionToken, credentialId: v.credentialId, hkdfSalt: v.hkdfSalt, userId: v.userId, hasPrfWrap: v.hasPrfWrap === true, hasRecovery: v.hasRecovery === true, rpId: o.rpId };
+    return { prf, session: v.sessionToken, credentialId: v.credentialId, hkdfSalt: v.hkdfSalt, userId: v.userId, email: typeof v.email === "string" ? v.email : "", hasPrfWrap: v.hasPrfWrap === true, hasRecovery: v.hasRecovery === true, rpId: o.rpId };
   }
 
   // Offline unlock: no server. A client-generated challenge, this device's credential only, the
@@ -285,7 +285,7 @@
       const kekRec = await kekFromEntropy(answer.entropy, rec.hkdfSalt);
       let vkX;
       try { vkX = await unwrapVK(rec.blob, kekRec, true); }
-      catch { lastError = "That phrase doesn't match this account."; continue; }   // GCM tag = the check; nothing written
+      catch { lastError = "Those words don't match this account."; continue; }   // GCM tag = the check; nothing written
       const prfWrap = await wrapVK(vkX, ctx.kekWrap);
       await api("/v1/keys/prf", "PUT", { blob: prfWrap }, ctx.session);
       return { vk: await unwrapVK(prfWrap, ctx.kekWrap, false), prfWrap, via: "rung2" };

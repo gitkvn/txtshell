@@ -408,6 +408,11 @@ button {
   outline: none;
 }
 
+/* "Sync" on a browser with no account: a word, not a status dot (plan §17.3). */
+.sync-indicator.is-door .sync-dot {
+  display: none;
+}
+
 .sync-indicator[hidden] {
   display: none;
 }

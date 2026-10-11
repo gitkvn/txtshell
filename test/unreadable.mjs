@@ -221,7 +221,7 @@ const A = await device("A");
   check(raw.filter((x) => x.id.startsWith("left-")).every((x) => x.text.length % 4 === 0 && !/leftover/.test(x.text)), "both leftovers re-encrypted in IndexedDB");
   check((await A.unreadable()).length === 0 && !/unreadable/.test(await A.footer()), "no unreadable; footer has no suffix");
   await A.lock(); await A.unlock();
-  check((await A.entries()).length === 5 && /^Vault unlocked$/.test(await A.hint()), "next unlock: 5 blocks, plain 'Vault unlocked'");
+  check((await A.entries()).length === 5 && /^Unlocked$/.test(await A.hint()), "next unlock: 5 blocks, plain 'Unlocked'");
 }
 
 // =============================================================================
@@ -415,9 +415,9 @@ console.log("\n--- U3 413: the quota message names the unreadable count");
   const r = await A.push();
   check(r.status === "error" && r.reason === "http-413", `push → ${JSON.stringify(r)}`);
   const toast = await A.eval(`statusToast.textContent`);
-  check(/vault exceeds the Worker's size limit \(1 unreadable block included\)/.test(toast), `toast: "${toast}"`);
+  check(/your notes exceed the Worker's size limit \(1 unreadable block included\)/.test(toast), `toast: "${toast}"`);
   const tooltip = await A.eval(`syncIndicator.getAttribute("data-tooltip")`);
-  check(/1 unreadable block included/.test(tooltip) && (await A.eval(`syncIndicator.querySelector(".sync-label").textContent`)) === "Sync: vault too large", `indicator: "${tooltip}"`);
+  check(/1 unreadable block included/.test(tooltip) && (await A.eval(`syncIndicator.querySelector(".sync-label").textContent`)) === "Sync: too large", `indicator: "${tooltip}"`);
   stub.fail413 = false;
 }
 

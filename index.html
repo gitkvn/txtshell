@@ -21,7 +21,7 @@
           <span id="wordCountDisplay" class="word-count-badge" hidden>0 words</span>
           <button id="wordCountToggleButton" class="theme-toggle" type="button" aria-label="Show word count"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M3 4.5h12M3 9h12M3 13.5h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
           <button id="themeToggleButton" class="theme-toggle" type="button" aria-label="Toggle dark mode"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="3.25" stroke="currentColor" stroke-width="1.5"/><path d="M9 1.5v2M9 14.5v2M16.5 9h-2M3.5 9h-2M14.3 3.7l-1.4 1.4M5.1 12.9l-1.4 1.4M14.3 14.3l-1.4-1.4M5.1 5.1L3.7 3.7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
-          <button id="lockButton" class="theme-toggle lock-toggle" type="button" aria-label="Lock vault" title="Lock vault" hidden>
+          <button id="lockButton" class="theme-toggle lock-toggle" type="button" aria-label="Lock your notes" title="Lock your notes" hidden>
             <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
               <rect x="3.5" y="8" width="11" height="8" rx="2" stroke="currentColor" stroke-width="1.5"/>
               <path class="lock-shackle" d="M6 8V5.5a3 3 0 0 1 6 0V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
@@ -246,10 +246,10 @@
             <div class="qr-group">
               <p class="qr-title">Backup</p>
               <div class="qr-rows">
-              <span class="qr-key"><code>/export</code> <span class="qr-sep">·</span> <kbd>↓</kbd> button</span><span class="qr-desc">download an encrypted backup (vault must be unlocked)</span>
+              <span class="qr-key"><code>/export</code> <span class="qr-sep">·</span> <kbd>↓</kbd> button</span><span class="qr-desc">download an encrypted backup (your notes must be unlocked)</span>
               <span class="qr-key"><code>/export plain</code></span><span class="qr-desc">download an unencrypted plaintext backup</span>
               <span class="qr-key"><code>/import</code></span><span class="qr-desc">restore blocks from an export file</span>
-              <span class="qr-key"><code>/wipe</code></span><span class="qr-desc">delete all blocks and vault metadata</span>
+              <span class="qr-key"><code>/wipe</code></span><span class="qr-desc">delete every block on this device</span>
               </div>
             </div>
             <div class="qr-group">
@@ -258,7 +258,7 @@
               <span class="qr-key"><code>/encrypt</code></span><span class="qr-desc">encrypt your blocks with a passphrase</span>
               <span class="qr-key"><code>/encrypt change</code></span><span class="qr-desc">change your passphrase</span>
               <span class="qr-key"><code>/encrypt off</code></span><span class="qr-desc">remove encryption and restore plaintext</span>
-              <span class="qr-key"><code>/lock</code> <span class="qr-sep">·</span> lock button (top bar)</span><span class="qr-desc">lock the vault — clears decrypted data from memory</span>
+              <span class="qr-key"><code>/lock</code> <span class="qr-sep">·</span> lock button (top bar)</span><span class="qr-desc">lock your notes — clears them from memory</span>
               <p class="qr-note">Save your recovery key when it is shown: it is the only way back if you forget your passphrase.</p>
               <p class="qr-note"><em>unreadable</em> in the footer count: blocks saved under a different key. They are kept, not shown, and travel with your backups and sync so a device with the right key can read them. If this browser has the wrong key, re-pair it from the device that has your data (/mirror there, /port here). /wipe is the only thing that removes them.</p>
               </div>
@@ -269,9 +269,9 @@
               <span class="qr-key"><code>/sync setup</code></span><span class="qr-desc">set the sync Worker URL and auth token</span>
               <span class="qr-key"><code>/mirror</code></span><span class="qr-desc">show a pairing QR to link an iOS device</span>
               <span class="qr-key"><code>/port</code></span><span class="qr-desc">set up this browser from another browser’s pairing data</span>
-              <span class="qr-key"><code>/account</code></span><span class="qr-desc">Txtshell account: sign in with a passkey, or sign up — your blocks come with you, still end-to-end encrypted</span>
-              <span class="qr-key"><code>/account devices</code></span><span class="qr-desc">passkeys on your account; remove one, rotate the recovery phrase, sign out</span>
-              <span class="qr-key"><code>/account leave</code></span><span class="qr-desc">turn this browser back into a passphrase vault with the same blocks</span>
+              <span class="qr-key"><code>/account</code></span><span class="qr-desc">Txtshell sync: sign in, or set it up — your blocks come with you, still end-to-end encrypted</span>
+              <span class="qr-key"><code>/account devices</code></span><span class="qr-desc">devices on your account; remove one</span>
+              <span class="qr-key"><code>/account leave</code></span><span class="qr-desc">stop syncing this device; keep its blocks under a passphrase</span>
               <span class="qr-key"><code>/pull</code></span><span class="qr-desc">fetch the latest blocks from cloud</span>
               <span class="qr-key"><code>/inbox</code></span><span class="qr-desc">triage captures synced from your phone</span>
               </div>
@@ -322,7 +322,7 @@
           </div>
           <div class="intro-strip-cell">
             <p class="intro-k">who holds the key</p>
-            <p class="intro-v">Only your device. Derived from your passphrase or passkey, never uploaded, never ours to hold.</p>
+            <p class="intro-v">Only your device. Made from your passphrase or your device's sign-in, never uploaded, never ours to hold.</p>
           </div>
           <div class="intro-strip-cell">
             <p class="intro-k">what a server sees</p>
