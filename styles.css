@@ -408,60 +408,26 @@ button {
   outline: none;
 }
 
-/* "Sync" on a browser with no account: a word, not a status dot (plan §17.3). */
-.sync-indicator.is-door .sync-dot {
-  display: none;
-}
-
 .sync-indicator[hidden] {
   display: none;
-}
-
-.sync-indicator .sync-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: currentColor;
-  flex: 0 0 auto;
 }
 
 .sync-indicator .sync-label {
   white-space: nowrap;
 }
 
-/* Synced: passive, no text — just a quiet dot in the ok colour. */
-.sync-indicator.is-ok {
-  color: var(--ok);
-}
-
-.sync-indicator.is-ok .sync-label {
-  display: none; /* drop the empty label so it doesn't leave a trailing gap */
-}
-
-/* Syncing: muted, pulsing dot. */
+/* Synced and syncing: quiet text ("Synced · 2 min ago", "Syncing…"). */
+.sync-indicator.is-ok,
 .sync-indicator.is-syncing {
   color: var(--muted);
-}
-
-.sync-indicator.is-syncing .sync-dot {
-  animation: sync-pulse 1.1s ease-in-out infinite;
-}
-
-@keyframes sync-pulse {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sync-indicator.is-syncing .sync-dot {
-    animation: none;
-    opacity: 0.6;
-  }
 }
 
 /* Failed: standing signal in the danger colour, with a short reason. */
 .sync-indicator.is-failed {
   color: var(--danger);
+}
+
+.sync-indicator.is-failed:not(.is-actionable) {
   cursor: default;
 }
 
@@ -1253,6 +1219,15 @@ kbd {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* The top-bar cloud (dev walk, 2026-10-12): the attention dot in the accent colour. */
+.sync-toggle[hidden] {
+  display: none;
+}
+
+.sync-toggle .sync-attention-dot {
+  color: var(--accent);
 }
 
 .lock-toggle[data-state="locked"],

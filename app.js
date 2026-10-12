@@ -250,6 +250,7 @@ const inboxList = document.querySelector("#inboxList");
 const inboxViewSubtitle = document.querySelector("#inboxViewSubtitle");
 const inboxCloseButton = document.querySelector("#inboxCloseButton");
 const lockButton = document.querySelector("#lockButton");
+const syncButton = document.querySelector("#syncButton");
 const saveDock = document.querySelector("#saveDock");
 const saveBlockBtn = document.querySelector("#saveBlockBtn");
 const findReplaceBar = document.querySelector("#findReplaceBar");
@@ -314,7 +315,7 @@ window.addEventListener("pointerdown", (event) => {
     return;
   }
 
-  if (target.closest("#searchMode, .copy-button, #searchInput, #editorSuggestions, #commandPalette, #vaultOverlay, #lockButton, #findReplaceBar, #mergeModal, #deleteModal, #pinnedPanel, #pinnedButton")) {
+  if (target.closest("#searchMode, .copy-button, #searchInput, #editorSuggestions, #commandPalette, #vaultOverlay, #lockButton, #syncButton, #findReplaceBar, #mergeModal, #deleteModal, #pinnedPanel, #pinnedButton")) {
     return;
   }
 
@@ -635,6 +636,10 @@ pinnedButton.addEventListener("click", () => {
 themeToggleButton.addEventListener("click", () => {
   const nextTheme = document.body.dataset.theme === "dark" ? "light" : "dark";
   applyTheme(nextTheme);
+});
+
+syncButton?.addEventListener("click", () => {
+  beginAccount();
 });
 
 lockButton.addEventListener("click", () => {
@@ -5788,7 +5793,7 @@ function normalizeWorkerUrl(value) {
 // signal; `full` is the hover tooltip and the one-shot transition toast.
 const SYNC_STATUS_LABELS = {
   "push-auth": { short: "Sync: check token", full: "Sync failed — auth rejected, check your token" },
-  "push-blocked": { short: "Sync: waiting for connection", full: "Saved on this device — will sync when you're back online." },
+  "push-blocked": { short: "Waiting for connection", full: "Saved on this device — will sync when you're back online." },
   "push-encrypt": { short: "Sync: encrypt error", full: "Sync failed — couldn't encrypt blocks" },
   "push-server": { short: "Sync: server error", full: "Sync failed — Worker rejected the upload" },
   "push-too-large": { short: "Sync: too large", full: "Sync failed — your notes exceed the Worker's size limit" },
@@ -5798,10 +5803,10 @@ const SYNC_STATUS_LABELS = {
   "pull-key-mismatch": { short: "Pull: key mismatch", full: "Pull failed — cloud copy doesn't match this device's key" },
   // Txtshell account only. A 401 is "session gone" (expired, signed out elsewhere,
   // revoked), never "check your token"; saves continue, pushes wait for a sign-in.
-  "central-signin": { short: "Sync: sign in to resume", full: "Sync is paused — sign in to continue." },
-  "central-setup": { short: "Sync: finish setup", full: "Save your 12 words to finish setting up." },
-  "central-removed": { short: "Sync: device removed", full: "This device was removed from your account." },
-  "central-offline": { short: "Sync: offline", full: "You're offline. Your notes are saved here and will sync when you're back." },
+  "central-signin": { short: "Sign in to sync", full: "Sync is paused — sign in to continue." },
+  "central-setup": { short: "Finish setting up sync", full: "Save your 12 words to finish setting up." },
+  "central-removed": { short: "Device removed", full: "This device was removed from your account." },
+  "central-offline": { short: "Waiting for connection", full: "You're offline. Your notes are saved here and will sync when you're back." },
 };
 
 // Drives the persistent ambient sync indicator in the footer.
@@ -5842,6 +5847,21 @@ function lastSyncedText(now = Date.now()) {
   if (hours < 48) return "Last synced yesterday";
   return `Last synced ${new Date(lastSyncedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
 }
+// The footer's text once a sync has landed: "Synced · 2 min ago" (dev walk, 2026-10-12).
+function syncedShortText(now = Date.now()) {
+  if (!lastSyncedAt) return "Sync is on";
+  const seconds = Math.max(0, Math.round((now - lastSyncedAt) / 1000));
+  if (seconds < 60) return "Synced · just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `Synced · ${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `Synced · ${hours} hr ago`;
+  if (hours < 48) return "Synced · yesterday";
+  return `Synced · ${new Date(lastSyncedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+}
+// Keeps "2 min ago" (footer and an open account card) current.
+window.setInterval(() => { if (lastSyncedAt) renderSyncIndicator(); }, 30000);
+
 // The door for a browser with no account (plan §17.3): shown only where the account service answers
 // on this origin, and never on an install that syncs through its own (self-hosted) Worker.
 let accountServiceAvailable = false;
@@ -5938,18 +5958,18 @@ function renderSyncIndicator() {
   const { st, reason } = footerSyncStatus();
   const locked = isVaultLocked();
   const central = isCentral();
-  // A browser with no account and no self-hosted sync, where the service answers: an invitation.
+  // A browser with no account and no self-hosted sync, where the service answers: the top-bar cloud
+  // invites; the footer has nothing to report.
   const door = !central && !locked && accountServiceAvailable && !selfHostedSyncConfigured;
   const accountReason = st === "failed" && CENTRAL_ACTION_REASONS.includes(reason);
 
-  syncIndicator.classList.toggle("is-door", door);
-  syncIndicator.classList.toggle("is-syncing", !door && st === "syncing");
-  syncIndicator.classList.toggle("is-ok", !door && st === "ok");
-  syncIndicator.classList.toggle("is-failed", !door && st === "failed");
-  // In account mode the indicator is always there while unlocked: it is the door to the account card.
-  syncIndicator.hidden = locked || (!door && !central && st === "idle");
+  syncIndicator.classList.toggle("is-syncing", st === "syncing");
+  syncIndicator.classList.toggle("is-ok", st !== "failed" && st !== "syncing");
+  syncIndicator.classList.toggle("is-failed", st === "failed");
+  // In account mode the status is always there while unlocked: it opens the account card.
+  syncIndicator.hidden = locked || (!central && st === "idle");
 
-  const actionable = !locked && (door || central);
+  const actionable = !locked && central;
   syncIndicator.classList.toggle("is-actionable", actionable);
   if (actionable) {
     syncIndicator.setAttribute("role", "button");
@@ -5965,33 +5985,66 @@ function renderSyncIndicator() {
     syncIndicator.removeAttribute("tabindex");
   }
 
-  if (door) {
-    labelEl.textContent = "Sync";
-    const tip = `Sync your notes across your devices — ${CENTRAL_ACTION_HINT}`;
-    syncIndicator.setAttribute("data-tooltip", tip);
-    syncIndicator.setAttribute("aria-label", tip);
-  } else if (st === "failed") {
+  let text;
+  if (st === "failed") {
     const label = SYNC_STATUS_LABELS[reason] || SYNC_STATUS_LABELS["push-server"];
     // The "click here" hint where clicking is the fix (the account reasons).
     const full = accountReason ? `${syncStatusFull(reason)} — ${CENTRAL_ACTION_HINT}` : syncStatusFull(reason);
-    labelEl.textContent = label.short;
+    text = label.short;
     syncIndicator.setAttribute("data-tooltip", full);
     syncIndicator.setAttribute("aria-label", full);
   } else if (st === "syncing") {
-    labelEl.textContent = "Syncing…";
+    text = "Syncing…";
     syncIndicator.removeAttribute("data-tooltip");
     syncIndicator.setAttribute("aria-label", "Syncing");
   } else {
-    labelEl.textContent = ""; // passive: dot only
+    text = syncedShortText();
     if (central) {
-      syncIndicator.setAttribute("data-tooltip", st === "ok" ? "Sync is on — click for your account" : "Txtshell sync — click for your account");
-      syncIndicator.setAttribute("aria-label", st === "ok" ? "Sync is on — open your account" : "Txtshell sync — open your account");
+      syncIndicator.setAttribute("data-tooltip", `${text} — click for your account`);
+      syncIndicator.setAttribute("aria-label", `${text} — open your account`);
     } else {
       syncIndicator.removeAttribute("data-tooltip");
-      syncIndicator.setAttribute("aria-label", "Synced");
+      syncIndicator.setAttribute("aria-label", text);
     }
   }
+  labelEl.textContent = text;
+  renderSyncButton(door ? "door" : central && !locked ? syncButtonState(centralSyncState()) : null, text);
   refreshAccountCard();
+}
+
+// The top-bar cloud (dev walk, 2026-10-12): where sync is found. It opens the account card, and its
+// mark follows the same state as the footer and the card.
+//   synced    a filled cloud            (on, syncing)
+//   offline   a cloud with a slash
+//   attention a cloud with a small dot  (paused, setup unfinished, removed, a sync problem)
+//   door      an outline cloud          (no account here, only where the account service answers)
+const SYNC_CLOUD_PATH = "M5.25 14.25h7.5a3 3 0 0 0 .35-5.98 4.4 4.4 0 0 0-8.5.15A2.95 2.95 0 0 0 5.25 14.25z";
+const SYNC_BUTTON_SVG = {
+  synced: `<path d="${SYNC_CLOUD_PATH}" fill="currentColor" fill-opacity="0.3" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>`,
+  offline: `<path d="${SYNC_CLOUD_PATH}" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M3 3l12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>`,
+  attention: `<path d="${SYNC_CLOUD_PATH}" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><circle class="sync-attention-dot" cx="14.5" cy="4" r="2.25" fill="currentColor"/>`,
+  door: `<path d="${SYNC_CLOUD_PATH}" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>`,
+};
+
+function syncButtonState(syncState) {
+  if (syncState === "on" || syncState === "syncing") return "synced";
+  return syncState === "offline" ? "offline" : "attention";
+}
+
+function renderSyncButton(buttonState, statusText) {
+  if (!syncButton) return;
+  syncButton.hidden = !buttonState;
+  if (!buttonState) {
+    syncButton.removeAttribute("data-state");
+    return;
+  }
+  if (syncButton.dataset.state !== buttonState) {
+    syncButton.dataset.state = buttonState;
+    syncButton.querySelector("svg").innerHTML = SYNC_BUTTON_SVG[buttonState];
+  }
+  const title = buttonState === "door" ? "Sync your notes across devices" : `${statusText} — open your account`;
+  syncButton.setAttribute("title", title);
+  syncButton.setAttribute("aria-label", title);
 }
 
 // The browser's connection (manual-run findings 2, 3, 2026-10-12). Going offline flips the footer and
