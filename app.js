@@ -5830,6 +5830,27 @@ const CENTRAL_ACTION_HINT = "click here, or type /account";
 // Failures that mean "no connection": the footer and the account card both read offline, and the
 // connection coming back pushes at once (manual-run findings, 2026-10-12).
 const SYNC_OFFLINE_REASONS = ["push-blocked", "central-offline"];
+// Whether the connection is down, as account sync knows it (dev walk, Mac Safari, 2026-10-12): set by
+// the browser's offline event, cleared by its online event or by a real answer from the sync server.
+// Safari can skip the online event, or leave navigator.onLine stale, after Wi-Fi comes back, so after
+// load this never reads navigator.onLine. Self-hosted sync keeps reading navigator.onLine.
+let connectionDown = navigator.onLine === false;
+function syncConnectionDown() {
+  return isCentral() ? connectionDown : navigator.onLine === false;
+}
+// A response counts as "back online" only if it is the sync server's own: readable (not opaque), not
+// redirected, from the server's origin. A captive portal's page or redirect doesn't flip the state.
+function syncServerAnswered(response, url) {
+  try {
+    if (!response || response.redirected || response.type === "opaque" || response.type === "opaqueredirect") return false;
+    return new URL(response.url).origin === new URL(url).origin;
+  } catch {
+    return false;
+  }
+}
+function noteSyncServerAnswered(response, url) {
+  if (connectionDown && syncServerAnswered(response, url)) connectionDown = false;
+}
 let syncIndicatorActionBound = false;
 // The last push or pull that reached the server and succeeded, this session (plan §17.3).
 let lastSyncedAt = 0;
@@ -5891,7 +5912,7 @@ async function refreshSyncDoor({ probe = false } = {}) {
 function centralSyncState() {
   if (state.central.removed) return "removed";
   const failed = syncIndicatorState === "failed";
-  if (navigator.onLine === false || (failed && SYNC_OFFLINE_REASONS.includes(lastFailureReason))) return "offline";
+  if (syncConnectionDown() || (failed && SYNC_OFFLINE_REASONS.includes(lastFailureReason))) return "offline";
   if (failed && lastFailureReason === "central-setup") return "setup";
   if (!state.central.session || (failed && lastFailureReason === "central-signin")) return "paused";
   if (failed) return lastFailureReason === "central-removed" ? "removed" : "trouble";
@@ -6010,6 +6031,7 @@ function renderSyncIndicator() {
   labelEl.textContent = text;
   renderSyncButton(door ? "door" : central && !locked ? syncButtonState(centralSyncState()) : null, text);
   refreshAccountCard();
+  updateSyncRetryTimer();
 }
 
 // The top-bar cloud (dev walk, 2026-10-12): where sync is found. It opens the account card, and its
@@ -6055,7 +6077,7 @@ async function syncConnectionChanged() {
   const { workerUrl } = await getSyncConfig();
   if (!normalizeWorkerUrl(workerUrl)) return; // this install doesn't sync
   const waiting = syncIndicatorState === "failed" && SYNC_OFFLINE_REASONS.includes(lastFailureReason);
-  if (navigator.onLine === false) {
+  if (syncConnectionDown()) {
     if (waiting) renderSyncIndicator();
     else setSyncStatus(isCentral() ? "central-offline" : "push-blocked");
     return;
@@ -6075,10 +6097,90 @@ async function syncConnectionChanged() {
   }
   await flushCloudSync();
 }
-window.addEventListener("offline", () => { void syncConnectionChanged(); });
-window.addEventListener("online", () => { void syncConnectionChanged(); });
-window.addEventListener("focus", () => { void syncConnectionChanged(); });
-document.addEventListener("visibilitychange", () => { if (!document.hidden) void syncConnectionChanged(); });
+// Focus or a visible page: in account mode while offline, a retry now (it doesn't wait for the online
+// event, which Safari may never send); otherwise the same as a connection change.
+function syncRetryNow() {
+  if (isCentral() && !isVaultLocked() && centralSyncState() === "offline") {
+    syncRetryAttempt = 0;
+    if (syncRetryTimer !== null) window.clearTimeout(syncRetryTimer);
+    syncRetryTimer = null;
+    void syncRetryTick();
+    return;
+  }
+  void syncConnectionChanged();
+}
+window.addEventListener("offline", () => { connectionDown = true; void syncConnectionChanged(); });
+window.addEventListener("online", () => { connectionDown = false; syncRetryAttempt = 0; void syncConnectionChanged(); });
+window.addEventListener("focus", syncRetryNow);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) updateSyncRetryTimer(); // paused while hidden; a visible page retries at once
+  else syncRetryNow();
+});
+
+// The retry timer (dev walk, 2026-10-12), account mode only: runs while unlocked, visible and offline;
+// 10 s, 20 s, 40 s, then every 60 s. A tick pushes if this browser holds changes the cloud doesn't,
+// otherwise asks /v1/health; a real answer from the server ends the offline state. Stops once the
+// state leaves offline (synced, or "Sign in to sync" after an offline unlock).
+const SYNC_RETRY_DELAYS_MS = [10000, 20000, 40000, 60000];
+let syncRetryTimer = null;
+let syncRetryAttempt = 0;
+let syncRetryRunning = false;
+function syncRetryDelay(attempt) {
+  return SYNC_RETRY_DELAYS_MS[Math.min(attempt, SYNC_RETRY_DELAYS_MS.length - 1)];
+}
+
+function updateSyncRetryTimer() {
+  const offline = isCentral() && !isVaultLocked() && state.encryption.masterKey && centralSyncState() === "offline";
+  if (!offline) syncRetryAttempt = 0;
+  if (!offline || document.hidden) {
+    if (syncRetryTimer !== null) window.clearTimeout(syncRetryTimer);
+    syncRetryTimer = null;
+    return;
+  }
+  if (syncRetryTimer === null && !syncRetryRunning) {
+    syncRetryTimer = window.setTimeout(() => {
+      syncRetryTimer = null;
+      void syncRetryTick();
+    }, syncRetryDelay(syncRetryAttempt));
+  }
+}
+
+async function syncRetryTick() {
+  if (syncRetryRunning) return;
+  if (!(isCentral() && !isVaultLocked() && state.encryption.masterKey && centralSyncState() === "offline")) return;
+  syncRetryRunning = true;
+  syncRetryAttempt += 1;
+  const attempt = syncRetryAttempt;
+  try {
+    const pending = Boolean(state.central.session) && !(await cloudMatchesSyncedBase(syncPayloadEntries()));
+    if (pending) {
+      await flushCloudSync({ evenIfDown: true }); // its own answer clears connectionDown and sets the state
+    } else {
+      const origin = window.location.origin;
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), CLOUD_SYNC_TIMEOUT_MS);
+      try {
+        const response = await fetch(`${origin}/v1/health`, { cache: "no-store", signal: controller.signal });
+        const body = response.ok ? await response.json().catch(() => null) : null;
+        if (body?.ok === true && syncServerAnswered(response, origin)) {
+          connectionDown = false;
+          setSyncStatus(state.central.session ? "ok" : "central-signin");
+        }
+      } catch {
+        // still no connection: the next tick tries again
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    }
+  } finally {
+    syncRetryRunning = false;
+  }
+  if (centralSyncState() !== "offline") {
+    console.info(`[txtshell] connection back — found by the sync retry (attempt ${attempt})`);
+    syncRetryAttempt = 0;
+  }
+  updateSyncRetryTimer();
+}
 
 // Maps a fetchAndDecryptBlocks() error to the ambient indicator, labelled as a PULL
 // problem (distinct from push). No-ops for non-failures (not configured / locked),
@@ -6161,7 +6263,7 @@ function scheduleCloudSync() {
 // round-trip (e.g. sync setup) can report a concrete result. The debounced
 // scheduleCloudSync caller ignores the return — same single upload path.
 //   status: "ok" | "auth" | "error" | "skipped"
-async function flushCloudSync() {
+async function flushCloudSync({ evenIfDown = false } = {}) {
   if (cloudSyncInFlight) {
     // A save landed during an in-flight upload; re-arm so the latest state ships next.
     scheduleCloudSync();
@@ -6175,9 +6277,9 @@ async function flushCloudSync() {
   if (!url || !authToken) {
     return { status: "skipped", reason: "not-configured" }; // nothing to do, no error
   }
-  if (navigator.onLine === false) {
+  if (!evenIfDown && syncConnectionDown()) {
     // The browser knows there is no connection: no request that can only fail. The "online"
-    // listener pushes as soon as it returns (syncConnectionChanged).
+    // listener (or, in account mode, the retry timer) pushes as soon as it returns.
     if (syncIndicatorState === "failed" && SYNC_OFFLINE_REASONS.includes(lastFailureReason)) renderSyncIndicator();
     else setSyncStatus(isCentral() ? "central-offline" : "push-blocked");
     return { status: "error", reason: "network" };
@@ -6236,6 +6338,9 @@ async function flushCloudSync() {
       body,
       signal: controller.signal,
     });
+    // In account mode, an answer that isn't the sync server's (a captive portal) is no connection.
+    if (isCentral() && !syncServerAnswered(response, url)) throw new TypeError("not the sync server");
+    noteSyncServerAnswered(response, url);
     if (response.status === 401) {
       if (isCentral()) {
         dropCentralSession("401");
@@ -6285,9 +6390,11 @@ async function flushCloudSync() {
       return { status: "ok" };
     }
   } catch (error) {
-    // Network down, aborted, or CSP block — the local save already succeeded.
+    // Network down, aborted, or CSP block — the local save already succeeded. Already waiting for the
+    // connection: stay on that reason (no second toast).
     console.warn("[txtshell] cloud sync upload failed", error);
-    setSyncStatus("push-blocked");
+    if (syncIndicatorState === "failed" && SYNC_OFFLINE_REASONS.includes(lastFailureReason)) renderSyncIndicator();
+    else setSyncStatus("push-blocked");
     return { status: "error", reason: error && error.name === "AbortError" ? "timeout" : "network" };
   } finally {
     window.clearTimeout(timeout);
@@ -6604,6 +6711,8 @@ async function fetchAndDecryptBlocks() {
       headers,
       signal: controller.signal,
     });
+    if (isCentral() && !syncServerAnswered(response, url)) throw new TypeError("not the sync server");
+    noteSyncServerAnswered(response, url);
     if (response.status === 304) {
       return { empty: false, upToDate: true, generation: known };
     }
