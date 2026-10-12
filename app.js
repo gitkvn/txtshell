@@ -4500,6 +4500,8 @@ function renderVault() {
     renderCentralPassphraseCard();
   } else if (view === "central-account") {
     renderCentralAccountCard();
+  } else if (view === "central-signout") {
+    renderCentralSignOutCard();
   } else if (view === "central-new-words") {
     renderCentralNewWordsCard();
   } else if (view === "central-devices") {
@@ -4521,6 +4523,8 @@ function renderVault() {
 }
 
 const LOCK_ICON_SVG = `<svg class="vault-icon" width="32" height="32" viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="3.5" y="8" width="11" height="8" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M6 8V5.5a3 3 0 0 1 6 0V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+// The account card's mark: a cloud, not the padlock — "Sync is on" isn't "locked" (manual-run finding 4).
+const SYNC_ICON_SVG = `<svg class="vault-icon" width="32" height="32" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M5.25 14.25h7.5a3 3 0 0 0 .35-5.98 4.4 4.4 0 0 0-8.5.15A2.95 2.95 0 0 0 5.25 14.25z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
 const LOCK_ICON_SVG_DOT = `<svg class="vault-icon" width="32" height="32" viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="3.5" y="8" width="11" height="8" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M6 8V5.5a3 3 0 0 1 6 0V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="9" cy="12.5" r="1.2" fill="currentColor"/></svg>`;
 
 function calculatePassphraseStrength(passphrase) {
@@ -5818,6 +5822,9 @@ let lastFailureReason = null;
 // the same path as typing /account, and the toast/tooltip say so (plan §8, decision 2026-10-09).
 const CENTRAL_ACTION_REASONS = ["central-signin", "central-offline", "central-setup", "central-removed"];
 const CENTRAL_ACTION_HINT = "click here, or type /account";
+// Failures that mean "no connection": the footer and the account card both read offline, and the
+// connection coming back pushes at once (manual-run findings, 2026-10-12).
+const SYNC_OFFLINE_REASONS = ["push-blocked", "central-offline"];
 let syncIndicatorActionBound = false;
 // The last push or pull that reached the server and succeeded, this session (plan §17.3).
 let lastSyncedAt = 0;
@@ -5855,6 +5862,34 @@ async function refreshSyncDoor({ probe = false } = {}) {
     selfHostedSyncConfigured = false;
   }
   renderSyncIndicator();
+}
+
+// The one account state, read by the footer and by the account card so the two never disagree
+// (manual-run finding 1, 2026-10-12): "on" | "syncing" | "offline" | "paused" | "setup" | "removed",
+// or "trouble" for a failure that isn't the account's (a server error, too large…). The browser's
+// own offline flag counts at once, before any push has failed.
+function centralSyncState() {
+  if (state.central.removed) return "removed";
+  const failed = syncIndicatorState === "failed";
+  if (navigator.onLine === false || (failed && SYNC_OFFLINE_REASONS.includes(lastFailureReason))) return "offline";
+  if (failed && lastFailureReason === "central-setup") return "setup";
+  if (!state.central.session || (failed && lastFailureReason === "central-signin")) return "paused";
+  if (failed) return lastFailureReason === "central-removed" ? "removed" : "trouble";
+  return syncIndicatorState === "syncing" ? "syncing" : "on";
+}
+
+// What the footer shows. In account mode it follows centralSyncState(); otherwise the last status.
+function footerSyncStatus() {
+  const own = { st: syncIndicatorState, reason: lastFailureReason };
+  if (!isCentral() || isVaultLocked()) return own;
+  const failedWith = (reason) => (own.st === "failed" && own.reason === reason ? own : { st: "failed", reason });
+  switch (centralSyncState()) {
+    case "offline": return own.st === "failed" && SYNC_OFFLINE_REASONS.includes(own.reason) ? own : { st: "failed", reason: "central-offline" };
+    case "setup": return failedWith("central-setup");
+    case "paused": return failedWith("central-signin");
+    case "removed": return failedWith("central-removed");
+    default: return own;
+  }
 }
 
 function setSyncStatus(status) {
@@ -5900,12 +5935,12 @@ function syncStatusFull(reason) {
 function renderSyncIndicator() {
   if (!syncIndicator) return;
   const labelEl = syncIndicator.querySelector(".sync-label");
-  const st = syncIndicatorState;
+  const { st, reason } = footerSyncStatus();
   const locked = isVaultLocked();
   const central = isCentral();
   // A browser with no account and no self-hosted sync, where the service answers: an invitation.
   const door = !central && !locked && accountServiceAvailable && !selfHostedSyncConfigured;
-  const accountReason = st === "failed" && CENTRAL_ACTION_REASONS.includes(lastFailureReason);
+  const accountReason = st === "failed" && CENTRAL_ACTION_REASONS.includes(reason);
 
   syncIndicator.classList.toggle("is-door", door);
   syncIndicator.classList.toggle("is-syncing", !door && st === "syncing");
@@ -5936,9 +5971,9 @@ function renderSyncIndicator() {
     syncIndicator.setAttribute("data-tooltip", tip);
     syncIndicator.setAttribute("aria-label", tip);
   } else if (st === "failed") {
-    const label = SYNC_STATUS_LABELS[lastFailureReason] || SYNC_STATUS_LABELS["push-server"];
+    const label = SYNC_STATUS_LABELS[reason] || SYNC_STATUS_LABELS["push-server"];
     // The "click here" hint where clicking is the fix (the account reasons).
-    const full = accountReason ? `${syncStatusFull(lastFailureReason)} — ${CENTRAL_ACTION_HINT}` : syncStatusFull(lastFailureReason);
+    const full = accountReason ? `${syncStatusFull(reason)} — ${CENTRAL_ACTION_HINT}` : syncStatusFull(reason);
     labelEl.textContent = label.short;
     syncIndicator.setAttribute("data-tooltip", full);
     syncIndicator.setAttribute("aria-label", full);
@@ -5956,7 +5991,41 @@ function renderSyncIndicator() {
       syncIndicator.setAttribute("aria-label", "Synced");
     }
   }
+  refreshAccountCard();
 }
+
+// The browser's connection (manual-run findings 2, 3, 2026-10-12). Going offline flips the footer and
+// the account card at once, without waiting for a push to fail; coming back — or the page regaining
+// focus while a push waits — pushes straight away instead of at the next edit.
+async function syncConnectionChanged() {
+  if (!(state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey)) return;
+  const { workerUrl } = await getSyncConfig();
+  if (!normalizeWorkerUrl(workerUrl)) return; // this install doesn't sync
+  const waiting = syncIndicatorState === "failed" && SYNC_OFFLINE_REASONS.includes(lastFailureReason);
+  if (navigator.onLine === false) {
+    if (waiting) renderSyncIndicator();
+    else setSyncStatus(isCentral() ? "central-offline" : "push-blocked");
+    return;
+  }
+  if (!waiting) {
+    renderSyncIndicator();
+    return;
+  }
+  if (isCentral() && !state.central.session) {
+    setSyncStatus("central-signin"); // an offline unlock: online now, but a sign-in is what's missing
+    return;
+  }
+  // Nothing changed while offline: the cloud already holds these blocks.
+  if (await cloudMatchesSyncedBase(syncPayloadEntries())) {
+    setSyncStatus("ok");
+    return;
+  }
+  await flushCloudSync();
+}
+window.addEventListener("offline", () => { void syncConnectionChanged(); });
+window.addEventListener("online", () => { void syncConnectionChanged(); });
+window.addEventListener("focus", () => { void syncConnectionChanged(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) void syncConnectionChanged(); });
 
 // Maps a fetchAndDecryptBlocks() error to the ambient indicator, labelled as a PULL
 // problem (distinct from push). No-ops for non-failures (not configured / locked),
@@ -6052,6 +6121,13 @@ async function flushCloudSync() {
   const url = normalizeWorkerUrl(workerUrl);
   if (!url || !authToken) {
     return { status: "skipped", reason: "not-configured" }; // nothing to do, no error
+  }
+  if (navigator.onLine === false) {
+    // The browser knows there is no connection: no request that can only fail. The "online"
+    // listener pushes as soon as it returns (syncConnectionChanged).
+    if (syncIndicatorState === "failed" && SYNC_OFFLINE_REASONS.includes(lastFailureReason)) renderSyncIndicator();
+    else setSyncStatus(isCentral() ? "central-offline" : "push-blocked");
+    return { status: "error", reason: "network" };
   }
   if (pushIsHeld()) {
     // Gated here (not in scheduleCloudSync) so a debounce timer armed BEFORE the
@@ -8635,16 +8711,36 @@ function beginAccount() {
   openAccountCard();
 }
 
-// Which account card fits this device now (plan §17.3).
-function accountCardState() {
-  if (state.central.removed) return "removed";
-  if (syncIndicatorState === "failed" && lastFailureReason === "central-setup" && state.central.session) return "setup";
-  if (state.central.session) return "signed-in";
-  return navigator.onLine === false ? "offline" : "paused";
+// Which account card fits this device now (plan §17.3): the footer's state, always (centralSyncState).
+function accountCardKind(syncState = centralSyncState()) {
+  return ["on", "syncing", "trouble"].includes(syncState) ? "signed-in" : syncState;
+}
+
+// The signed-in card's title and first line for each state it covers.
+function accountCardLines(syncState) {
+  if (syncState === "trouble") return { title: "Sync has a problem.", line: syncStatusFull(lastFailureReason) };
+  return { title: "Sync is on.", line: syncState === "syncing" ? "Syncing…" : lastSyncedText() };
+}
+
+// Keeps an open account card on the footer's state: a different card when the state needs one,
+// otherwise the signed-in card's lines in place (no re-render, so focus stays put).
+function refreshAccountCard() {
+  if (state.vaultView !== "central-account") return;
+  const card = vaultOverlay.querySelector("[data-account]");
+  const syncState = centralSyncState();
+  if (!card || card.dataset.account !== accountCardKind(syncState)) {
+    renderVault();
+    return;
+  }
+  card.dataset.state = syncState;
+  if (card.dataset.account !== "signed-in") return;
+  const { title, line } = accountCardLines(syncState);
+  card.querySelector(".vault-title").textContent = title;
+  card.querySelector('[data-field="last-synced"]').textContent = line;
 }
 
 function openAccountCard() {
-  state.vaultPending = { account: accountCardState() };
+  state.vaultPending = null;
   state.vaultView = "central-account";
   renderVault();
   composerHint.textContent = "Txtshell sync";
@@ -8657,19 +8753,20 @@ function platformOr(withName, without) {
 }
 
 function renderCentralAccountCard() {
-  const kind = state.vaultPending?.account || accountCardState();
+  const syncState = centralSyncState();
+  const kind = accountCardKind(syncState);
   const signInLabel = platformOr((n) => `Sign in with ${n}`, "Sign in");
   const close = `<button class="vault-link" type="button" data-action="close">Close</button>`;
   const quietSignOut = `<button class="vault-link" type="button" data-action="signout">Sign out</button>`;
   const leave = `<button class="vault-link quiet" type="button" data-action="leave">Stop syncing this device</button>`;
   let body;
   if (kind === "signed-in") {
+    const { title, line } = accountCardLines(syncState);
     body = `
-      <p class="vault-title">Sync is on.</p>
-      <p class="vault-subtitle" data-field="last-synced">${escapeHtml(lastSyncedText())}</p>
+      <p class="vault-title">${escapeHtml(title)}</p>
+      <p class="vault-subtitle" data-field="last-synced">${escapeHtml(line)}</p>
       ${state.central.email ? `<p class="vault-subtitle" data-field="email">Signed in as ${escapeHtml(state.central.email)}</p>` : ""}
       <button class="vault-button secondary" type="button" data-action="signout">Sign out</button>
-      <p class="vault-fine">${escapeHtml(platformOr((n) => `Signing out locks your notes on this device. ${n} opens them again.`, "Signing out locks your notes on this device. Signing in opens them again."))}</p>
       <button class="vault-link" type="button" data-action="new-words">Get new 12 words</button>
       <button class="vault-link" type="button" data-action="devices">Your devices</button>
       ${leave}
@@ -8703,21 +8800,37 @@ function renderCentralAccountCard() {
       ${close}`;
   }
   vaultOverlay.innerHTML = `
-    <div class="vault-card" data-account="${kind}">
-      ${LOCK_ICON_SVG_DOT}
+    <div class="vault-card" data-account="${kind}" data-state="${syncState}">
+      ${SYNC_ICON_SVG}
       ${body}
       <p class="vault-error" hidden></p>
     </div>
   `;
   const on = (action, fn) => vaultOverlay.querySelectorAll(`[data-action="${action}"]`).forEach((b) => b.addEventListener("click", fn));
   on("close", exitVaultToNormal);
-  on("signout", () => { void accountSignOut(); });
+  on("signout", () => { state.vaultView = "central-signout"; renderVault(); });
   on("signin", () => { void centralResume(); });
   on("devices", () => { void beginAccountDevices(); });
   on("leave", () => { void beginAccountLeave(); });
   on("new-words", () => { state.vaultView = "central-new-words"; renderVault(); });
   on("save-words", () => { void centralFinishSetup(); });
   on("readd", () => { lockVault(); void beginCentralReadd(); });
+}
+
+// Sign out from the card asks first; the consequence lives here, not as small print on the card
+// (manual-run finding 5). /account signout still signs out at once.
+function renderCentralSignOutCard() {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card" data-account-confirm="signout">
+      ${SYNC_ICON_SVG}
+      <p class="vault-title">Sign out?</p>
+      <p class="vault-subtitle">${escapeHtml(platformOr((n) => `Signing out locks your notes on this device. ${n} opens them again.`, "Signing out locks your notes on this device. Signing in opens them again."))}</p>
+      <button class="vault-button" type="button" data-action="confirm">Sign out</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+  vaultOverlay.querySelector('[data-action="confirm"]').addEventListener("click", () => { void accountSignOut(); });
+  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", openAccountCard);
 }
 
 function renderCentralNewWordsCard() {
