@@ -110,17 +110,17 @@
   // typos before any network.
   async function toEntropy(text) {
     const words = splitWords(text);
-    if (words.length !== 12) throw Object.assign(new Error(`Expected 12 words, got ${words.length}`), { code: "word-count" });
+    if (words.length !== 12) throw Object.assign(new Error(`That's ${words.length} words — it needs all 12.`), { code: "word-count" });
     let bits = "";
     words.forEach((w, i) => {
       const idx = INDEX.get(w);
-      if (idx === undefined) throw Object.assign(new Error(`Word ${i + 1} ("${w}") isn't in the list`), { code: "unknown-word", word: w, position: i + 1 });
+      if (idx === undefined) throw Object.assign(new Error(`Word ${i + 1} ("${w}") doesn't look right. Check the spelling.`), { code: "unknown-word", word: w, position: i + 1 });
       bits += idx.toString(2).padStart(11, "0");
     });
     const entropy = new Uint8Array(16);
     for (let i = 0; i < 16; i++) entropy[i] = parseInt(bits.slice(i * 8, i * 8 + 8), 2);
     const cs = parseInt(bits.slice(128, 132), 2);
-    if (cs !== await checksumBits(entropy)) throw Object.assign(new Error("Those words don't check out — one of them is off"), { code: "checksum" });
+    if (cs !== await checksumBits(entropy)) throw Object.assign(new Error("One of those words is off. Check them against your saved copy."), { code: "checksum" });
     return { entropy, words };
   }
   const phrase = { generate: generatePhrase, fromEntropy, toEntropy, normalizeWord, splitWords, WORDS };
@@ -285,7 +285,7 @@
       const kekRec = await kekFromEntropy(answer.entropy, rec.hkdfSalt);
       let vkX;
       try { vkX = await unwrapVK(rec.blob, kekRec, true); }
-      catch { lastError = "Those words don't match this account."; continue; }   // GCM tag = the check; nothing written
+      catch { lastError = "These aren't the 12 words for this account. If you got new words, use the newest ones."; continue; }   // GCM tag = the check; nothing written
       const prfWrap = await wrapVK(vkX, ctx.kekWrap);
       await api("/v1/keys/prf", "PUT", { blob: prfWrap }, ctx.session);
       return { vk: await unwrapVK(prfWrap, ctx.kekWrap, false), prfWrap, via: "rung2" };

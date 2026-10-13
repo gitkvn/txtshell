@@ -190,6 +190,8 @@ const state = {
     readdCredentialId: null,
     // Failed unlock ceremonies since the vault locked; two promote "use your 12 words" to a button.
     unlockFailures: 0,
+    // This lock came from signing out (in memory: a reload, or the next unlock, clears it).
+    signedOut: false,
     // The account's address, from the last sign-in (plan §17.3). Memory only, like the session.
     email: null,
   },
@@ -4175,13 +4177,13 @@ function entryFromPlaintext(record, text) {
 }
 
 // A short, user-facing summary of the unlock outcome for the composer hint.
-function describeUnlockOutcome(outcome) {
+function describeUnlockOutcome(outcome, unit = "block") {
   const parts = [];
   if (outcome.recovered.length > 0) {
-    parts.push(`recovered ${pluralCount(outcome.recovered.length, "block")} left unencrypted by an interrupted /encrypt`);
+    parts.push(`recovered ${pluralCount(outcome.recovered.length, unit)} left unencrypted by an interrupted /encrypt`);
   }
   if (outcome.unreadable > 0) {
-    parts.push(`${pluralCount(outcome.unreadable, "block")} can't be read with this key (kept, not deleted)`);
+    parts.push(`${pluralCount(outcome.unreadable, unit)} can't be read with this key (kept, not deleted)`);
   }
   return parts.join(" · ");
 }
@@ -5271,10 +5273,10 @@ function renderImportPhraseCard() {
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG}
-      <p class="vault-title">Import encrypted blocks</p>
+      <p class="vault-title">Open a backup</p>
       <p class="vault-subtitle" data-field="import-lead">${state.vaultPending?.importDifferentWords
         ? "This backup was made with different words. Enter the 12 words you had when you made it."
-        : "This backup is from a Txtshell account. Enter the 12 recovery words you had when it was made."}</p>
+        : "This backup is from a Txtshell account. Enter the 12 words you had when you made it."}</p>
       <p class="vault-error" hidden></p>
       ${phraseEntryHtml()}
       <button class="vault-button" type="button" data-action="submit">Import</button>
@@ -5375,13 +5377,13 @@ function renderImportAdoptCard() {
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG_DOT}
-      <p class="vault-title">Keep these notes encrypted on this browser?</p>
+      <p class="vault-title">${fromAccount ? "Lock these notes on this browser?" : "Keep these notes encrypted on this browser?"}</p>
       <p class="vault-subtitle">${fromAccount
-        ? "This file is from a Txtshell account. Keep its blocks encrypted on this browser? You'll choose a passphrase for this browser next."
+        ? "You'll choose a passphrase for this browser next."
         : "This file is from an encrypted Txtshell backup. Use it to set up encryption on this browser too?"}</p>
       <p class="vault-error" hidden></p>
-      <button class="vault-button" type="button" data-action="setup">Set up encryption</button>
-      <button class="vault-button secondary" type="button" data-action="plain">Just import blocks (no encryption)</button>
+      <button class="vault-button" type="button" data-action="setup">${fromAccount ? "Lock them with a passphrase" : "Set up encryption"}</button>
+      <button class="vault-button secondary" type="button" data-action="plain">${fromAccount ? "Don't lock them" : "Just import blocks (no encryption)"}</button>
     </div>
   `;
   const errorLine = vaultOverlay.querySelector(".vault-error");
@@ -7776,13 +7778,13 @@ function renderCentralBusyCard(label) {
 const FORCED_SAVE_COPY = {
   body: "If you ever lose all your devices, these 12 words are the only way to get your notes back. We can't reset them — nobody can read your notes, including us.",
   keep: "Keep them somewhere safe — a password manager, or printed and put away. Don't keep them only on this device, and never share them.",
-  synced: "If your passkey is synced (iCloud Keychain, Google, 1Password…), your other devices won't need these words.",
+  uses: "You won't need these often. They're for setting up a new device, or getting your notes back if you lose every device.",
 };
 
 function forcedSaveHeading(kind) {
-  if (kind === "rotate") return { title: "Your new recovery words", lead: "Your previous words no longer work." };
-  if (kind === "abandon") return { title: "Your new recovery words", lead: "Your account was started over — the old words no longer open it." };
-  return { title: "Your recovery words", lead: "" };
+  if (kind === "rotate") return { title: "Your new 12 words", lead: "Your old 12 words no longer add a device." };
+  if (kind === "abandon") return { title: "Your new 12 words", lead: "Your account was started over. The old words no longer open it." };
+  return { title: "Your 12 words", lead: "" };
 }
 
 function renderCentralForcedSaveCard() {
@@ -7801,7 +7803,7 @@ function renderCentralForcedSaveCard() {
       <p class="vault-subtitle" data-field="body">${escapeHtml(FORCED_SAVE_COPY.body)}</p>
       <ol class="phrase-words" data-field="words"></ol>
       <p class="vault-subtitle" data-field="keep">${escapeHtml(FORCED_SAVE_COPY.keep)}</p>
-      <p class="vault-subtitle" data-field="synced">${escapeHtml(FORCED_SAVE_COPY.synced)}</p>
+      <p class="vault-subtitle" data-field="uses">${escapeHtml(FORCED_SAVE_COPY.uses)}</p>
       <button class="vault-button" type="button" data-action="download">Download the words</button>
       <button class="vault-button secondary" type="button" data-action="copy">Copy</button>
       <p class="vault-subtitle" data-field="note"></p>
@@ -7826,13 +7828,13 @@ function renderCentralForcedSaveCard() {
   };
   vaultOverlay.querySelector('[data-action="download"]').addEventListener("click", () => {
     try {
-      const blob = new Blob([`Txtshell recovery words — keep these somewhere safe, not only on this device:\n\n${words.join(" ")}\n`], { type: "text/plain" });
+      const blob = new Blob([`Txtshell 12 words — you need these to set up a new device or get your notes back. Keep them somewhere safe, not only on this device:\n\n${words.join(" ")}\n`], { type: "text/plain" });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
       link.download = "txtshell-recovery-words.txt";
       link.click();
       URL.revokeObjectURL(link.href);
-      markSaved("Downloaded. Move the file somewhere deliberate — a Downloads folder often syncs to iCloud Drive or OneDrive.");
+      markSaved("Downloaded. Move it somewhere safe — your Downloads folder may sync to iCloud Drive or OneDrive.");
     } catch {
       note.textContent = "Couldn't download here — use Copy instead.";
     }
@@ -8010,7 +8012,7 @@ function renderCentralAbandonCard() {
     <div class="vault-card">
       ${LOCK_ICON_SVG}
       <p class="vault-title">Start your account over?</p>
-      <p class="wipe-warning">Without your 12 words, nothing can open what your account holds now. Starting over deletes the copy in your account and every device's access to it; each device keeps the notes it has and joins again with new 12 words. Type your account's email to confirm.</p>
+      <p class="wipe-warning">Without your 12 words, nobody can open the notes saved in your account — not even us. Starting over clears your account and gives you new 12 words. Notes already on your devices stay there, and each device joins again with the new words. Type your account's email to confirm.</p>
       <p class="vault-error" hidden></p>
       <input class="vault-input" data-field="email" type="email" placeholder="you@example.com" autocomplete="off" spellcheck="false" />
       <button class="vault-button danger" type="button" data-action="submit">Start over</button>
@@ -8485,7 +8487,7 @@ function renderCentralUnlockCard() {
     <div class="vault-card">
       ${LOCK_ICON_SVG}
       <p class="vault-title">Your notes are locked</p>
-      <p class="vault-subtitle">${escapeHtml(platformOr((n) => `Unlock with ${n}.`, "Sign in to unlock."))}</p>
+      <p class="vault-subtitle" data-field="lock-lead">${escapeHtml(state.central.signedOut ? "You're signed out. Unlock to get back to your notes." : platformOr((n) => `Unlock with ${n}.`, "Sign in to unlock."))}</p>
       <p class="vault-error" hidden></p>
       <button class="vault-button" type="button" data-action="unlock">${escapeHtml(platformOr((n) => `Unlock with ${n}`, "Unlock"))}</button>
       ${navigator.onLine === false ? `<p class="vault-advisory" data-field="offline-advisory">${escapeHtml(CENTRAL_OFFLINE_ADVISORY)}</p>` : ""}
@@ -8785,7 +8787,7 @@ async function settleCentralKey({ stored, login, kekWrap, out, identity, readd =
 // the old key, the in-memory copy is dropped, and the error reaches the caller.
 async function applyReKeyOrDeadEnd({ oldKey, out, identity, flagDeletes = [], readd = false }) {
   if (oldKey) {
-    state.vaultPending = { busy: "Moving your blocks to the account's new key" };
+    state.vaultPending = { busy: "Getting your notes ready" }; // the busy card adds its own animated dots
     renderVault();
     state.encryption.masterKey = oldKey;
     state.encryption.unlocked = true;
@@ -8830,6 +8832,7 @@ async function finishCentralUnlock(vk, { offline = false, rekeyed = false, deadE
     state.central.readdCredentialId = null;
   }
   state.central.unlockFailures = 0;
+  state.central.signedOut = false;
   centralRescuedKey = null;
   const outcome = await decryptAllEntriesIntoState();
   state.vaultView = null;
@@ -8838,9 +8841,15 @@ async function finishCentralUnlock(vk, { offline = false, rekeyed = false, deadE
   updateLockButton();
   const outcomeText = describeUnlockOutcome(outcome);
   let hint = outcomeText ? `Unlocked — ${outcomeText}` : "Unlocked";
-  if (rekeyed) hint = `Unlocked — your blocks moved to the account's new key${outcomeText ? ` · ${outcomeText}` : ""}`;
-  if (deadEnd && outcome.unreadable > 0) hint = `Unlocked — ${pluralCount(outcome.unreadable, "block")} on this browser can't be opened with the account's current key (kept; another device that reads them will sync them back)`;
-  if (readd) hint = `${wasRemoved ? "Device added back" : "Unlocked"} — ${rekeyed ? "your blocks moved to the account's new key" : (wasRemoved ? platformOr((n) => `${n} unlocks it from now on`, "signing in unlocks it from now on") : "this device is set up again")}${deadEnd && outcome.unreadable > 0 ? ` · ${pluralCount(outcome.unreadable, "block")} on this browser can't be opened with the account's current key (kept; another device that reads them will sync them back)` : ""}`;
+  // The start-over paths (copy batch, 2026-10-13): notes, not blocks or keys.
+  const noteOutcome = describeUnlockOutcome(outcome, "note");
+  const startedOver = "your account was started over, and your notes here are now part of it";
+  const notOpened = `${pluralCount(outcome.unreadable, "note")} here couldn't be opened after the start-over. They're kept, and will come back if another device can open them.`;
+  if (rekeyed) hint = `Unlocked — ${startedOver}${noteOutcome ? ` · ${noteOutcome}` : ""}.`;
+  if (deadEnd && outcome.unreadable > 0) hint = `Unlocked — ${notOpened}`;
+  if (readd) hint = wasRemoved
+    ? "Device added back — your notes are part of your account again."
+    : `Unlocked — ${rekeyed ? startedOver : "this device is set up again"}${deadEnd && outcome.unreadable > 0 ? ` · ${notOpened}` : "."}`;
   composerHint.textContent = hint;
   render();
   entryInput.focus();
@@ -9000,7 +9009,7 @@ function renderCentralNewWordsCard() {
     <div class="vault-card">
       ${LOCK_ICON_SVG_DOT}
       <p class="vault-title">Get new 12 words?</p>
-      <p class="vault-subtitle">Your current words stop working for adding a device. Backups you already made still open only with your current words, so keep those if you keep the backups.</p>
+      <p class="vault-subtitle">Your old 12 words will stop working for adding a device. Backups you've already downloaded still need the old words — keep them if you keep those backups.</p>
       <button class="vault-button" type="button" data-action="confirm">Get new 12 words</button>
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
     </div>
@@ -9212,7 +9221,7 @@ async function beginAccountPhrase() {
     state.vaultView = null;
     state.vaultPending = null;
     renderVault();
-    composerHint.textContent = "New 12 words saved — the old ones no longer work.";
+    composerHint.textContent = "New 12 words saved. Your old ones no longer add a device.";
     entryInput.focus();
   } catch (error) {
     centralFlowFailed(error, null);
@@ -9229,9 +9238,10 @@ async function accountSignOut() {
   clearCentralSession();
   // A sign-out on a shared machine must not leave the blocks on screen: drop VK and show the
   // unlock card. The cached wrap stays, so the next unlock is a sign-in (plan §8, manual-run
-  // finding 4).
+  // finding 4). The lock card says it was a sign-out (copy batch, 2026-10-13).
+  state.central.signedOut = true;
   lockVault();
-  composerHint.textContent = platformOr((n) => `Signed out and locked — your blocks stay on this device. Unlock with ${n} to sign back in.`, "Signed out and locked — your blocks stay on this device. Unlock to sign back in.");
+  composerHint.textContent = "Signed out.";
 }
 
 // Convert back to an ordinary passphrase vault with the SAME key: no record is
@@ -9330,7 +9340,7 @@ function beginCentralExport(exportEntriesList, exportedLabel) {
   composerHint.textContent = "Export an encrypted backup";
 }
 
-const CENTRAL_EXPORT_NOTE = "This file opens with the recovery words you have today. If you get new words later, this file still needs today's.";
+const CENTRAL_EXPORT_NOTE = "This file opens with your current 12 words. If you get new words later, you'll still need these ones to open it.";
 
 function renderCentralExportCard() {
   const { exportEntriesList, exportedLabel } = state.vaultPending || {};
