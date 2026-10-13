@@ -2697,6 +2697,47 @@ body:has(.sym-palette:not([hidden])) .status-toast {
   border-left-color: transparent;
 }
 
+/* The older version of a note changed on two devices (Part B): a muted label above the note. */
+.older-version {
+  margin: 0 0 6px;
+  font-size: 0.78rem;
+}
+
+.older-version-label {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.older-version-label:hover,
+.older-version-label:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
+.older-version-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.older-version-actions[hidden] {
+  display: none;
+}
+
+.older-version-actions button {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+
 /* First-join card (dev walk, 2026-10-13): the consequence sits right under its quiet link. */
 .first-join-consequence {
   margin: 0;

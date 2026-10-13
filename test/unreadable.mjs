@@ -335,22 +335,17 @@ const B = await device("B");
   check(await waitFor(() => stub.puts > putsBefore, 10000), "B pushed immediately (no edit needed)");
   const blob = await decryptBlob(stub.lastPut, rawKeyA);
   check(blob.length === 7 && blob.filter((e) => e.unreadable).length === 0 && blob.find((e) => e.id === "foreign-1").text === "secret one #tagone", "cloud now holds foreign-1/2 readable");
-  // Replace must not touch B's readable copies when the cloud flags them: put A's old blob back and force a card.
+  // The merge (Part B) must not touch B's readable copies when the cloud flags them: put A's old blob
+  // back (foreign-1/2 flagged again) with a new note of A's, and pull — no card, readable copies kept.
   const healed = stub.blob;
   await B.settle(); // B's heal push has landed; nothing of B's may fire after A's forcing push below
   await A.add("extra from A"); await A.push();
   await A.settle(); // A's add also armed its debounced push; let it fire so the next PUT counted is B's
   const putsA = stub.puts;
-  await B.pull();
-  check(await waitFor(() => B.view().then((v) => v === "pull-conflict")), `B pull → card (${await B.view()})`);
-  const title = await B.eval(`vaultOverlay.querySelector(".vault-title").textContent`);
-  check(/The cloud has changes this browser doesn't/.test(title), `card is cloud-ahead ("${title}"), foreign-1/2 not listed as cloud changes`);
-  console.log(`      pulled: ${JSON.stringify(await B.eval(`state.vaultPending.pullEntries.map((e) => e.id.slice(0, 9) + (e.unreadable ? "!" : ""))`))} | B: ${JSON.stringify(await B.eval(`state.entries.map((e) => e.id.slice(0, 9))`))}`);
-  await B.click("replace");
-  await waitFor(() => B.view().then((v) => v === null));
-  check((await B.entries()).some((e) => e.id === "foreign-1" && e.text === "secret one #tagone") && (await B.unreadable()).length === 0, "after Replace: B still reads foreign-1/2");
-  check(/2 notes that couldn't be opened here are kept and sent back now\./.test(await B.hint()), `replace hint: "${await B.hint()}"`);
-  check(await waitFor(() => stub.puts > putsA, 10000) && (await decryptBlob(stub.lastPut, rawKeyA)).filter((e) => e.unreadable).length === 0, "B pushed readable copies after Replace");
+  await B.pull(); await B.settle();
+  check((await B.view()) === null && (await B.entries()).some((e) => e.text === "extra from A"), `B pull → merged, no card ("${await B.hint()}")`);
+  check((await B.entries()).some((e) => e.id === "foreign-1" && e.text === "secret one #tagone") && (await B.unreadable()).length === 0, "after the merge: B still reads foreign-1/2");
+  check(await waitFor(() => stub.puts > putsA, 10000) && (await decryptBlob(stub.lastPut, rawKeyA)).filter((e) => e.unreadable).length === 0, "B pushed readable copies after the merge");
   void healed;
 }
 

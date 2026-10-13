@@ -1894,6 +1894,7 @@ async function saveEntry(entry) {
       createdAt: entry.createdAt,
       editedAt: entry.editedAt || entry.createdAt,
       pinned: entry.pinned === true,
+      ...(typeof entry.olderVersionOf === "string" ? { olderVersionOf: entry.olderVersionOf } : {}),
     };
   }
   await putEntryRecord(record);
@@ -2518,6 +2519,36 @@ function getDateGroup(dateString) {
   return "Older";
 }
 
+// The older version of a note changed on two devices (Part B): a label in the list, above the note's
+// own (untouched) text. Its actions: keep it as an ordinary note (the label goes), or delete it.
+function olderVersionMarker(entry) {
+  const marker = document.createElement("div");
+  marker.className = "older-version";
+  marker.innerHTML = `
+    <button class="older-version-label" type="button" aria-expanded="false">Older version · kept because this note was changed on two devices</button>
+    <span class="older-version-actions" hidden>
+      <button class="older-version-keep" type="button">Keep as its own note</button>
+      <button class="older-version-delete" type="button">Delete this version</button>
+    </span>`;
+  marker.addEventListener("click", (event) => event.stopPropagation()); // not a click on the note
+  const label = marker.querySelector(".older-version-label");
+  const actions = marker.querySelector(".older-version-actions");
+  label.addEventListener("click", () => {
+    actions.hidden = !actions.hidden;
+    label.setAttribute("aria-expanded", String(!actions.hidden));
+  });
+  marker.querySelector(".older-version-keep").addEventListener("click", () => {
+    const kept = state.entries.find((e) => e.id === entry.id);
+    if (!kept) return;
+    delete kept.olderVersionOf;
+    kept.editedAt = new Date().toISOString(); // a change like any other: it syncs
+    void saveEntry(kept);
+    render();
+  });
+  marker.querySelector(".older-version-delete").addEventListener("click", () => deleteEntry(entry.id));
+  return marker;
+}
+
 function renderEntries(container, entries, options = {}) {
   const { selectResults = false, highlightTerm = "", mode = "search", groupLabel = getDateGroup } = options;
   let lastGroup = null;
@@ -2540,6 +2571,7 @@ function renderEntries(container, entries, options = {}) {
     fragment.querySelector(".entry-timestamp").textContent = formatTimestamp(entry.createdAt);
     body.innerHTML = renderBlockHtml(entry.text, highlightTerm);
     card.dataset.entryId = entry.id;
+    if (typeof entry.olderVersionOf === "string") body.before(olderVersionMarker(entry));
 
     if (selectResults && entry.id === state.selectedEntryId) {
       card.classList.add("is-selected");
@@ -3611,6 +3643,7 @@ async function mergeImportedEntries(items) {
       createdAt: item.createdAt,
       editedAt: typeof item.editedAt === "string" ? item.editedAt : item.createdAt,
       pinned: item.pinned === true,
+      ...(typeof item.olderVersionOf === "string" ? { olderVersionOf: item.olderVersionOf } : {}),
     };
     const existing = state.entries.find((e) => e.id === entry.id);
     if (existing) {
@@ -4173,6 +4206,7 @@ function entryFromPlaintext(record, text) {
     createdAt: record.createdAt,
     editedAt: record.editedAt || record.createdAt,
     pinned: record.pinned === true,
+    ...(typeof record.olderVersionOf === "string" ? { olderVersionOf: record.olderVersionOf } : {}),
   };
 }
 
@@ -4526,6 +4560,8 @@ function renderVault() {
     renderCentralExportCard();
   } else if (view === "first-join") {
     renderFirstJoinCard();
+  } else if (view === "sync-removed") {
+    renderSyncRemovedCard();
   }
 }
 
@@ -6101,7 +6137,8 @@ async function syncConnectionChanged() {
   await flushCloudSync();
 }
 // Focus or a visible page: in account mode while offline, a retry now (it doesn't wait for the online
-// event, which Safari may never send); otherwise the same as a connection change.
+// event, which Safari may never send); otherwise the same as a connection change, and a look at the
+// cloud (Part B): a 304 when nothing changed, the merge when another device did.
 function syncRetryNow() {
   if (isCentral() && !isVaultLocked() && centralSyncState() === "offline") {
     syncRetryAttempt = 0;
@@ -6111,6 +6148,17 @@ function syncRetryNow() {
     return;
   }
   void syncConnectionChanged();
+  pullOnFocus();
+}
+
+// At most every 30 s, never over a card, never while a push or pull is under way.
+const FOCUS_PULL_MIN_MS = 30000;
+let lastPullStartedAt = 0;
+function pullOnFocus() {
+  if (!(state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey)) return;
+  if (state.vaultView || pullHoldDepth > 0 || cloudSyncInFlight || syncConnectionDown()) return;
+  if (Date.now() - lastPullStartedAt < FOCUS_PULL_MIN_MS) return;
+  void autoPullOnUnlock();
 }
 window.addEventListener("offline", () => { connectionDown = true; void syncConnectionChanged(); });
 window.addEventListener("online", () => { connectionDown = false; syncRetryAttempt = 0; void syncConnectionChanged(); });
@@ -6221,8 +6269,16 @@ function dropCentralSession(reason) {
 
 // After a 412: pull under the same hold, without the "Pulling…" copy. Shows the
 // existing card if cloud and local differ; a push follows from Keep/Replace.
+// Two devices merging at once: the server lets one push win; the other gets a 412, pulls, merges again
+// and retries — at most three times in a row, then it waits for the next change.
+let rejectedPushRetries = 0;
 async function pullAfterRejectedPush() {
   if (!(state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey)) return;
+  if (++rejectedPushRetries > 3) {
+    rejectedPushRetries = 0;
+    setSyncStatus("push-server");
+    return;
+  }
   await beginPull({ quiet: true });
 }
 
@@ -6238,7 +6294,7 @@ let pullHoldDepth = 0;
 let cloudSyncDeferred = false;
 
 // The cards that decide what the cloud should hold: no push may fire while one is showing.
-const PUSH_HOLD_VIEWS = ["pull-conflict", "first-join"];
+const PUSH_HOLD_VIEWS = ["pull-conflict", "first-join", "sync-removed"];
 function pushIsHeld() {
   return pullHoldDepth > 0 || PUSH_HOLD_VIEWS.includes(state.vaultView);
 }
@@ -6307,7 +6363,7 @@ async function flushCloudSync({ evenIfDown = false } = {}) {
   const payload = syncPayloadEntries();
   // Canonical form of the exact snapshot being uploaded, taken before any await so
   // a save landing mid-upload can't be recorded as "what the cloud holds".
-  const uploadedCanonical = canonicalizeEntries(payload);
+  const uploadedSnapshot = payload.map((e) => ({ ...e }));
   try {
     // Reuse the exact AES-GCM path used by encrypted export: base64(IV(12) || ct+tag).
     // Upload the raw bytes of that blob; iOS splits the 12-byte IV prefix and decrypts.
@@ -6391,7 +6447,8 @@ async function flushCloudSync({ evenIfDown = false } = {}) {
         // always were) and this browser says so once. Redeploying the Worker is the fix.
         showHint("sync-legacy-worker", "Update your sync Worker for conflict protection — redeploy it from github.com/gitkvn/txtshell-sync");
       }
-      void recordSyncedBaseCanonical(uploadedCanonical); // the cloud now holds this snapshot
+      rejectedPushRetries = 0;
+      void recordSyncedBase(uploadedSnapshot); // the cloud now holds this snapshot
       return { status: "ok" };
     }
   } catch (error) {
@@ -6895,6 +6952,7 @@ function canonicalizeEntries(entries) {
       createdAt: typeof e.createdAt === "string" ? e.createdAt : "",
       editedAt: typeof e.editedAt === "string" ? e.editedAt : (e.createdAt || ""),
       pinned: e.pinned === true,
+      ...(typeof e.olderVersionOf === "string" ? { olderVersionOf: e.olderVersionOf } : {}),
     }))
     .sort((a, b) => a.id.localeCompare(b.id));
   return JSON.stringify(normalized);
@@ -6918,6 +6976,11 @@ const SYNC_BASE_HASH_KEY = "sync-last-synced-hash";
 // for it and no conditional header is ever sent to it (its CORS allow-list
 // would refuse one). A Txtshell account always speaks conditionally.
 const SYNC_GENERATION_KEY = "sync-last-synced-generation";
+// What this browser and the cloud last agreed on, note by note: id → fingerprint (SHA-256 of the note's
+// canonical form). The everyday merge's base (Part B, 2026-10-13): with it, "deleted on another device"
+// and "new here" are different observations, so no deletion record is needed in the cloud copy.
+// Encrypted under the master key, like the set hash above; readable notes only.
+const SYNC_BASE_MAP_KEY = "sync-last-synced-notes";
 
 function isCentral() {
   return state.encryption.mode === "central";
@@ -6962,7 +7025,7 @@ async function syncIsConditional() {
 // is never reused, and when the cloud turns out to be empty.
 async function clearSyncState() {
   try {
-    await Promise.all([deleteMeta(SYNC_BASE_HASH_KEY), deleteMeta(SYNC_GENERATION_KEY)]);
+    await Promise.all([deleteMeta(SYNC_BASE_HASH_KEY), deleteMeta(SYNC_BASE_MAP_KEY), deleteMeta(SYNC_GENERATION_KEY)]);
   } catch (error) {
     console.warn("[txtshell] couldn't clear sync state", error);
   }
@@ -6983,12 +7046,60 @@ async function recordSyncedBaseCanonical(canonical) {
   }
 }
 
-function recordSyncedBase(entries) {
-  return recordSyncedBaseCanonical(canonicalizeEntries(entries));
+async function recordSyncedBase(entries) {
+  await recordSyncedBaseCanonical(canonicalizeEntries(entries));
+  await recordSyncBaseMap(entries);
+}
+
+async function noteFingerprint(entry) {
+  return sha256Hex(canonicalizeEntries([entry]));
+}
+
+// id → fingerprint for the readable notes of a set (unreadable records keep their own rules).
+async function noteFingerprints(entries) {
+  const map = new Map();
+  for (const e of entries) {
+    if (e && typeof e.id === "string" && typeof e.text === "string" && !isUnreadableRecord(e)) map.set(e.id, await noteFingerprint(e));
+  }
+  return map;
+}
+
+async function recordSyncBaseMap(entries) {
+  if (!(state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey)) return;
+  try {
+    const map = await noteFingerprints(entries);
+    await saveMeta(SYNC_BASE_MAP_KEY, await encryptPlaintext(JSON.stringify(Object.fromEntries(map)), state.encryption.masterKey));
+  } catch (error) {
+    console.warn("[txtshell] couldn't record the sync base list", error); // no base is always safe
+  }
+}
+
+// The base list, or null when there is none (never synced here, cleared, or another key).
+async function readSyncBaseMap() {
+  if (!(state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey)) return null;
+  try {
+    const stored = await getMeta(SYNC_BASE_MAP_KEY);
+    if (!stored) return null;
+    const obj = JSON.parse(await decryptCiphertext(stored, state.encryption.masterKey));
+    return obj && typeof obj === "object" ? new Map(Object.entries(obj)) : null;
+  } catch {
+    return null;
+  }
+}
+
+// The base for a merge. A browser that synced before per-note bases has only the set's hash: if this
+// browser, or the cloud, still equals that set, its notes are the base (a one-time upgrade).
+async function syncBaseFor(cloudEntries) {
+  const map = await readSyncBaseMap();
+  if (map) return map;
+  if (await cloudMatchesSyncedBase(syncPayloadEntries())) return noteFingerprints(state.entries);
+  if (await cloudMatchesSyncedBase(cloudEntries)) return noteFingerprints(cloudEntries);
+  return null; // no base: a plain union (nothing is inferred deleted)
 }
 
 async function clearSyncedBase() {
   try {
+    await deleteMeta(SYNC_BASE_MAP_KEY);
     await deleteMeta(SYNC_BASE_HASH_KEY);
   } catch (error) {
     console.warn("[txtshell] couldn't clear sync base", error);
@@ -7033,6 +7144,7 @@ async function beginPull({ quiet = false } = {}) {
     return;
   }
   if (!quiet) composerHint.textContent = "Pulling…";
+  lastPullStartedAt = Date.now();
   pullHoldDepth++;
   try {
     const result = await fetchAndDecryptBlocks();
@@ -7041,6 +7153,7 @@ async function beginPull({ quiet = false } = {}) {
     if (result.upToDate) {
       state.central.firstJoin = false;
       composerHint.textContent = "Already up to date.";
+      await pushIfAhead();
       return;
     }
     // A first join that needs no card says what happened (dev walk, 2026-10-13).
@@ -7055,8 +7168,12 @@ async function beginPull({ quiet = false } = {}) {
       return;
     }
     const reconciled = await reconcileCloudEntries(result.entries);
-    if (entriesDiffer(reconciled.cloud, reconciled.local)) {
+    if (entriesDiffer(reconciled.cloud, reconciled.local) && joining) {
       await showPullConflict(result.entries, reconciled, result.generation); // awaited: the card must be up before the hold lifts
+    } else if (entriesDiffer(reconciled.cloud, reconciled.local)) {
+      const hint = await mergeEverydayPull(result.entries, reconciled, result.generation);
+      if (hint) composerHint.textContent = hint;
+      else if (!quiet && !state.vaultView) composerHint.textContent = "Already up to date.";
     } else {
       void recordSyncedBase(result.entries); // local == cloud, established
       if (result.generation !== null) void recordSyncedGeneration(result.generation);
@@ -7090,6 +7207,7 @@ async function beginPull({ quiet = false } = {}) {
 // hint toast and are otherwise ignored; an empty cloud is a silent no-op. Only prompts
 // when the normal view is showing, so it never clobbers an open vault card.
 async function autoPullOnUnlock() {
+  lastPullStartedAt = Date.now();
   pullHoldDepth++;
   try {
     const result = await fetchAndDecryptBlocks();
@@ -7097,6 +7215,7 @@ async function autoPullOnUnlock() {
     setSyncStatus("ok"); // reachable + decrypted: the sync channel is healthy
     if (result.upToDate) {
       state.central.firstJoin = false;
+      await pushIfAhead();
       return;
     }
     if (result.empty) {
@@ -7106,8 +7225,12 @@ async function autoPullOnUnlock() {
     }
     if (!state.encryption.unlocked || state.vaultView) return; // user moved on; catch it next time
     const reconciled = await reconcileCloudEntries(result.entries);
-    if (entriesDiffer(reconciled.cloud, reconciled.local)) {
+    const joining = isCentral() && state.central.firstJoin;
+    if (entriesDiffer(reconciled.cloud, reconciled.local) && joining) {
       await showPullConflict(result.entries, reconciled, result.generation); // awaited: the card must be up before the hold lifts
+    } else if (entriesDiffer(reconciled.cloud, reconciled.local)) {
+      const hint = await mergeEverydayPull(result.entries, reconciled, result.generation);
+      if (hint) composerHint.textContent = hint;
     } else {
       void recordSyncedBase(result.entries); // local == cloud, established
       if (result.generation !== null) void recordSyncedGeneration(result.generation);
@@ -7201,6 +7324,213 @@ async function joinWithoutCard(cloudEntries, cloudGeneration, { A, B, X, Y }) {
     : X > 0
       ? `Sync is on — ${pluralCount(X, "note")} from the cloud added.`
       : `Sync is on — ${Y} of your notes added to the cloud.`;
+}
+
+// A pull is a full sync (Part B): the cloud is unchanged (304) but this browser has a change it never
+// got up — a push that failed, say — so send it now rather than at the next edit.
+async function pushIfAhead() {
+  if (!(await cloudMatchesSyncedBase(syncPayloadEntries()))) scheduleCloudSync();
+}
+
+// ---------- the everyday merge (Part B, 2026-10-13) ----------
+// Three-way, per note, against what this browser and the cloud last agreed on (the base list). It never
+// loses a note:
+//   only on one side, not in the base          → new there: kept on both
+//   in the base, unchanged here, gone from cloud → deleted on another device: deleted here
+//   in the base, unchanged in cloud, gone here   → deleted here: stays deleted
+//   changed on one side, gone from the other     → the edit beats the delete: kept
+//   changed on one side only                     → that change wins
+//   changed on both (or no base)                 → newer wins; the older one is kept as its own note,
+//                                                  marked olderVersionOf (same text, same stamps)
+// Readable notes only: unreadable records keep the reconcile rules (never deleted by inference).
+// With no base at all (a first join) it is a plain union with the same both-changed rule.
+async function mergeNotes(base, localEntries, cloudEntries) {
+  const usable = (e) => e && typeof e.id === "string" && typeof e.text === "string" && !isUnreadableRecord(e);
+  const L = new Map(localEntries.filter(usable).map((e) => [e.id, e]));
+  const C = new Map(cloudEntries.filter(usable).map((e) => [e.id, e]));
+  const merged = new Map();
+  const toLocal = [];     // notes to write here (new from elsewhere, updated, kept copies)
+  const deleteLocal = []; // notes here that another device deleted
+  const counts = { added: 0, updated: 0, deleted: 0, bothKept: 0 };
+  for (const id of new Set([...L.keys(), ...C.keys()])) {
+    const l = L.get(id);
+    const c = C.get(id);
+    const b = base ? base.get(id) : undefined;
+    if (l && c) {
+      const fl = await noteFingerprint(l);
+      const fc = await noteFingerprint(c);
+      if (fl === fc) { merged.set(id, l); continue; }
+      const localChanged = b === undefined || fl !== b;
+      const cloudChanged = b === undefined || fc !== b;
+      if (localChanged && !cloudChanged) { merged.set(id, l); continue; }
+      if (!localChanged && cloudChanged) { merged.set(id, c); toLocal.push(c); counts.updated++; continue; }
+      // Changed on both. The newer edit wins; an exact tie is broken by fingerprint so every device agrees.
+      const delta = entryFreshness(l) - entryFreshness(c);
+      const localNewer = Number.isFinite(delta) && delta !== 0 ? delta > 0 : fl > fc;
+      const newer = localNewer ? l : c;
+      const older = localNewer ? c : l;
+      merged.set(id, newer);
+      if (!localNewer) toLocal.push(c);
+      if (l.text === c.text) continue; // only the pin differs: nothing worth keeping twice
+      const copy = await olderCopyOf(older);
+      if (!L.has(copy.id) && !C.has(copy.id) && !merged.has(copy.id)) {
+        merged.set(copy.id, copy);
+        toLocal.push(copy);
+        counts.bothKept++;
+      }
+      continue;
+    }
+    if (l) {
+      if (b === undefined) { merged.set(id, l); continue; }                                  // new here
+      if ((await noteFingerprint(l)) === b) { deleteLocal.push(l); counts.deleted++; continue; } // deleted elsewhere
+      merged.set(id, l); continue;                                                            // edited here: kept
+    }
+    if (b !== undefined && (await noteFingerprint(c)) === b) continue;                         // deleted here
+    merged.set(id, c); toLocal.push(c); counts.added++;                                        // new (or edited) elsewhere
+  }
+  return { merged: [...merged.values()], toLocal, deleteLocal, counts };
+}
+
+// The older version of a note changed on two devices, kept as its own note. Its id comes from the
+// original's id and the older version's content, so two devices resolving the same conflict make the
+// same note (and the duplicates collapse). Its text and stamps are untouched; only the marker is added.
+async function olderCopyOf(older) {
+  const original = typeof older.olderVersionOf === "string" ? older.olderVersionOf : older.id;
+  const h = await sha256Hex(`${older.id}|${await noteFingerprint(older)}`);
+  return {
+    id: `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`,
+    text: older.text,
+    tags: extractTags(older.text),
+    mentions: extractMentions(older.text),
+    createdAt: older.createdAt,
+    editedAt: older.editedAt || older.createdAt,
+    pinned: false,
+    olderVersionOf: original,
+  };
+}
+
+// Writes a merge's result into this browser (saves arm a push; the caller decides whether it stays armed).
+async function applyMergeToLocal(merge) {
+  for (const item of merge.toLocal) {
+    const entry = entryFromPlaintext(item, item.text);
+    const index = state.entries.findIndex((e) => e.id === entry.id);
+    if (index === -1) state.entries.push(entry);
+    else state.entries[index] = entry;
+    await saveEntry(entry);
+  }
+  if (merge.deleteLocal.length > 0) {
+    const ids = new Set(merge.deleteLocal.map((e) => e.id));
+    state.entries = state.entries.filter((e) => !ids.has(e.id));
+    await deleteEntryRecords([...ids]);
+  }
+  state.entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  render();
+}
+
+// "Synced · 2 notes added from another device", and the mixed form (approved 2026-10-13).
+function syncMergeHint({ added, updated, deleted, bothKept }) {
+  const kinds = [["added", added], ["updated", updated], ["deleted", deleted]].filter(([, n]) => n > 0);
+  const both = bothKept > 0 ? `${pluralCount(bothKept, "note")} changed on two devices — both versions kept` : "";
+  if (kinds.length === 0) return both ? `Synced · ${both}` : "";
+  if (kinds.length === 1 && !both) {
+    const [kind, n] = kinds[0];
+    return kind === "deleted" ? `Synced · ${pluralCount(n, "note")} deleted on another device` : `Synced · ${pluralCount(n, "note")} ${kind} from another device`;
+  }
+  return `Synced · from another device: ${kinds.map(([kind, n]) => `${n} ${kind}`).join(", ")}${both ? ` · ${both}` : ""}`;
+}
+
+// The safety valve: one merge that would remove more than half of this browser's notes, and more
+// than ten, asks first (a buggy device must not empty another one).
+const SYNC_REMOVE_ASK_MIN = 10;
+
+// A pull that found differences, outside a first join: merge, apply, push what the cloud lacks.
+// Returns the hint ("" when nothing changed here).
+async function mergeEverydayPull(cloudEntries, reconciled, cloudGeneration) {
+  const base = await syncBaseFor(cloudEntries);
+  const merge = await mergeNotes(base, reconciled.local, reconciled.cloud);
+  if (merge.deleteLocal.length > SYNC_REMOVE_ASK_MIN && merge.deleteLocal.length > reconciled.local.length / 2) {
+    if (state.vaultView) return ""; // a card is open: the next pull asks
+    state.vaultPending = { syncRemoved: { merge, cloudEntries, cloudReadable: reconciled.cloud, cloudGeneration } };
+    state.vaultView = "sync-removed";
+    renderVault();
+    return "";
+  }
+  return applyEverydayMerge(merge, cloudEntries, reconciled.cloud, cloudGeneration);
+}
+
+async function applyEverydayMerge(merge, cloudEntries, cloudReadable, cloudGeneration, { keepRemoved = false } = {}) {
+  if (keepRemoved) {
+    merge = { ...merge, merged: [...merge.merged, ...merge.deleteLocal], deleteLocal: [], counts: { ...merge.counts, deleted: 0 } };
+  }
+  if (Number.isInteger(cloudGeneration)) await recordSyncedGeneration(cloudGeneration); // the push is conditional on the cloud we merged
+  await applyMergeToLocal(merge);
+  if (canonicalizeEntries(merge.merged) === canonicalizeEntries(cloudReadable)) {
+    // This browser now matches the cloud: record it, and drop the push the saves armed (it would only
+    // move the generation and send other devices to a 412 over nothing).
+    await recordSyncedBase(cloudEntries);
+    if (cloudSyncTimer !== null) {
+      window.clearTimeout(cloudSyncTimer);
+      cloudSyncTimer = null;
+    }
+    cloudSyncDeferred = false;
+  } else {
+    scheduleCloudSync(); // the cloud lacks something: push (held until the pull's hold lifts)
+  }
+  return syncMergeHint(merge.counts);
+}
+
+function renderSyncRemovedCard() {
+  const pending = state.vaultPending?.syncRemoved;
+  if (!pending) {
+    exitVaultToNormal();
+    return;
+  }
+  const removed = pending.merge.deleteLocal;
+  const n = removed.length;
+  vaultOverlay.innerHTML = `
+    <div class="vault-card" data-sync-removed="${n}">
+      ${SYNC_ICON_SVG}
+      <p class="vault-title">Another device removed ${n} of your notes</p>
+      <p class="vault-subtitle">If you didn't delete them, keep them — they'll go back to the cloud.</p>
+      <button class="vault-link" type="button" data-action="show-removed" aria-expanded="false">Show which</button>
+      <div data-field="removed-list" hidden>${notePreviewList(removed)}</div>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="keep">Keep them</button>
+      <button class="vault-link" type="button" data-action="remove">Remove them here too</button>
+    </div>
+  `;
+  const toggle = vaultOverlay.querySelector('[data-action="show-removed"]');
+  toggle.addEventListener("click", () => {
+    const panel = vaultOverlay.querySelector('[data-field="removed-list"]');
+    panel.hidden = !panel.hidden;
+    toggle.textContent = panel.hidden ? "Show which" : "Hide";
+    toggle.setAttribute("aria-expanded", String(!panel.hidden));
+  });
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const buttons = [...vaultOverlay.querySelectorAll("button")];
+  const settle = (keepRemoved) => async () => {
+    buttons.forEach((button) => { button.disabled = true; });
+    try {
+      // Applied while the card still holds pushes; closing it releases the push.
+      await applyEverydayMerge(pending.merge, pending.cloudEntries, pending.cloudReadable, pending.cloudGeneration, { keepRemoved });
+      state.vaultPending = null;
+      exitVaultToNormal();
+      composerHint.textContent = keepRemoved ? `Kept ${n} notes — they're back in the cloud.` : `Removed ${n} notes, as on your other device.`;
+    } catch (error) {
+      console.error(error);
+      errorLine.textContent = "That didn't work. Try again.";
+      errorLine.hidden = false;
+      buttons.forEach((button) => { button.disabled = false; });
+    }
+  };
+  vaultOverlay.querySelector('[data-action="keep"]').addEventListener("click", settle(true));
+  vaultOverlay.querySelector('[data-action="remove"]').addEventListener("click", settle(false));
+  vaultOverlay.querySelector('[data-action="keep"]').focus(); // the safe choice is the default
+}
+
+// Up to five notes by their first line, then "and N more" (the cards' Show which and confirmations).
+function notePreviewList(entries) {
+  return `<ul class="pull-diff-list">${entries.slice(0, 5).map((e) => `<li>${escapeHtml(previewBlockText(e))}</li>`).join("")}${entries.length > 5 ? `<li class="pull-diff-more">and ${entries.length - 5} more</li>` : ""}</ul>`;
 }
 
 // Per-id three-way-ish diff of the cloud snapshot against local. No tombstones
@@ -8373,7 +8703,7 @@ async function centralJoin({ via, registered } = {}) {
         entries: null, // same key: no record is rewritten (enc-verify already valid)
         key: null,
         metaPuts: centralMetaRows({ ...identity, prfWrap: out.prfWrap }),
-        metaDeletes: [...CENTRAL_PASSPHRASE_ROWS, SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY],
+        metaDeletes: [...CENTRAL_PASSPHRASE_ROWS, SYNC_BASE_HASH_KEY, SYNC_BASE_MAP_KEY, SYNC_GENERATION_KEY],
       });
       state.encryption.mode = "central";
       state.encryption.masterKey = out.vk;
@@ -8394,7 +8724,7 @@ async function centralJoin({ via, registered } = {}) {
         entries: state.entries,
         key: out.vk,
         metaPuts: [...centralMetaRows({ ...identity, prfWrap: out.prfWrap }), [ENC_VERIFY_KEY, verify]],
-        metaDeletes: [DRAFT_KEY, DRAFT_STASH_KEY, SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY],
+        metaDeletes: [DRAFT_KEY, DRAFT_STASH_KEY, SYNC_BASE_HASH_KEY, SYNC_BASE_MAP_KEY, SYNC_GENERATION_KEY],
       });
       state.encryption.enabled = true;
       state.encryption.unlocked = true;
@@ -8416,7 +8746,7 @@ async function centralJoin({ via, registered } = {}) {
       entries: null,
       key: null,
       metaPuts: centralMetaRows({ ...identity, prfWrap: out.prfWrap }),
-      metaDeletes: [...CENTRAL_PASSPHRASE_ROWS, SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY],
+      metaDeletes: [...CENTRAL_PASSPHRASE_ROWS, SYNC_BASE_HASH_KEY, SYNC_BASE_MAP_KEY, SYNC_GENERATION_KEY],
     });
     state.encryption.mode = "central";
     state.encryption.masterKey = out.vk;
@@ -8440,7 +8770,7 @@ async function centralJoin({ via, registered } = {}) {
     entries: state.entries,
     key: out.vk,
     metaPuts: [...centralMetaRows({ ...identity, prfWrap: out.prfWrap }), [ENC_VERIFY_KEY, verify]],
-    metaDeletes: [...CENTRAL_PASSPHRASE_ROWS, DRAFT_KEY, DRAFT_STASH_KEY, SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY],
+    metaDeletes: [...CENTRAL_PASSPHRASE_ROWS, DRAFT_KEY, DRAFT_STASH_KEY, SYNC_BASE_HASH_KEY, SYNC_BASE_MAP_KEY, SYNC_GENERATION_KEY],
   });
   state.encryption.enabled = true;
   state.encryption.unlocked = true;
@@ -8843,7 +9173,7 @@ async function applyReKeyOrDeadEnd({ oldKey, out, identity, flagDeletes = [], re
         entries: state.entries,
         key: out.vk,
         metaPuts: [...centralMetaRows({ ...identity, prfWrap: out.prfWrap }), [ENC_VERIFY_KEY, verify]],
-        metaDeletes: [SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY, ...flagDeletes],
+        metaDeletes: [SYNC_BASE_HASH_KEY, SYNC_BASE_MAP_KEY, SYNC_GENERATION_KEY, ...flagDeletes],
       });
     } catch (error) {
       state.encryption.masterKey = null;
@@ -8863,7 +9193,7 @@ async function applyReKeyOrDeadEnd({ oldKey, out, identity, flagDeletes = [], re
     entries: null,
     key: null,
     metaPuts: [...centralMetaRows({ ...identity, prfWrap: out.prfWrap }), [ENC_VERIFY_KEY, verify]],
-    metaDeletes: [SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY, ...flagDeletes],
+    metaDeletes: [SYNC_BASE_HASH_KEY, SYNC_BASE_MAP_KEY, SYNC_GENERATION_KEY, ...flagDeletes],
   });
   await finishCentralUnlock(out.vk, { offline: false, deadEnd: true, readd });
 }
@@ -9136,7 +9466,7 @@ async function centralResume() {
         entries: state.entries,
         key: out.vk,
         metaPuts: [...centralMetaRows({ ...identity, prfWrap: out.prfWrap }), [ENC_VERIFY_KEY, verify]],
-        metaDeletes: [SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY],
+        metaDeletes: [SYNC_BASE_HASH_KEY, SYNC_BASE_MAP_KEY, SYNC_GENERATION_KEY],
       });
       state.encryption.masterKey = out.vk;
       state.central.firstJoin = true;
@@ -9323,7 +9653,7 @@ async function handleAccountLeaveSubmit(passphrase) {
       [ENC_WRAPPED_PASS_KEY, wrappedPass],
       [ENC_ITERATIONS_PASS_KEY, String(PBKDF2_ITERATIONS)],
     ],
-    metaDeletes: [...CENTRAL_ROWS, SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY],
+    metaDeletes: [...CENTRAL_ROWS, SYNC_BASE_HASH_KEY, SYNC_BASE_MAP_KEY, SYNC_GENERATION_KEY],
   });
   if (state.central.session) {
     await window.txCentral.devices.signOut(state.central.session).catch(() => {});
@@ -9446,16 +9776,22 @@ function renderFirstJoinCard() {
   const Y = diff.localOnly.length;
   const changedIds = new Set([...diff.cloudNewer, ...diff.localNewer, ...diff.ambiguous].map((e) => e.id));
   const Z = changedIds.size;
-  // Keep all = every id on either side, once (a note changed in both keeps its newer version, for now).
-  const N = new Set([...cloudSet, ...localSet].filter((e) => e && typeof e.id === "string").map((e) => e.id)).size;
+  // Keep all = every note on either side; a note changed differently on both keeps both versions (the
+  // everyday merge with no base), so N counts the kept older version too.
+  const differentText = [...changedIds].filter((id) => {
+    const l = localSet.find((e) => e.id === id);
+    const c = cloudSet.find((e) => e.id === id);
+    return l && c && l.text !== c.text;
+  }).length;
+  const N = new Set([...cloudSet, ...localSet].filter((e) => e && typeof e.id === "string").map((e) => e.id)).size + differentText;
   const notes = (n) => pluralCount(n, "note");
-  // Up to five notes by their first line, then "and N more" (the same list in the card and its confirmation).
-  const list = (entries) => `<ul class="pull-diff-list">${entries.slice(0, 5).map((e) => `<li>${escapeHtml(previewBlockText(e))}</li>`).join("")}${entries.length > 5 ? `<li class="pull-diff-more">and ${entries.length - 5} more</li>` : ""}</ul>`;
+  const list = notePreviewList;
 
   const merge = async () => {
     const cloudGeneration = state.vaultPending?.pullGeneration;
-    await mergeImportedEntries(cloudEntries); // union; newer edit wins on a shared id; re-encrypts under VK
+    const result = await mergeNotes(null, localSet, cloudSet); // no base: the union, older versions kept
     if (Number.isInteger(cloudGeneration)) await recordSyncedGeneration(cloudGeneration);
+    await applyMergeToLocal(result);
     state.central.firstJoin = false;
     state.vaultView = null;
     state.vaultPending = null;
