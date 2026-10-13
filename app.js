@@ -6151,21 +6151,61 @@ function syncRetryNow() {
   pullOnFocus();
 }
 
-// At most every 30 s, never over a card, never while a push or pull is under way.
-const FOCUS_PULL_MIN_MS = 30000;
+// Every focus looks at the cloud (two-device walk, 2026-10-13: a 30 s limit hid the other device's
+// note). Focus events within 2 s count as one; a focus while a pull or push is under way pulls once
+// more after it; a look that finds nothing new looks again 3 s later while the window still has
+// focus (the other device's upload may still be on its way). Never over a card, locked or offline.
+const FOCUS_PULL_MERGE_MS = 2000;
+const FOCUS_PULL_RECHECK_MS = 3000;
 let lastPullStartedAt = 0;
-function pullOnFocus() {
-  if (!(state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey)) return;
-  if (state.vaultView || pullHoldDepth > 0 || cloudSyncInFlight || syncConnectionDown()) return;
-  if (Date.now() - lastPullStartedAt < FOCUS_PULL_MIN_MS) return;
-  void autoPullOnUnlock();
+let focusPullPending = false;
+let focusRecheckTimer = null;
+function focusPullAllowed() {
+  return state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey && !state.vaultView && !syncConnectionDown();
 }
+function pullOnFocus() {
+  if (!focusPullAllowed()) return;
+  if (pullHoldDepth > 0 || cloudSyncInFlight) {
+    focusPullPending = true;
+    return;
+  }
+  if (Date.now() - lastPullStartedAt < FOCUS_PULL_MERGE_MS) return;
+  void focusPull();
+}
+async function focusPull({ recheck = true } = {}) {
+  if (focusRecheckTimer !== null) window.clearTimeout(focusRecheckTimer);
+  focusRecheckTimer = null;
+  const outcome = await autoPullOnUnlock();
+  if (outcome !== "unchanged" || !recheck) return;
+  focusRecheckTimer = window.setTimeout(() => {
+    focusRecheckTimer = null;
+    if (document.hasFocus() && focusPullAllowed() && pullHoldDepth === 0 && !cloudSyncInFlight) void focusPull({ recheck: false });
+  }, FOCUS_PULL_RECHECK_MS);
+}
+// Called when a pull or push ends: the focus that arrived during it gets its own look.
+function runPendingFocusPull() {
+  if (!focusPullPending || pullHoldDepth > 0 || cloudSyncInFlight) return;
+  focusPullPending = false;
+  if (focusPullAllowed()) window.setTimeout(() => void focusPull(), 0);
+}
+// Leaving the window: a change waiting out the 1 s delay goes now, so the device you switch to
+// can already see it.
+function pushNowOnLeave() {
+  if (cloudSyncTimer === null) return;
+  window.clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = null;
+  void flushCloudSync();
+}
+window.addEventListener("blur", pushNowOnLeave);
+window.addEventListener("pagehide", pushNowOnLeave);
 window.addEventListener("offline", () => { connectionDown = true; void syncConnectionChanged(); });
 window.addEventListener("online", () => { connectionDown = false; syncRetryAttempt = 0; void syncConnectionChanged(); });
 window.addEventListener("focus", syncRetryNow);
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) updateSyncRetryTimer(); // paused while hidden; a visible page retries at once
-  else syncRetryNow();
+  if (document.hidden) {
+    pushNowOnLeave();
+    updateSyncRetryTimer(); // paused while hidden; a visible page retries at once
+  } else syncRetryNow();
 });
 
 // The retry timer (dev walk, 2026-10-12), account mode only: runs while unlocked, visible and offline;
@@ -6461,6 +6501,7 @@ async function flushCloudSync({ evenIfDown = false } = {}) {
   } finally {
     window.clearTimeout(timeout);
     cloudSyncInFlight = false;
+    runPendingFocusPull();
   }
 }
 
@@ -7200,14 +7241,17 @@ async function beginPull({ quiet = false } = {}) {
   } finally {
     pullHoldDepth--;
     releaseDeferredPush(); // no-op if the conflict card is now holding
+    runPendingFocusPull();
   }
 }
 
 // Non-blocking background fetch fired after a successful unlock. Failures surface as a
 // hint toast and are otherwise ignored; an empty cloud is a silent no-op. Only prompts
 // when the normal view is showing, so it never clobbers an open vault card.
+// Returns "unchanged" when the cloud held nothing new for this browser, else "changed" (null on error).
 async function autoPullOnUnlock() {
   lastPullStartedAt = Date.now();
+  let outcome = "changed";
   pullHoldDepth++;
   try {
     const result = await fetchAndDecryptBlocks();
@@ -7216,14 +7260,14 @@ async function autoPullOnUnlock() {
     if (result.upToDate) {
       state.central.firstJoin = false;
       await pushIfAhead();
-      return;
+      return "unchanged";
     }
     if (result.empty) {
       state.central.firstJoin = false;
       void clearSyncedBase();
-      return;
+      return "unchanged";
     }
-    if (!state.encryption.unlocked || state.vaultView) return; // user moved on; catch it next time
+    if (!state.encryption.unlocked || state.vaultView) return null; // user moved on; catch it next time
     const reconciled = await reconcileCloudEntries(result.entries);
     const joining = isCentral() && state.central.firstJoin;
     if (entriesDiffer(reconciled.cloud, reconciled.local) && joining) {
@@ -7234,6 +7278,7 @@ async function autoPullOnUnlock() {
     } else {
       void recordSyncedBase(result.entries); // local == cloud, established
       if (result.generation !== null) void recordSyncedGeneration(result.generation);
+      outcome = "unchanged";
     }
     if (reconciled.recovered > 0 || reconciled.kept > 0) {
       const note = describePullReconcile({ ...reconciled, healable: 0, carried: 0 });
@@ -7242,8 +7287,9 @@ async function autoPullOnUnlock() {
     if (reconcileWantsPush(reconciled)) {
       scheduleCloudSync(); // see beginPull
     }
+    return outcome;
   } catch (error) {
-    if (error?.message === "not-configured") return; // sync not set up — nothing to fetch
+    if (error?.message === "not-configured") return null; // sync not set up — nothing to fetch
     // Surfaces in the ambient indicator (labelled as a pull problem) and toasts on
     // the transition into failure — replaces the old standalone toast. Note: a key
     // mismatch ("decrypt") only flags the persistent failed status here ("cloud copy
@@ -7251,9 +7297,11 @@ async function autoPullOnUnlock() {
     // card with its destructive overwrite button mid-session. That card surfaces only
     // on an explicit /pull (beginPull), so an overwrite can never happen by accident.
     setPullStatusFromError(error);
+    return null;
   } finally {
     pullHoldDepth--;
     releaseDeferredPush(); // no-op if the conflict card is now holding
+    runPendingFocusPull();
   }
 }
 
