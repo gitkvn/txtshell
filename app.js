@@ -9431,16 +9431,25 @@ function renderFirstJoinCard() {
 
   // A one-sided choice that deletes notes asks once more (copy sweep, 2026-10-13). It stays inside
   // this view, so the push hold stays on until a choice is made.
+  // Losing someone's newer edits is losing their work too: a choice that only loses changes (Z) asks
+  // with its own title; with deletions as well, the delete title leads and the Z line sits under it.
   const confirming = state.vaultPending.firstJoinConfirm;
   if (confirming === "account" || confirming === "browser") {
     const account = confirming === "account";
+    const deletes = account ? Y : X;
+    const title = deletes > 0
+      ? (account ? `Delete ${notes(Y)} from this browser?` : `Delete ${notes(X)} from your account, on every device?`)
+      : (account ? `Lose this browser's changes to ${notes(Z)}?` : `Lose your account's changes to ${notes(Z)}, on every device?`);
+    const confirmLabel = deletes > 0
+      ? (account ? "Delete them and use my account's notes" : "Delete them and use this browser's notes")
+      : (account ? "Use my account's versions" : "Use this browser's versions");
     vaultOverlay.innerHTML = `
       <div class="vault-card" data-first-join="confirm-${confirming}">
         ${SYNC_ICON_SVG}
-        <p class="vault-title">${escapeHtml(account ? `Delete ${notes(Y)} from this browser?` : `Delete ${notes(X)} from your account, on every device?`)}</p>
-        ${Z > 0 ? `<p class="wipe-warning" data-field="changes-lost">${escapeHtml(account ? `This browser's changes to ${notes(Z)} are lost too.` : `Your account's changes to ${notes(Z)} are lost too.`)}</p>` : ""}
+        <p class="vault-title">${escapeHtml(title)}</p>
+        ${deletes > 0 && Z > 0 ? `<p class="wipe-warning" data-field="changes-lost">${escapeHtml(account ? `This browser's changes to ${notes(Z)} are lost too.` : `Your account's changes to ${notes(Z)} are lost too.`)}</p>` : ""}
         <p class="vault-error" hidden></p>
-        <button class="vault-button danger" type="button" data-action="confirm">${account ? "Delete them and use my account's notes" : "Delete them and use this browser's notes"}</button>
+        <button class="vault-button danger" type="button" data-action="confirm">${escapeHtml(confirmLabel)}</button>
         <button class="vault-link" type="button" data-action="back">Back</button>
       </div>
     `;
@@ -9510,9 +9519,9 @@ function renderFirstJoinCard() {
     renderVault();
   };
   vaultOverlay.querySelector('[data-action="merge"]').addEventListener("click", run(merge, "Merge failed. Try again."));
-  // The loss count decides: 0 acts at once, more asks first.
-  vaultOverlay.querySelector('[data-action="replace"]').addEventListener("click", Y > 0 ? confirmFirst("account") : run(useAccount, "Replace failed. Try again."));
-  vaultOverlay.querySelector('[data-action="keep"]').addEventListener("click", X > 0 ? confirmFirst("browser") : run(useBrowser, "That didn't work. Try again."));
+  // Anything lost — notes deleted, or changes overwritten — asks first; nothing lost acts at once.
+  vaultOverlay.querySelector('[data-action="replace"]').addEventListener("click", Y > 0 || Z > 0 ? confirmFirst("account") : run(useAccount, "Replace failed. Try again."));
+  vaultOverlay.querySelector('[data-action="keep"]').addEventListener("click", X > 0 || Z > 0 ? confirmFirst("browser") : run(useBrowser, "That didn't work. Try again."));
 }
 
 // ---------------------------------------------------------------------------
