@@ -135,12 +135,12 @@ const SLASH_COMMANDS = [
   { name: "/mirror", description: "Show a pairing QR to link an iOS device" },
   { name: "/sync setup", description: "Set the sync Worker URL and auth token" },
   { name: "/port", description: "Set up this browser using pairing data from another browser" },
-  { name: "/pull", description: "Fetch the latest blocks from cloud" },
+  { name: "/pull", description: "Get the latest notes from the cloud" },
   { name: "/account", description: "Txtshell sync: sign in, or set it up on this device" },
   { name: "/account devices", description: "Devices on your account; remove one" },
   { name: "/account phrase", description: "Get new 12 words (the current ones stop working)" },
-  { name: "/account signout", description: "Sign out and lock this device; blocks stay here" },
-  { name: "/account leave", description: "Stop syncing this device; keep its blocks under a passphrase" },
+  { name: "/account signout", description: "Sign out and lock this device; your notes stay here" },
+  { name: "/account leave", description: "Stop syncing this device; keep its notes here with a passphrase" },
   { name: "/inbox", description: "Triage captures synced from your phone" },
   { name: "/font", description: "Set note font size in px (11–24, default 14); /font reset restores default" },
   { name: "/sym", description: "Chemistry & math symbol palette (₂ → Δ ²⁺); ;; toggles it anywhere" },
@@ -4381,7 +4381,7 @@ function renderVault() {
   const view = state.vaultView;
   // Leaving the pull-conflict card by ANY route (keep, replace, lock, wipe, port…)
   // lifts the push hold. Locked/disabled vaults make the replay a harmless skip.
-  const leftPullConflict = lastRenderedVaultView === "pull-conflict" && view !== "pull-conflict";
+  const leftPullConflict = PUSH_HOLD_VIEWS.includes(lastRenderedVaultView) && !PUSH_HOLD_VIEWS.includes(view);
   lastRenderedVaultView = view;
   if (leftPullConflict) {
     releaseDeferredPush();
@@ -4448,8 +4448,8 @@ function renderVault() {
   } else if (view === "import-phrase-passphrase") {
     renderSetupCard({
       title: "Choose a passphrase for this browser",
-      subtitle: "The blocks stay encrypted with your account's key; this passphrase unlocks them on this browser. Joining your account from here later needs no re-encryption.",
-      buttonText: "Set up encryption",
+      subtitle: "This passphrase locks these notes on this browser. If you sign in to your account here later, they join it as they are.",
+      buttonText: "Lock my notes",
       skipRecovery: true,
       onSubmit: handleImportPhraseAdoptSubmit,
       onCancel: exitVaultToNormal,
@@ -4516,7 +4516,7 @@ function renderVault() {
   } else if (view === "central-leave") {
     renderSetupCard({
       title: "Choose a passphrase for this browser",
-      subtitle: "Your blocks keep their key. From now on this passphrase unlocks them here; your account and other devices are unaffected.",
+      subtitle: "Your notes stay on this browser, locked with this passphrase instead. Your account and your other devices aren't affected.",
       buttonText: "Leave the account",
       skipRecovery: true,
       onSubmit: handleAccountLeaveSubmit,
@@ -4855,7 +4855,7 @@ function renderWipeCard(isRecovery) {
     ? `<button class="vault-link" type="button" data-action="toggle">${escapeHtml(linkText)}</button>`
     : "";
   const warning = central
-    ? "This deletes every block and your account's keys from this browser only. Your account and your other devices keep everything that has synced; anything not yet synced is lost. This cannot be undone."
+    ? "This deletes every note on this browser and signs it out of your account. Your account and your other devices keep everything that has synced; anything not yet synced is lost. This can't be undone."
     : "This will permanently delete all your blocks and encryption settings from this browser. This cannot be undone.";
 
   vaultOverlay.innerHTML = `
@@ -5796,12 +5796,12 @@ function normalizeWorkerUrl(value) {
 const SYNC_STATUS_LABELS = {
   "push-auth": { short: "Sync: check token", full: "Sync failed — auth rejected, check your token" },
   "push-blocked": { short: "Waiting for connection", full: "Saved on this device — will sync when you're back online." },
-  "push-encrypt": { short: "Sync: encrypt error", full: "Sync failed — couldn't encrypt blocks" },
+  "push-encrypt": { short: "Sync: encrypt error", full: "Sync failed — couldn't prepare your notes for upload" },
   "push-server": { short: "Sync: server error", full: "Sync failed — Worker rejected the upload" },
   "push-too-large": { short: "Sync: too large", full: "Sync failed — your notes exceed the Worker's size limit" },
   "pull-auth": { short: "Pull: check token", full: "Pull failed — auth rejected, check your token" },
   "pull-blocked": { short: "Pull: can't reach cloud", full: "Pull failed — can't reach cloud (offline or blocked)" },
-  "pull-decrypt": { short: "Pull: decrypt error", full: "Pull failed — couldn't decrypt cloud blocks" },
+  "pull-decrypt": { short: "Pull: decrypt error", full: "Pull failed — couldn't open the notes in the cloud" },
   "pull-key-mismatch": { short: "Pull: key mismatch", full: "Pull failed — cloud copy doesn't match this device's key" },
   // Txtshell account only. A 401 is "session gone" (expired, signed out elsewhere,
   // revoked), never "check your token"; saves continue, pushes wait for a sign-in.
@@ -5969,8 +5969,9 @@ function setSyncStatus(status) {
 // the same breath as the limit.
 function syncStatusFull(reason) {
   const base = (SYNC_STATUS_LABELS[reason] || SYNC_STATUS_LABELS["push-server"]).full;
-  if (reason === "push-too-large" && state.unreadable.length > 0) {
-    return `${base} (${pluralCount(state.unreadable.length, "unreadable block")} included)`;
+  if (reason === "push-too-large") {
+    const including = state.unreadable.length > 0 ? ` (including ${pluralCount(state.unreadable.length, "note")} that can't be opened here)` : "";
+    return isCentral() ? `Your notes are over your account's size limit${including}.` : `${base}${including}`;
   }
   return base;
 }
@@ -6236,8 +6237,10 @@ async function pullAfterRejectedPush() {
 let pullHoldDepth = 0;
 let cloudSyncDeferred = false;
 
+// The cards that decide what the cloud should hold: no push may fire while one is showing.
+const PUSH_HOLD_VIEWS = ["pull-conflict", "first-join"];
 function pushIsHeld() {
-  return pullHoldDepth > 0 || state.vaultView === "pull-conflict";
+  return pullHoldDepth > 0 || PUSH_HOLD_VIEWS.includes(state.vaultView);
 }
 
 function releaseDeferredPush() {
@@ -6408,14 +6411,14 @@ async function flushCloudSync({ evenIfDown = false } = {}) {
 function describeSyncError(reason) {
   switch (reason) {
     case "encrypt-failed":
-      return "couldn't encrypt blocks";
+      return "couldn't prepare your notes for upload";
     case "timeout":
       return "request timed out";
     case "network":
       return "network error";
     case "http-413":
       return state.unreadable.length > 0
-        ? `your notes exceed the Worker's size limit (${pluralCount(state.unreadable.length, "unreadable block")} included)`
+        ? `your notes exceed the Worker's size limit (including ${pluralCount(state.unreadable.length, "note")} that can't be opened here)`
         : "your notes exceed the Worker's size limit";
     default:
       if (typeof reason === "string" && reason.startsWith("http-")) {
@@ -6523,7 +6526,7 @@ async function handleSyncSetupSubmit(workerUrl, authToken) {
     // or a pull is holding pushes (the deferred push replays when it lifts).
     composerHint.textContent = result.reason === "pull-pending"
       ? "Sync configured — will upload once the current pull settles"
-      : "Sync configured — unlock to upload existing blocks";
+      : "Sync is set up — unlock to upload your notes.";
     return;
   }
 
@@ -6535,12 +6538,12 @@ async function handleSyncSetupSubmit(workerUrl, authToken) {
     if (readback.upToDate) {
       // 304 against the generation just pushed: the cloud holds exactly this set.
       const n = state.entries.length;
-      composerHint.textContent = `Synced — ${n} block${n === 1 ? "" : "s"} in the cloud`;
+      composerHint.textContent = `Synced — ${pluralCount(n, "note")} in the cloud`;
     } else if (readback.empty) {
       composerHint.textContent = "Uploaded — will confirm on next sync";
     } else {
       const n = readback.entries.length;
-      composerHint.textContent = `Synced — ${n} block${n === 1 ? "" : "s"} in the cloud`;
+      composerHint.textContent = `Synced — ${pluralCount(n, "note")} in the cloud`;
     }
   } catch {
     composerHint.textContent = "Uploaded — will confirm on next sync";
@@ -6867,16 +6870,16 @@ function reconcileWantsPush(reconciled) {
 function describePullReconcile(reconciled) {
   const parts = [];
   if (reconciled.recovered > 0) {
-    parts.push(`recovered ${pluralCount(reconciled.recovered, "block")} from the cloud`);
+    parts.push(`recovered ${pluralCount(reconciled.recovered, "note")} from the cloud`);
   }
   if (reconciled.kept > 0) {
-    parts.push(`${pluralCount(reconciled.kept, "block")} in the cloud can't be read with this key (kept)`);
+    parts.push(`${pluralCount(reconciled.kept, "note")} in the cloud can't be opened here (kept)`);
   }
   if (reconciled.healable > 0) {
-    parts.push(`the cloud has ${pluralCount(reconciled.healable, "block")} flagged unreadable that this browser can read; sending ${reconciled.healable === 1 ? "it" : "them"} now`);
+    parts.push(`this browser can open ${pluralCount(reconciled.healable, "note")} the cloud couldn't; sending ${reconciled.healable === 1 ? "it" : "them"} now`);
   }
   if (reconciled.carried > 0) {
-    parts.push(`carrying ${pluralCount(reconciled.carried, "unreadable block")} to the cloud`);
+    parts.push(`${pluralCount(reconciled.carried, "note")} that can't be opened here ${reconciled.carried === 1 ? "is" : "are"} kept in the cloud too`);
   }
   return parts.join("; ");
 }
@@ -7131,7 +7134,7 @@ function pullErrorMessage(error) {
     case "auth":
       return "Sync auth failed — check /sync setup.";
     case "decrypt":
-      return "Couldn't decrypt cloud blocks.";
+      return "Couldn't open the notes in the cloud.";
     case "locked":
       return "Unlock your notes to pull.";
     case "malformed":
@@ -7260,7 +7263,7 @@ function renderPullConflictCard() {
     const t = new Date(stamp);
     return stamp && !Number.isNaN(t.getTime()) ? t.toLocaleString() : "unknown";
   };
-  const detail = `Cloud: ${pluralCount(cloudSet.length, "block")}, newest ${fmtStamp(cloudNewest)} · This browser: ${pluralCount(localSet.length, "block")}, newest ${fmtStamp(localNewest)}`;
+  const detail = `Cloud: ${pluralCount(cloudSet.length, "note")}, last changed ${fmtStamp(cloudNewest)} · This browser: ${pluralCount(localSet.length, "note")}, last changed ${fmtStamp(localNewest)}`;
 
   let title;
   let subtitle;
@@ -7276,8 +7279,8 @@ function renderPullConflictCard() {
     const adds = diff.localOnly.length;
     const edits = diff.localNewer.length;
     const parts = [];
-    if (adds) parts.push(`saved ${pluralCount(adds, "block")} here that ${adds === 1 ? "isn't" : "aren't"} in the cloud yet`);
-    if (edits) parts.push(`edited ${pluralCount(edits, "block")} here more recently than the cloud copy`);
+    if (adds) parts.push(`saved ${pluralCount(adds, "note")} here that ${adds === 1 ? "isn't" : "aren't"} in the cloud yet`);
+    if (edits) parts.push(`changed ${pluralCount(edits, "note")} here more recently than the cloud`);
     const it = adds + edits === 1 ? "it" : "them";
     title = "This browser has changes the cloud doesn't";
     subtitle = `You've ${parts.join(" and ")}. Nothing in the cloud is missing from this browser, so keeping ${it} loses nothing.`;
@@ -7295,8 +7298,8 @@ function renderPullConflictCard() {
     const adds = diff.cloudOnly.length;
     const edits = diff.cloudNewer.length;
     const parts = [];
-    if (adds) parts.push(`${pluralCount(adds, "block")} this browser doesn't`);
-    if (edits) parts.push(`${pluralCount(edits, "block")} edited more recently than this browser's copy`);
+    if (adds) parts.push(`${pluralCount(adds, "note")} this browser doesn't`);
+    if (edits) parts.push(`${pluralCount(edits, "note")} changed more recently than this browser's copy`);
     title = "The cloud has changes this browser doesn't";
     subtitle = `The cloud has ${parts.join(" and ")}. Nothing here is missing from the cloud, so replacing loses nothing.`;
     lists = renderPreviewList(adds ? "Only in the cloud:" : "Newer in the cloud:", adds ? diff.cloudOnly : diff.cloudNewer);
@@ -7317,7 +7320,7 @@ function renderPullConflictCard() {
     let body = sides.length ? sides.join(", and ") : "the two copies differ";
     body = body.charAt(0).toUpperCase() + body.slice(1) + ".";
     if (amb) {
-      body += ` ${pluralCount(amb, "block")} differ${amb === 1 ? "s" : ""} on both sides with timestamps too close to tell which is newer.`;
+      body += ` ${pluralCount(amb, "note")} ${amb === 1 ? "was" : "were"} changed in both places at almost the same time, so it can't tell which is newer.`;
     }
     subtitle = `${body} Whichever you choose, the other side's changes are lost.`;
     lists = renderPreviewList("Only in the cloud:", diff.cloudOnly) +
@@ -7421,9 +7424,10 @@ async function applyCloudReplaceLocal(cloudEntries) {
   state.vaultView = null;
   state.vaultPending = null;
   renderVault(); // lifts the push hold; the saves above then push the adopted set
+  const replaced = isCentral() ? `This browser now has your account's notes (${count}).` : `This browser now matches the cloud (${pluralCount(count, "note")}).`;
   composerHint.textContent = survivors.length > 0
-    ? `Replaced local with cloud (${pluralCount(count, "block")}; kept ${pluralCount(survivors.length, "block")} the cloud can't read, sending ${survivors.length === 1 ? "it" : "them"} now).`
-    : `Replaced local with cloud (${pluralCount(count, "block")}).`;
+    ? `${replaced} ${pluralCount(survivors.length, "note")} that couldn't be opened here ${survivors.length === 1 ? "is" : "are"} kept and sent back now.`
+    : replaced;
 }
 
 function showKeyMismatch() {
@@ -7618,7 +7622,7 @@ async function handlePortPassphraseSubmit(passphrase) {
     }
   } catch (error) {
     console.warn("[txtshell] initial port pull failed", error);
-    composerHint.textContent = "Couldn't fetch blocks yet — will retry on unlock.";
+    composerHint.textContent = "Couldn't get your notes from the cloud yet — will try again when you unlock.";
     setPullStatusFromError(error);
   }
   signalReady();
@@ -8316,7 +8320,7 @@ async function centralJoin({ via, registered } = {}) {
     // ADOPT. The passphrase gives an extractable handle of the master key so it can be wrapped.
     const extractable = await centralAskPassphrase({
       title: "Move this browser's notes to your account",
-      subtitle: platformOr((n) => `Enter this browser's passphrase. Your blocks keep their encryption — nothing is redone — and from now on ${n} unlocks them.`, "Enter this browser's passphrase. Your blocks keep their encryption — nothing is redone — and from now on signing in unlocks them."),
+      subtitle: platformOr((n) => `Enter this browser's passphrase to move its notes into your account. After this, ${n} opens them instead.`, "Enter this browser's passphrase to move its notes into your account. After this, signing in opens them instead."),
       buttonText: "Continue",
     }, { extractable: true });
     state.vaultView = "central-busy";
@@ -8356,7 +8360,7 @@ async function centralJoin({ via, registered } = {}) {
       state.encryption.mode = "central";
       state.encryption.masterKey = out.vk;
       state.central.firstJoin = false;
-      finishCentralJoin(state.entries.length > 0 ? "Account set up — your blocks are encrypted and will sync." : "Account set up.");
+      finishCentralJoin(state.entries.length > 0 ? "Account set up — your notes will sync from now on." : "Account set up.");
       return;
     }
     login.hasRecovery = true;
@@ -8376,18 +8380,18 @@ async function centralJoin({ via, registered } = {}) {
     state.encryption.mode = "central";
     state.encryption.masterKey = out.vk;
     state.central.firstJoin = false;
-    finishCentralJoin("Joined — this browser already had your account's key.");
+    finishCentralJoin("Signed in. This browser now syncs with your account.");
     return;
   }
   if (hadVault) {
     // Different key: confirm with the passphrase before this browser's blocks move under VK.
     await centralAskPassphrase({
-      title: "Join with this browser's blocks",
-      subtitle: `This browser's ${pluralCount(state.entries.length, "block")} ${state.entries.length === 1 ? "is" : "are"} encrypted under a different key. Enter the passphrase for this browser to move them into your account. Nothing is uploaded until you choose on the next screen.`,
-      buttonText: "Move my blocks",
+      title: "Bring this browser's notes into your account",
+      subtitle: `This browser has ${pluralCount(state.entries.length, "note")} locked with its own passphrase. Enter it to bring them into your account. Nothing is uploaded until you choose on the next screen.`,
+      buttonText: "Bring my notes",
     });
     state.vaultView = "central-busy";
-    state.vaultPending = { ...(state.vaultPending || {}), busy: "Moving your blocks" };
+    state.vaultPending = { ...(state.vaultPending || {}), busy: "Bringing your notes in" };
     renderVault();
   }
   const verify = await encryptPlaintext(ENC_VERIFY_PLAINTEXT, out.vk);
@@ -8402,7 +8406,7 @@ async function centralJoin({ via, registered } = {}) {
   state.encryption.mode = "central";
   state.encryption.masterKey = out.vk;
   state.central.firstJoin = state.entries.length > 0; // the next pull meets the cloud on the first-join card
-  finishCentralJoin(state.entries.length > 0 ? "Joined — checking the cloud for your other devices' blocks…" : "Joined.");
+  finishCentralJoin(state.entries.length > 0 ? "Signed in — getting notes from your other devices…" : "Signed in. This browser now syncs with your account.");
   void (centralImportMerge || Promise.resolve()).then(() => beginPull({ quiet: true }));
 }
 
@@ -9292,7 +9296,7 @@ async function handleAccountLeaveSubmit(passphrase) {
   renderVault();
   updateLockButton();
   setSyncStatus("ok");
-  composerHint.textContent = "Stopped syncing — this device keeps the same blocks, locked with your passphrase. /sync setup works from here.";
+  composerHint.textContent = "Stopped syncing. Your notes stay here, locked with your passphrase. You can turn sync back on with /sync setup.";
   render();
   entryInput.focus();
 }
@@ -9394,60 +9398,121 @@ function renderFirstJoinCard() {
   const cloudSet = Array.isArray(state.vaultPending.pullCloud) ? state.vaultPending.pullCloud : cloudEntries;
   const localSet = Array.isArray(state.vaultPending.pullLocal) ? state.vaultPending.pullLocal : state.entries;
   const diff = classifyPullDivergence(cloudSet, localSet, false);
-  const shared = diff.cloudNewer.length + diff.localNewer.length + diff.ambiguous.length;
-  const detail = `In your account: ${pluralCount(cloudSet.length, "block")}. On this browser: ${pluralCount(localSet.length, "block")}.${diff.cloudOnly.length ? ` ${pluralCount(diff.cloudOnly.length, "block")} only in the account.` : ""}${diff.localOnly.length ? ` ${pluralCount(diff.localOnly.length, "block")} only here.` : ""}${shared ? ` ${pluralCount(shared, "block")} on both sides with different content (the newer edit wins).` : ""}`;
-  vaultOverlay.innerHTML = `
-    <div class="vault-card">
-      ${LOCK_ICON_SVG}
-      <p class="vault-title">Your account already has blocks</p>
-      <p class="vault-subtitle">This browser's blocks and the account's were kept separately until now. Keep both, or choose one side.</p>
-      <p class="vault-subtitle pull-diff-detail">${escapeHtml(detail)}</p>
-      <p class="vault-error" hidden></p>
-      <button class="vault-button" type="button" data-action="merge">Merge — keep both</button>
-      <button class="vault-button secondary" type="button" data-action="replace">Replace this browser's blocks with the account's</button>
-      <p class="wipe-warning">Keep this browser's blocks only: the account's ${pluralCount(cloudSet.length, "block")} will be gone from every device.</p>
-      <button class="vault-button secondary" type="button" data-action="keep">Keep this browser's blocks only, overwrite the account</button>
-    </div>
-  `;
-  const errorLine = vaultOverlay.querySelector(".vault-error");
-  const buttons = [...vaultOverlay.querySelectorAll("button")];
-  const fail = (message) => { errorLine.textContent = message; errorLine.hidden = false; buttons.forEach((button) => { button.disabled = false; }); };
-  vaultOverlay.querySelector('[data-action="merge"]').addEventListener("click", async () => {
-    buttons.forEach((button) => { button.disabled = true; });
-    try {
-      const cloudGeneration = state.vaultPending?.pullGeneration;
-      await mergeImportedEntries(cloudEntries); // union; newer edit wins on a shared id; re-encrypts under VK
-      if (Number.isInteger(cloudGeneration)) await recordSyncedGeneration(cloudGeneration);
-      state.central.firstJoin = false;
-      state.vaultView = null;
-      state.vaultPending = null;
-      renderVault(); // lifts the hold; the merge's saves scheduled the push
-      scheduleCloudSync();
-      composerHint.textContent = `Merged — ${pluralCount(state.entries.length, "block")} on this browser, syncing to your account.`;
-    } catch (error) {
-      console.error(error);
-      fail("Merge failed. Try again.");
-    }
-  });
-  vaultOverlay.querySelector('[data-action="replace"]').addEventListener("click", async () => {
-    buttons.forEach((button) => { button.disabled = true; });
-    try {
-      state.central.firstJoin = false;
-      await applyCloudReplaceLocal(cloudEntries);
-    } catch (error) {
-      console.error(error);
-      fail("Replace failed. Try again.");
-    }
-  });
-  vaultOverlay.querySelector('[data-action="keep"]').addEventListener("click", async () => {
+  // X: only in the account. Y: only on this browser. Z: in both, changed differently.
+  const X = diff.cloudOnly.length;
+  const Y = diff.localOnly.length;
+  const Z = diff.cloudNewer.length + diff.localNewer.length + diff.ambiguous.length;
+  const notes = (n) => pluralCount(n, "note");
+
+  const merge = async () => {
+    const cloudGeneration = state.vaultPending?.pullGeneration;
+    await mergeImportedEntries(cloudEntries); // union; newer edit wins on a shared id; re-encrypts under VK
+    if (Number.isInteger(cloudGeneration)) await recordSyncedGeneration(cloudGeneration);
+    state.central.firstJoin = false;
+    state.vaultView = null;
+    state.vaultPending = null;
+    renderVault(); // lifts the hold; the merge's saves scheduled the push
+    scheduleCloudSync();
+    composerHint.textContent = `Kept both — ${notes(state.entries.length)} on this browser, syncing to your account.`;
+  };
+  const useAccount = async () => {
+    state.central.firstJoin = false;
+    await applyCloudReplaceLocal(cloudEntries);
+  };
+  const useBrowser = async () => {
     const cloudGeneration = state.vaultPending?.pullGeneration;
     if (Number.isInteger(cloudGeneration)) await recordSyncedGeneration(cloudGeneration);
     state.central.firstJoin = false;
     state.vaultPending = null;
-    exitVaultToNormal();
+    exitVaultToNormal(); // lifts the hold
     scheduleCloudSync();
-    composerHint.textContent = "Kept this browser's blocks — overwriting the account's copy.";
-  });
+    composerHint.textContent = "Kept this browser's notes. Your account is being updated to match.";
+  };
+
+  // A one-sided choice that deletes notes asks once more (copy sweep, 2026-10-13). It stays inside
+  // this view, so the push hold stays on until a choice is made.
+  const confirming = state.vaultPending.firstJoinConfirm;
+  if (confirming === "account" || confirming === "browser") {
+    const account = confirming === "account";
+    vaultOverlay.innerHTML = `
+      <div class="vault-card" data-first-join="confirm-${confirming}">
+        ${SYNC_ICON_SVG}
+        <p class="vault-title">${escapeHtml(account ? `Delete ${notes(Y)} from this browser?` : `Delete ${notes(X)} from your account, on every device?`)}</p>
+        ${Z > 0 ? `<p class="wipe-warning" data-field="changes-lost">${escapeHtml(account ? `This browser's changes to ${notes(Z)} are lost too.` : `Your account's changes to ${notes(Z)} are lost too.`)}</p>` : ""}
+        <p class="vault-error" hidden></p>
+        <button class="vault-button danger" type="button" data-action="confirm">${account ? "Delete them and use my account's notes" : "Delete them and use this browser's notes"}</button>
+        <button class="vault-link" type="button" data-action="back">Back</button>
+      </div>
+    `;
+    const errorLine = vaultOverlay.querySelector(".vault-error");
+    const buttons = [...vaultOverlay.querySelectorAll("button")];
+    vaultOverlay.querySelector('[data-action="confirm"]').addEventListener("click", async () => {
+      buttons.forEach((button) => { button.disabled = true; });
+      try {
+        await (account ? useAccount() : useBrowser());
+      } catch (error) {
+        console.error(error);
+        errorLine.textContent = "That didn't work. Try again.";
+        errorLine.hidden = false;
+        buttons.forEach((button) => { button.disabled = false; });
+      }
+    });
+    vaultOverlay.querySelector('[data-action="back"]').addEventListener("click", () => {
+      state.vaultPending = { ...state.vaultPending, firstJoinConfirm: null };
+      renderVault();
+    });
+    return;
+  }
+
+  const counts = [];
+  if (X) counts.push(`${X} ${X === 1 ? "is" : "are"} only in your account`);
+  if (Y) counts.push(`${Y} only on this browser`);
+  if (Z) counts.push(`${Z} ${Z === 1 ? "is" : "are"} in both but ${Z === 1 ? "was" : "were"} changed differently`);
+  const detail = `In your account: ${notes(cloudSet.length)}. On this browser: ${notes(localSet.length)}.${counts.length ? ` ${counts.join(", ")}.` : ""}`;
+  // What each one-sided choice deletes, with the real counts.
+  const accountLoss = Y > 0
+    ? `Deletes ${notes(Y)} that ${Y === 1 ? "is" : "are"} only on this browser.${Z > 0 ? ` This browser's changes to ${notes(Z)} are lost too.` : ""}`
+    : Z > 0 ? `This browser's changes to ${notes(Z)} are lost.` : "Nothing on this browser is lost — every note here is already in your account.";
+  const browserLoss = X > 0
+    ? `Deletes ${notes(X)} that ${X === 1 ? "is" : "are"} only in your account, from every device.${Z > 0 ? ` Your account's changes to ${notes(Z)} are lost too.` : ""}`
+    : Z > 0 ? `Your account's changes to ${notes(Z)} are lost.` : "Nothing in your account is lost — every note there is already on this browser.";
+  vaultOverlay.innerHTML = `
+    <div class="vault-card" data-first-join="choose">
+      ${SYNC_ICON_SVG}
+      <p class="vault-title">Your account already has notes</p>
+      <p class="vault-subtitle">This browser has notes too. Choose what to keep.</p>
+      <p class="vault-subtitle pull-diff-detail" data-field="counts">${escapeHtml(detail)}</p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="merge">Keep both</button>
+      <p class="vault-subtitle" data-field="merge-note">No note is deleted. If a note was changed in both places, the newer version is kept.</p>
+      <p class="vault-subtitle first-join-divider">Or keep one side only. This deletes notes:</p>
+      <button class="vault-link" type="button" data-action="replace">Use only my account's notes</button>
+      <p class="wipe-warning" data-field="account-loss">${escapeHtml(accountLoss)}</p>
+      <button class="vault-link" type="button" data-action="keep">Use only this browser's notes</button>
+      <p class="wipe-warning" data-field="browser-loss">${escapeHtml(browserLoss)}</p>
+    </div>
+  `;
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const buttons = [...vaultOverlay.querySelectorAll("button")];
+  const run = (fn, failure) => async () => {
+    buttons.forEach((button) => { button.disabled = true; });
+    try {
+      await fn();
+    } catch (error) {
+      console.error(error);
+      errorLine.textContent = failure;
+      errorLine.hidden = false;
+      buttons.forEach((button) => { button.disabled = false; });
+    }
+  };
+  const confirmFirst = (which) => () => {
+    state.vaultPending = { ...state.vaultPending, firstJoinConfirm: which };
+    renderVault();
+  };
+  vaultOverlay.querySelector('[data-action="merge"]').addEventListener("click", run(merge, "Merge failed. Try again."));
+  // The loss count decides: 0 acts at once, more asks first.
+  vaultOverlay.querySelector('[data-action="replace"]').addEventListener("click", Y > 0 ? confirmFirst("account") : run(useAccount, "Replace failed. Try again."));
+  vaultOverlay.querySelector('[data-action="keep"]').addEventListener("click", X > 0 ? confirmFirst("browser") : run(useBrowser, "That didn't work. Try again."));
 }
 
 // ---------------------------------------------------------------------------

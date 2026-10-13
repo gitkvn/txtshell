@@ -331,7 +331,7 @@ const B = await device("B");
   const putsBefore = stub.puts;
   await B.pull();
   const hint = await B.hint();
-  check(/Already up to date — the cloud has 2 blocks flagged unreadable that this browser can read; sending them now\./.test(hint), `B pull: "${hint}"`);
+  check(/Already up to date — this browser can open 2 notes the cloud couldn't; sending them now\./.test(hint), `B pull: "${hint}"`);
   check(await waitFor(() => stub.puts > putsBefore, 10000), "B pushed immediately (no edit needed)");
   const blob = await decryptBlob(stub.lastPut, rawKeyA);
   check(blob.length === 7 && blob.filter((e) => e.unreadable).length === 0 && blob.find((e) => e.id === "foreign-1").text === "secret one #tagone", "cloud now holds foreign-1/2 readable");
@@ -349,7 +349,7 @@ const B = await device("B");
   await B.click("replace");
   await waitFor(() => B.view().then((v) => v === null));
   check((await B.entries()).some((e) => e.id === "foreign-1" && e.text === "secret one #tagone") && (await B.unreadable()).length === 0, "after Replace: B still reads foreign-1/2");
-  check(/kept 2 blocks the cloud can't read, sending them now/.test(await B.hint()), `replace hint: "${await B.hint()}"`);
+  check(/2 notes that couldn't be opened here are kept and sent back now\./.test(await B.hint()), `replace hint: "${await B.hint()}"`);
   check(await waitFor(() => stub.puts > putsA, 10000) && (await decryptBlob(stub.lastPut, rawKeyA)).filter((e) => e.unreadable).length === 0, "B pushed readable copies after Replace");
   void healed;
 }
@@ -359,7 +359,7 @@ console.log("\n--- U10 heal: cloud readable beats local unreadable (adopted on p
 {
   await A.pull();
   check((await A.view()) === null, `A pull → no card (${await A.view()})`);
-  check(/Already up to date — recovered 2 blocks from the cloud\./.test(await A.hint()), `A pull hint: "${await A.hint()}"`);
+  check(/Already up to date — recovered 2 notes from the cloud\./.test(await A.hint()), `A pull hint: "${await A.hint()}"`);
   check((await A.entries()).some((e) => e.id === "foreign-1" && e.text === "secret one #tagone") && (await A.unreadable()).length === 0 && !/unreadable/.test(await A.footer()), `A reads foreign-1/2; footer "${await A.footer()}"`);
   const raw = await A.raw();
   check(raw.filter((x) => x.unreadable).length === 0, "no flagged records left in A's store");
@@ -415,9 +415,9 @@ console.log("\n--- U3 413: the quota message names the unreadable count");
   const r = await A.push();
   check(r.status === "error" && r.reason === "http-413", `push → ${JSON.stringify(r)}`);
   const toast = await A.eval(`statusToast.textContent`);
-  check(/your notes exceed the Worker's size limit \(1 unreadable block included\)/.test(toast), `toast: "${toast}"`);
+  check(/your notes exceed the Worker's size limit \(including 1 note that can't be opened here\)/.test(toast), `toast: "${toast}"`);
   const tooltip = await A.eval(`syncIndicator.getAttribute("data-tooltip")`);
-  check(/1 unreadable block included/.test(tooltip) && (await A.eval(`syncIndicator.querySelector(".sync-label").textContent`)) === "Sync: too large", `indicator: "${tooltip}"`);
+  check(/including 1 note that can't be opened here/.test(tooltip) && (await A.eval(`syncIndicator.querySelector(".sync-label").textContent`)) === "Sync: too large", `indicator: "${tooltip}"`);
   stub.fail413 = false;
 }
 
