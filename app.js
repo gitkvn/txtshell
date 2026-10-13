@@ -3756,7 +3756,7 @@ async function finishPendingImport() {
   const entries = await openImportWithKey(file, state.encryption.masterKey);
   if (entries) {
     const counts = await mergeImportedEntries(entries);
-    state.central.firstJoin = state.entries.length > 0;
+    state.central.firstJoin = true;
     composerHint.textContent = backupAddedHint(counts, { signedIn: true });
     return;
   }
@@ -5345,7 +5345,7 @@ async function handleImportPhraseSubmit(entropy) {
   if (state.encryption.enabled) {
     const done = state.vaultPending?.importDone;
     const counts = await mergeImportedEntries(entries);
-    if (done) state.central.firstJoin = state.entries.length > 0; // a join is waiting: its first pull offers to keep both
+    if (done) state.central.firstJoin = true; // a join is waiting: its first pull offers to keep both
     exitVaultToNormal();
     composerHint.textContent = backupAddedHint(counts, { signedIn: Boolean(done) });
     done?.();
@@ -7043,10 +7043,15 @@ async function beginPull({ quiet = false } = {}) {
       composerHint.textContent = "Already up to date.";
       return;
     }
+    // A first join that needs no card says what happened (dev walk, 2026-10-13).
+    const joining = isCentral() && state.central.firstJoin;
     if (result.empty) {
       state.central.firstJoin = false;
       void clearSyncedBase();
-      composerHint.textContent = "Cloud is empty — nothing to pull.";
+      if (joining && state.entries.length > 0) scheduleCloudSync(); // the cloud's first copy is this browser's
+      composerHint.textContent = joining && state.entries.length > 0
+        ? `Sync is on — your ${pluralCount(state.entries.length, "note")} ${state.entries.length === 1 ? "is" : "are"} now in the cloud.`
+        : "Cloud is empty — nothing to pull.";
       return;
     }
     const reconciled = await reconcileCloudEntries(result.entries);
@@ -7057,7 +7062,9 @@ async function beginPull({ quiet = false } = {}) {
       if (result.generation !== null) void recordSyncedGeneration(result.generation);
       state.central.firstJoin = false;
       const note = describePullReconcile(reconciled);
-      composerHint.textContent = note ? `Already up to date — ${note}.` : "Already up to date.";
+      composerHint.textContent = joining
+        ? "Sync is on — everything was already in the cloud."
+        : note ? `Already up to date — ${note}.` : "Already up to date.";
     }
     // Replayed after the card if one is showing (the hold defers it).
     if (reconcileWantsPush(reconciled)) {
@@ -7155,11 +7162,45 @@ async function showPullConflict(cloudEntries, reconciled = null, cloudGeneration
   }
   const baseMatches = await cloudMatchesSyncedBase(cloudEntries);
   if (state.vaultView) return; // a card opened meanwhile — never clobber it
+  const joining = isCentral() && state.central.firstJoin;
+  if (joining) {
+    // When one side already contains the other, keeping all loses nothing: join without a card.
+    const diff = classifyPullDivergence(reconciled.cloud, reconciled.local, false);
+    const changed = diff.cloudNewer.length + diff.localNewer.length + diff.ambiguous.length;
+    if (changed === 0 && (diff.cloudOnly.length === 0 || diff.localOnly.length === 0)) {
+      await joinWithoutCard(cloudEntries, cloudGeneration, { A: reconciled.cloud.length, B: reconciled.local.length, X: diff.cloudOnly.length, Y: diff.localOnly.length });
+      return;
+    }
+  }
   state.vaultPending = { pullEntries: cloudEntries, pullCloud: reconciled.cloud, pullLocal: reconciled.local, baseMatches, pullGeneration: cloudGeneration };
-  // After a join that re-keyed this browser's blocks, cloud and local are two
-  // unrelated histories: the first-join card (merge) instead of the stale-copy card.
-  state.vaultView = isCentral() && state.central.firstJoin && reconciled.local.length > 0 ? "first-join" : "pull-conflict";
+  // After a join, cloud and local are two unrelated histories: the first-join card instead of
+  // the stale-copy card.
+  state.vaultView = joining ? "first-join" : "pull-conflict";
   renderVault();
+}
+
+// A first join where one side contains the other (dev walk, 2026-10-13): keep all, say so.
+async function joinWithoutCard(cloudEntries, cloudGeneration, { A, B, X, Y }) {
+  await mergeImportedEntries(cloudEntries); // the union; nothing here is replaced
+  if (Number.isInteger(cloudGeneration)) await recordSyncedGeneration(cloudGeneration);
+  state.central.firstJoin = false;
+  if (Y > 0) {
+    scheduleCloudSync(); // this browser has notes the cloud lacks
+  } else {
+    // Local == cloud now. The merge's saves armed a push of exactly what the cloud holds: drop it,
+    // as Replace does (it would only move the generation and send other devices to a 412).
+    await recordSyncedBase(cloudEntries);
+    if (cloudSyncTimer !== null) {
+      window.clearTimeout(cloudSyncTimer);
+      cloudSyncTimer = null;
+    }
+    cloudSyncDeferred = false;
+  }
+  composerHint.textContent = B === 0
+    ? `Sync is on — ${pluralCount(A, "note")} from the cloud ${A === 1 ? "is" : "are"} here.`
+    : X > 0
+      ? `Sync is on — ${pluralCount(X, "note")} from the cloud added.`
+      : `Sync is on — ${Y} of your notes added to the cloud.`;
 }
 
 // Per-id three-way-ish diff of the cloud snapshot against local. No tombstones
@@ -7228,10 +7269,10 @@ function classifyPullDivergence(cloudEntries, localEntries, baseMatches = false)
 // Short, single-line preview of a block for the conflict card lists.
 function previewBlockText(entry, max = 60) {
   if (isUnreadableRecord(entry)) {
-    return "(unreadable block)"; // never preview ciphertext
+    return "(can't be opened here)"; // never preview ciphertext
   }
   const line = (typeof entry?.text === "string" ? entry.text : "")
-    .split("\n").map((l) => l.trim()).find((l) => l.length > 0) || "(empty block)";
+    .split("\n").map((l) => l.trim()).find((l) => l.length > 0) || "(empty note)";
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
@@ -7424,7 +7465,7 @@ async function applyCloudReplaceLocal(cloudEntries) {
   state.vaultView = null;
   state.vaultPending = null;
   renderVault(); // lifts the push hold; the saves above then push the adopted set
-  const replaced = isCentral() ? `This browser now has your account's notes (${count}).` : `This browser now matches the cloud (${pluralCount(count, "note")}).`;
+  const replaced = isCentral() ? `This browser now has the cloud's ${pluralCount(count, "note")}.` : `This browser now matches the cloud (${pluralCount(count, "note")}).`;
   composerHint.textContent = survivors.length > 0
     ? `${replaced} ${pluralCount(survivors.length, "note")} that couldn't be opened here ${survivors.length === 1 ? "is" : "are"} kept and sent back now.`
     : replaced;
@@ -8405,7 +8446,7 @@ async function centralJoin({ via, registered } = {}) {
   state.encryption.unlocked = true;
   state.encryption.mode = "central";
   state.encryption.masterKey = out.vk;
-  state.central.firstJoin = state.entries.length > 0; // the next pull meets the cloud on the first-join card
+  state.central.firstJoin = true; // the next pull meets the cloud on the first-join card
   finishCentralJoin(state.entries.length > 0 ? "Signed in — getting notes from your other devices…" : "Signed in. This browser now syncs with your account.");
   void (centralImportMerge || Promise.resolve()).then(() => beginPull({ quiet: true }));
 }
@@ -8812,7 +8853,7 @@ async function applyReKeyOrDeadEnd({ oldKey, out, identity, flagDeletes = [], re
       throw error;
     }
     state.encryption.masterKey = out.vk;
-    state.central.firstJoin = state.entries.length > 0;
+    state.central.firstJoin = true;
     await finishCentralUnlock(out.vk, { offline: false, rekeyed: true, readd });
     scheduleCloudSync();
     return;
@@ -9098,7 +9139,7 @@ async function centralResume() {
         metaDeletes: [SYNC_BASE_HASH_KEY, SYNC_GENERATION_KEY],
       });
       state.encryption.masterKey = out.vk;
-      state.central.firstJoin = state.entries.length > 0;
+      state.central.firstJoin = true;
     }
     state.vaultView = null;
     state.vaultPending = null;
@@ -9398,11 +9439,18 @@ function renderFirstJoinCard() {
   const cloudSet = Array.isArray(state.vaultPending.pullCloud) ? state.vaultPending.pullCloud : cloudEntries;
   const localSet = Array.isArray(state.vaultPending.pullLocal) ? state.vaultPending.pullLocal : state.entries;
   const diff = classifyPullDivergence(cloudSet, localSet, false);
-  // X: only in the account. Y: only on this browser. Z: in both, changed differently.
+  // A, B: each side's notes. X: only in the cloud. Y: only on this browser. Z: in both, changed differently.
+  const A = cloudSet.length;
+  const B = localSet.length;
   const X = diff.cloudOnly.length;
   const Y = diff.localOnly.length;
-  const Z = diff.cloudNewer.length + diff.localNewer.length + diff.ambiguous.length;
+  const changedIds = new Set([...diff.cloudNewer, ...diff.localNewer, ...diff.ambiguous].map((e) => e.id));
+  const Z = changedIds.size;
+  // Keep all = every id on either side, once (a note changed in both keeps its newer version, for now).
+  const N = new Set([...cloudSet, ...localSet].filter((e) => e && typeof e.id === "string").map((e) => e.id)).size;
   const notes = (n) => pluralCount(n, "note");
+  // Up to five notes by their first line, then "and N more" (the same list in the card and its confirmation).
+  const list = (entries) => `<ul class="pull-diff-list">${entries.slice(0, 5).map((e) => `<li>${escapeHtml(previewBlockText(e))}</li>`).join("")}${entries.length > 5 ? `<li class="pull-diff-more">and ${entries.length - 5} more</li>` : ""}</ul>`;
 
   const merge = async () => {
     const cloudGeneration = state.vaultPending?.pullGeneration;
@@ -9413,9 +9461,9 @@ function renderFirstJoinCard() {
     state.vaultPending = null;
     renderVault(); // lifts the hold; the merge's saves scheduled the push
     scheduleCloudSync();
-    composerHint.textContent = `Kept both — ${notes(state.entries.length)} on this browser, syncing to your account.`;
+    composerHint.textContent = `Kept all ${notes(state.entries.length)} — syncing now.`;
   };
-  const useAccount = async () => {
+  const useCloud = async () => {
     state.central.firstJoin = false;
     await applyCloudReplaceLocal(cloudEntries);
   };
@@ -9426,28 +9474,30 @@ function renderFirstJoinCard() {
     state.vaultPending = null;
     exitVaultToNormal(); // lifts the hold
     scheduleCloudSync();
-    composerHint.textContent = "Kept this browser's notes. Your account is being updated to match.";
+    composerHint.textContent = `Kept this browser's ${notes(B)}. The cloud is being updated to match.`;
   };
 
-  // A one-sided choice that deletes notes asks once more (copy sweep, 2026-10-13). It stays inside
-  // this view, so the push hold stays on until a choice is made.
-  // Losing someone's newer edits is losing their work too: a choice that only loses changes (Z) asks
-  // with its own title; with deletions as well, the delete title leads and the Z line sits under it.
+  // A one-sided choice that would delete notes, or overwrite changes, asks first and lists exactly
+  // what goes. It stays inside this view, so the push hold stays on until a choice is made.
   const confirming = state.vaultPending.firstJoinConfirm;
-  if (confirming === "account" || confirming === "browser") {
-    const account = confirming === "account";
-    const deletes = account ? Y : X;
+  if (confirming === "cloud" || confirming === "browser") {
+    const cloud = confirming === "cloud";
+    const deletes = cloud ? Y : X;
+    const removed = deletes > 0
+      ? (cloud ? diff.localOnly : diff.cloudOnly)
+      : (cloud ? localSet : cloudSet).filter((e) => changedIds.has(e.id));
     const title = deletes > 0
-      ? (account ? `Delete ${notes(Y)} from this browser?` : `Delete ${notes(X)} from your account, on every device?`)
-      : (account ? `Lose this browser's changes to ${notes(Z)}?` : `Lose your account's changes to ${notes(Z)}, on every device?`);
+      ? (cloud ? `Delete ${notes(Y)} from this browser?` : `Delete ${notes(X)} from the cloud, on every device?`)
+      : (cloud ? `Lose this browser's changes to ${notes(Z)}?` : `Lose the cloud's changes to ${notes(Z)}, on every device?`);
     const confirmLabel = deletes > 0
-      ? (account ? "Delete them and use my account's notes" : "Delete them and use this browser's notes")
-      : (account ? "Use my account's versions" : "Use this browser's versions");
+      ? (cloud ? "Delete them and use the cloud's notes" : "Delete them and use this browser's notes")
+      : (cloud ? "Use the cloud's versions" : "Use this browser's versions");
     vaultOverlay.innerHTML = `
       <div class="vault-card" data-first-join="confirm-${confirming}">
         ${SYNC_ICON_SVG}
         <p class="vault-title">${escapeHtml(title)}</p>
-        ${deletes > 0 && Z > 0 ? `<p class="wipe-warning" data-field="changes-lost">${escapeHtml(account ? `This browser's changes to ${notes(Z)} are lost too.` : `Your account's changes to ${notes(Z)} are lost too.`)}</p>` : ""}
+        <div data-field="removed">${list(removed)}</div>
+        ${deletes > 0 && Z > 0 ? `<p class="wipe-warning" data-field="changes-lost">${escapeHtml(cloud ? `This browser's changes to ${notes(Z)} are lost too.` : `The cloud's changes to ${notes(Z)} are lost too.`)}</p>` : ""}
         <p class="vault-error" hidden></p>
         <button class="vault-button danger" type="button" data-action="confirm">${escapeHtml(confirmLabel)}</button>
         <button class="vault-link" type="button" data-action="back">Back</button>
@@ -9458,7 +9508,7 @@ function renderFirstJoinCard() {
     vaultOverlay.querySelector('[data-action="confirm"]').addEventListener("click", async () => {
       buttons.forEach((button) => { button.disabled = true; });
       try {
-        await (account ? useAccount() : useBrowser());
+        await (cloud ? useCloud() : useBrowser());
       } catch (error) {
         console.error(error);
         errorLine.textContent = "That didn't work. Try again.";
@@ -9473,34 +9523,35 @@ function renderFirstJoinCard() {
     return;
   }
 
-  const counts = [];
-  if (X) counts.push(`${X} ${X === 1 ? "is" : "are"} only in your account`);
-  if (Y) counts.push(`${Y} only on this browser`);
-  if (Z) counts.push(`${Z} ${Z === 1 ? "is" : "are"} in both but ${Z === 1 ? "was" : "were"} changed differently`);
-  const detail = `In your account: ${notes(cloudSet.length)}. On this browser: ${notes(localSet.length)}.${counts.length ? ` ${counts.join(", ")}.` : ""}`;
-  // What each one-sided choice deletes, with the real counts.
-  const accountLoss = Y > 0
-    ? `Deletes ${notes(Y)} that ${Y === 1 ? "is" : "are"} only on this browser.${Z > 0 ? ` This browser's changes to ${notes(Z)} are lost too.` : ""}`
-    : Z > 0 ? `This browser's changes to ${notes(Z)} are lost.` : "Nothing on this browser is lost — every note here is already in your account.";
-  const browserLoss = X > 0
-    ? `Deletes ${notes(X)} that ${X === 1 ? "is" : "are"} only in your account, from every device.${Z > 0 ? ` Your account's changes to ${notes(Z)} are lost too.` : ""}`
-    : Z > 0 ? `Your account's changes to ${notes(Z)} are lost.` : "Nothing in your account is lost — every note there is already on this browser.";
+  // "Show which" (closed by default, no hover): the notes only on that side.
+  const side = (key, label, only) => `
+      <p class="vault-subtitle" data-field="${key}-count">${escapeHtml(label)}</p>
+      ${only.length ? `<button class="vault-link" type="button" data-action="show-${key}" aria-expanded="false">Show which</button>
+      <div data-field="${key}-list" hidden>${list(only)}</div>` : ""}`;
   vaultOverlay.innerHTML = `
     <div class="vault-card" data-first-join="choose">
       ${SYNC_ICON_SVG}
-      <p class="vault-title">Your account already has notes</p>
-      <p class="vault-subtitle">This browser has notes too. Choose what to keep.</p>
-      <p class="vault-subtitle pull-diff-detail" data-field="counts">${escapeHtml(detail)}</p>
+      <p class="vault-title">Your notes</p>
+      ${side("cloud", `In the cloud: ${notes(A)}`, diff.cloudOnly)}
+      ${side("browser", `On this browser: ${notes(B)}`, diff.localOnly)}
       <p class="vault-error" hidden></p>
-      <button class="vault-button" type="button" data-action="merge">Keep both</button>
-      <p class="vault-subtitle" data-field="merge-note">No note is deleted. If a note was changed in both places, the newer version is kept.</p>
-      <p class="vault-subtitle first-join-divider">Or keep one side only. This deletes notes:</p>
-      <button class="vault-link" type="button" data-action="replace">Use only my account's notes</button>
-      <p class="wipe-warning" data-field="account-loss">${escapeHtml(accountLoss)}</p>
-      <button class="vault-link" type="button" data-action="keep">Use only this browser's notes</button>
-      <p class="wipe-warning" data-field="browser-loss">${escapeHtml(browserLoss)}</p>
+      <button class="vault-button" type="button" data-action="merge">Keep all ${N} and sync</button>
+      <button class="vault-link" type="button" data-action="replace">Use only the cloud's ${A}</button>
+      <p class="vault-subtitle first-join-consequence">(removes this browser's notes)</p>
+      <button class="vault-link" type="button" data-action="keep">Use only this browser's ${B}</button>
+      <p class="vault-subtitle first-join-consequence">(replaces the cloud, on every device)</p>
     </div>
   `;
+  for (const key of ["cloud", "browser"]) {
+    const toggle = vaultOverlay.querySelector(`[data-action="show-${key}"]`);
+    if (!toggle) continue;
+    toggle.addEventListener("click", () => {
+      const panel = vaultOverlay.querySelector(`[data-field="${key}-list"]`);
+      panel.hidden = !panel.hidden;
+      toggle.textContent = panel.hidden ? "Show which" : "Hide";
+      toggle.setAttribute("aria-expanded", String(!panel.hidden));
+    });
+  }
   const errorLine = vaultOverlay.querySelector(".vault-error");
   const buttons = [...vaultOverlay.querySelectorAll("button")];
   const run = (fn, failure) => async () => {
@@ -9520,7 +9571,7 @@ function renderFirstJoinCard() {
   };
   vaultOverlay.querySelector('[data-action="merge"]').addEventListener("click", run(merge, "Merge failed. Try again."));
   // Anything lost — notes deleted, or changes overwritten — asks first; nothing lost acts at once.
-  vaultOverlay.querySelector('[data-action="replace"]').addEventListener("click", Y > 0 || Z > 0 ? confirmFirst("account") : run(useAccount, "Replace failed. Try again."));
+  vaultOverlay.querySelector('[data-action="replace"]').addEventListener("click", Y > 0 || Z > 0 ? confirmFirst("cloud") : run(useCloud, "Replace failed. Try again."));
   vaultOverlay.querySelector('[data-action="keep"]').addEventListener("click", X > 0 || Z > 0 ? confirmFirst("browser") : run(useBrowser, "That didn't work. Try again."));
 }
 

@@ -2697,6 +2697,13 @@ body:has(.sym-palette:not([hidden])) .status-toast {
   border-left-color: transparent;
 }
 
+/* First-join card (dev walk, 2026-10-13): the consequence sits right under its quiet link. */
+.first-join-consequence {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
 .pull-diff-detail {
   font-size: 0.75rem;
 }
