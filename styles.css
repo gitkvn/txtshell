@@ -232,7 +232,11 @@ button {
   border: 0;
   outline: none;
   resize: none;
-  padding: 12px 20px 20px;
+  /* --editor-overscroll: room past the last line (about half the editor) so
+     the end of a long note can scroll up to mid-screen. app.js sets it, and
+     only once the text itself overflows; a short note keeps 0 (no pointless
+     scroll). */
+  padding: 12px 20px calc(20px + var(--editor-overscroll, 0px));
   background: transparent;
   color: var(--ink);
   font-family: var(--font-mono);
@@ -1738,7 +1742,7 @@ kbd {
 
   /* Keep the last editor line clear of the floating Save bar. */
   body.keyboard-open #entryInput {
-    padding-bottom: 64px;
+    padding-bottom: max(64px, calc(20px + var(--editor-overscroll, 0px)));
     scroll-padding-bottom: 64px;
   }
 

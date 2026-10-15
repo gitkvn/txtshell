@@ -279,6 +279,7 @@ const deleteCancelButton = document.querySelector("#deleteCancelButton");
 function setEditorValue(value) {
   entryInput.value = value;
   updateWordCount();
+  updateEditorOverscroll();
 }
 
 let draftSaveTimer = null;
@@ -291,6 +292,7 @@ window.addEventListener("load", () => {
   }
   entryInput.focus();
   entryInput.setSelectionRange(entryInput.value.length, entryInput.value.length);
+  revealComposerCaret();
 });
 
 document.addEventListener("visibilitychange", () => {
@@ -572,6 +574,143 @@ if (visualViewportApi) {
   entryInput.addEventListener("focus", scheduleSaveDockUpdate);
   entryInput.addEventListener("blur", scheduleSaveDockUpdate);
   applySaveDockState();
+}
+
+// Scroll past the end. Two halves, same textarea for new and existing blocks:
+//  - room under the last line (--editor-overscroll, about half the editor),
+//    only once the text itself overflows, so a short note never gets empty
+//    scroll;
+//  - while typing, the caret line stays at least a third of the visible editor
+//    above its bottom edge (the floating Save bar's top edge with a phone
+//    keyboard up). It only ever scrolls down, and only after keys and edits —
+//    never after a wheel/trackpad scroll — so reading back up is never pulled.
+// The inbox view compacts the composer; it gets neither.
+const EDITOR_OVERSCROLL_FRACTION = 0.5;
+const CARET_CLEARANCE_FRACTION = 1 / 3;
+let editorOverscrollPx = 0;
+
+function isComposerCompact() {
+  return composerForm.classList.contains("is-inbox");
+}
+
+function updateEditorOverscroll() {
+  const height = entryInput.clientHeight;
+  let next = 0;
+  if (height > 0 && !isComposerCompact()) {
+    // Text height without any added room: scrollHeight carries the current
+    // bottom padding, so take it off and put the 20px base back.
+    const paddingBottom = parseFloat(getComputedStyle(entryInput).paddingBottom) || 0;
+    const textHeight = entryInput.scrollHeight - paddingBottom + 20;
+    if (textHeight > height) {
+      next = Math.round(height * EDITOR_OVERSCROLL_FRACTION);
+    }
+  }
+  if (next !== editorOverscrollPx) {
+    editorOverscrollPx = next;
+    entryInput.style.setProperty("--editor-overscroll", `${next}px`);
+  }
+}
+
+// A textarea can't report where its caret is, so lay the text up to the caret
+// out in an off-screen copy with the same box and font, and read the marker.
+let caretMirror = null;
+const CARET_MIRROR_PROPS = [
+  "paddingTop", "paddingLeft", "paddingRight", "fontFamily", "fontSize", "fontWeight",
+  "fontStyle", "fontVariant", "fontStretch", "lineHeight", "letterSpacing", "wordSpacing",
+  "tabSize", "textIndent", "textTransform", "whiteSpace", "wordBreak", "overflowWrap",
+];
+
+function caretLineBottom() {
+  if (!caretMirror) {
+    caretMirror = document.createElement("div");
+    caretMirror.setAttribute("aria-hidden", "true");
+    caretMirror.style.cssText = "position:absolute;top:0;left:-9999px;visibility:hidden;overflow:hidden;height:auto;box-sizing:border-box;border:0;";
+    document.body.appendChild(caretMirror);
+  }
+  const computed = getComputedStyle(entryInput);
+  for (const prop of CARET_MIRROR_PROPS) {
+    caretMirror.style[prop] = computed[prop];
+  }
+  // clientWidth is the text box plus padding, without the scrollbar.
+  caretMirror.style.width = `${entryInput.clientWidth}px`;
+  caretMirror.textContent = entryInput.value.slice(0, entryInput.selectionEnd ?? entryInput.value.length);
+  // inline-block: the marker's box is the full line height, not the glyph's.
+  const marker = document.createElement("span");
+  marker.style.display = "inline-block";
+  marker.textContent = "\u200b";
+  caretMirror.appendChild(marker);
+  return marker.offsetTop + marker.offsetHeight;
+}
+
+// The part of the editor a person can actually see, in viewport px: the
+// textarea's own box, cut at the floating Save bar when a keyboard is up.
+function visibleEditorBox() {
+  const top = entryInput.getBoundingClientRect().top + entryInput.clientTop;
+  let bottom = top + entryInput.clientHeight;
+  let visibleTop = top;
+  if (isKeyboardOpen() && visualViewportApi) {
+    const dockTop = saveDock.getBoundingClientRect().top;
+    bottom = Math.min(bottom, visualViewportApi.offsetTop + visualViewportApi.height, dockTop);
+    visibleTop = Math.max(top, visualViewportApi.offsetTop);
+  }
+  return { top, bottom, height: Math.max(0, bottom - visibleTop) };
+}
+
+// opening: put the caret line on the clearance mark whichever way it is (a
+// block opens at its end). Otherwise only scroll down, and only if the caret
+// line is inside the bottom third.
+function keepCaretClear({ opening = false } = {}) {
+  if (entryInput.disabled || isComposerCompact() || entryInput.clientHeight === 0) {
+    return;
+  }
+  const box = visibleEditorBox();
+  if (box.height <= 0) {
+    return;
+  }
+  const mark = box.bottom - box.height * CARET_CLEARANCE_FRACTION;
+  const caretY = box.top + caretLineBottom() - entryInput.scrollTop;
+  const next = Math.max(0, entryInput.scrollTop + caretY - mark);
+  if (opening || next > entryInput.scrollTop) {
+    entryInput.scrollTop = next;
+  }
+}
+
+let caretClearRafPending = false;
+function scheduleKeepCaretClear() {
+  if (caretClearRafPending) {
+    return;
+  }
+  caretClearRafPending = true;
+  window.requestAnimationFrame(() => {
+    caretClearRafPending = false;
+    updateEditorOverscroll();
+    keepCaretClear();
+  });
+}
+
+// A reopened block: its end in view, caret line about two thirds down.
+function revealComposerCaret() {
+  updateEditorOverscroll();
+  keepCaretClear({ opening: true });
+}
+
+const CARET_CLEAR_KEYS = new Set(["ArrowDown", "ArrowRight", "ArrowLeft", "PageDown", "End", "Enter"]);
+entryInput.addEventListener("keydown", (event) => {
+  if (CARET_CLEAR_KEYS.has(event.key)) {
+    scheduleKeepCaretClear();
+  }
+});
+entryInput.addEventListener("input", scheduleKeepCaretClear);
+if (typeof ResizeObserver === "function") {
+  new ResizeObserver(() => updateEditorOverscroll()).observe(entryInput);
+}
+if (visualViewportApi) {
+  // The keyboard coming up changes how much of the editor is visible.
+  visualViewportApi.addEventListener("resize", () => {
+    if (document.activeElement === entryInput) {
+      scheduleKeepCaretClear();
+    }
+  });
 }
 
 exportButton.addEventListener("click", () => {
@@ -1686,6 +1825,7 @@ function reopenEntryInEditor(entryId) {
   composerHint.textContent = "Editing block -> save updates";
   entryInput.focus();
   entryInput.setSelectionRange(entryInput.value.length, entryInput.value.length);
+  revealComposerCaret();
   showHint("edit-mode", "Press Esc to cancel editing");
 }
 
@@ -2424,10 +2564,12 @@ function applyEditorFontSize(size) {
   if (size === null) {
     document.documentElement.style.removeProperty("--note-font-size");
     window.localStorage.removeItem(EDITOR_FONT_SIZE_KEY);
+    updateEditorOverscroll();
     return;
   }
   document.documentElement.style.setProperty("--note-font-size", `${size}px`);
   window.localStorage.setItem(EDITOR_FONT_SIZE_KEY, String(size));
+  updateEditorOverscroll();
 }
 
 function applyCountMode(mode, { persist = true } = {}) {
