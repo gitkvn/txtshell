@@ -111,6 +111,9 @@ const HINT_TOAST_DURATION = 6000;
 
 const COMPOSER_PLACEHOLDER_EMPTY = "Type /about and press enter to get started. Cmd/Ctrl+Enter saves a block. Use the Esc key anytime to come back here.";
 const COMPOSER_PLACEHOLDER_HAS_BLOCKS = "Type a block, or / for commands. Cmd/Ctrl+Enter saves a block. Use the Esc key anytime to come back here.";
+// Touch devices: Return is a new line, saving is the Save block button, and there is no Esc key.
+const COMPOSER_PLACEHOLDER_EMPTY_TOUCH = "Type /about and tap return to get started. Tap Save block to keep a block.";
+const COMPOSER_PLACEHOLDER_HAS_BLOCKS_TOUCH = "Type a block, or / for commands. Tap Save block to keep it.";
 
 const SLASH_COMMANDS = [
   { name: "/about", description: "First-time user guide" },
@@ -486,16 +489,16 @@ saveBlockBtn.addEventListener("click", () => {
 // ---------------------------------------------------------------------------
 // Shared on-screen-keyboard observer (window.visualViewport).
 //
-// This single observer powers two mobile behaviours: floating the Save button
-// above the keyboard, and Enter-to-save. We treat the keyboard as "open" when
+// It floats the Save button above the keyboard (the way to save on a phone:
+// plain Return is a new line there, as on desktop). We treat the keyboard as "open" when
 // the visual viewport is meaningfully shorter than the layout viewport — i.e.
 // something (the soft keyboard) is occupying screen space. A hardware/Bluetooth
-// keyboard does NOT shrink the visual viewport, so those users keep Enter =
-// newline and the button stays in the footer. On desktop the viewport never
+// keyboard does NOT shrink the visual viewport, so for those users the button
+// stays in the footer. On desktop the viewport never
 // shrinks, so keyboardOpen stays false and nothing changes.
 //
 // Feature-detect visualViewport: if absent (old browsers), fall back cleanly to
-// current behaviour — button lives in the footer, no float, no Enter-save.
+// current behaviour — button lives in the footer, no float.
 const KEYBOARD_OPEN_THRESHOLD = 150; // px of viewport shrinkage before we call it "open"
 const visualViewportApi =
   typeof window !== "undefined" && window.visualViewport ? window.visualViewport : null;
@@ -508,8 +511,8 @@ function isKeyboardOpen() {
 
 // Belt-and-suspenders gate: only a touch device gets the mobile behaviours. This
 // makes desktop bulletproof — desktop reports a fine pointer, so even pinch-zoom
-// (which ALSO shrinks the visual viewport) can never float the button or arm
-// Enter-to-save. A tablet + Bluetooth keyboard is coarse but still excluded by
+// (which ALSO shrinks the visual viewport) can never float the button. A
+// tablet + Bluetooth keyboard is coarse but still excluded by
 // the viewport check below (a hardware keyboard doesn't shrink the viewport).
 // Evaluated live so a plugged/unplugged pointer is reflected.
 function hasCoarsePointer() {
@@ -540,13 +543,10 @@ function applySaveDockState() {
     saveDock.classList.add("is-floating");
     saveDock.style.transform = `translateY(-${Math.round(overlap)}px)`;
     document.body.classList.add("keyboard-open");
-    // Hint the soft keyboard's return key toward "save" while in mobile mode.
-    entryInput.setAttribute("enterkeyhint", "send");
   } else {
     saveDock.classList.remove("is-floating");
     saveDock.style.transform = "";
     document.body.classList.remove("keyboard-open");
-    entryInput.removeAttribute("enterkeyhint");
   }
 }
 
@@ -969,11 +969,11 @@ entryInput.addEventListener("keydown", (event) => {
     }
   }
 
-  // Desktop plain Enter inserts a newline, so every /command needs an explicit
+  // Plain Enter inserts a newline, so every /command needs an explicit
   // keydown intercept to reach submitComposer. Exact-name commands are taken
   // straight from SLASH_COMMANDS; ARG_COMMANDS ("/font 12") match on their
-  // first token and, because they carry free text, get the same modifier/IME
-  // guards as Enter-to-save so a composition commit can't fire them.
+  // first token and, because they carry free text, get modifier/IME guards so
+  // a composition commit can't fire them.
   if (event.key === "Enter") {
     const trimmed = entryInput.value.trim();
     if (SLASH_COMMAND_NAMES.has(trimmed)) {
@@ -1012,8 +1012,8 @@ entryInput.addEventListener("keydown", (event) => {
     return;
   }
 
-  // Plain Enter on "term//" jumps to full search mode. Desktop plain Enter
-  // never reaches submitComposer (it inserts a newline), so like the /command
+  // Plain Enter on "term//" jumps to full search mode. Plain Enter never
+  // reaches submitComposer (it inserts a newline), so like the /command
   // branches above this needs its own keydown intercept. Shift+Enter stays
   // with the edit-top-match branch above; Cmd/Ctrl+Enter falls through to
   // save, where submitComposer runs the same redirect.
@@ -1025,8 +1025,8 @@ entryInput.addEventListener("keydown", (event) => {
     !event.altKey &&
     getInlineQuery()
   ) {
-    // Same IME/autocorrect guard as Enter-to-save below: an Enter that commits
-    // a composition must not trigger the redirect.
+    // IME/autocorrect guard: an Enter that commits a composition must not
+    // trigger the redirect.
     if (event.isComposing || event.keyCode === 229) {
       return;
     }
@@ -1035,29 +1035,9 @@ entryInput.addEventListener("keydown", (event) => {
     return;
   }
 
+  // Cmd/Ctrl+Enter is the only key that saves. Plain Enter is a new line on
+  // every device; on a phone the floating Save block button saves.
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-    event.preventDefault();
-    submitComposer();
-    return;
-  }
-
-  // Mobile accelerator: with the soft keyboard open, plain Enter saves. This is
-  // LAST so every /command branch above still runs as a command. Shift/meta/ctrl/
-  // alt+Enter are excluded (newline / existing shortcuts stay intact), and on
-  // desktop isKeyboardOpen() is always false so Enter remains a newline.
-  if (
-    event.key === "Enter" &&
-    !event.shiftKey &&
-    !event.metaKey &&
-    !event.ctrlKey &&
-    !event.altKey &&
-    isKeyboardOpen()
-  ) {
-    // Critical IME/autocorrect guard: an Enter that commits a composition or an
-    // autocorrect suggestion must NOT save the block.
-    if (event.isComposing || event.keyCode === 229) {
-      return;
-    }
     event.preventDefault();
     submitComposer();
   }
@@ -1699,9 +1679,10 @@ function render() {
     : (state.unreadable.length > 0
       ? `Saved (${state.entries.length}) · ${state.unreadable.length} unreadable`
       : `Saved (${state.entries.length})`);
+  const touch = hasCoarsePointer();
   entryInput.placeholder = state.entries.length
-    ? COMPOSER_PLACEHOLDER_HAS_BLOCKS
-    : COMPOSER_PLACEHOLDER_EMPTY;
+    ? (touch ? COMPOSER_PLACEHOLDER_HAS_BLOCKS_TOUCH : COMPOSER_PLACEHOLDER_HAS_BLOCKS)
+    : (touch ? COMPOSER_PLACEHOLDER_EMPTY_TOUCH : COMPOSER_PLACEHOLDER_EMPTY);
   renderCommandPalette();
 
   if (!state.searchMode) {
