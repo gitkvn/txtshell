@@ -112,7 +112,7 @@ const HINT_TOAST_DURATION = 6000;
 const COMPOSER_PLACEHOLDER_EMPTY = "Type /about and press enter to get started. Cmd/Ctrl+Enter saves a block. Use the Esc key anytime to come back here.";
 const COMPOSER_PLACEHOLDER_HAS_BLOCKS = "Type a block, or / for commands. Cmd/Ctrl+Enter saves a block. Use the Esc key anytime to come back here.";
 // Touch devices: Return is a new line, saving is the Save block button, and there is no Esc key.
-const COMPOSER_PLACEHOLDER_EMPTY_TOUCH = "Type /about and tap return to get started. Tap Save block to keep a block.";
+const COMPOSER_PLACEHOLDER_EMPTY_TOUCH = "Type /about and tap return to get started. Tap Save block to keep what you write.";
 const COMPOSER_PLACEHOLDER_HAS_BLOCKS_TOUCH = "Type a block, or / for commands. Tap Save block to keep it.";
 
 const SLASH_COMMANDS = [
