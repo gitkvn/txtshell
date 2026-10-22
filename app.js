@@ -6045,7 +6045,9 @@ function syncedShortText(now = Date.now()) {
 window.setInterval(() => { if (lastSyncedAt) renderSyncIndicator(); }, 30000);
 
 // The door for a browser with no account (plan §17.3): shown only where the account service answers
-// on this origin, and never on an install that syncs through its own (self-hosted) Worker.
+// on this origin and is open for new accounts (`signups: "open"`; while it is allowlist-only the door
+// stays hidden and /account still opens the sign-in card), and never on an install that syncs
+// through its own (self-hosted) Worker.
 let accountServiceAvailable = false;
 let selfHostedSyncConfigured = false;
 async function refreshSyncDoor({ probe = false } = {}) {
@@ -6053,7 +6055,7 @@ async function refreshSyncDoor({ probe = false } = {}) {
     try {
       const response = await fetch(`${window.location.origin}/v1/health`, { cache: "no-store" });
       const body = response.ok ? await response.json().catch(() => null) : null;
-      accountServiceAvailable = centralAvailable() && Boolean(body && body.ok === true);
+      accountServiceAvailable = centralAvailable() && Boolean(body && body.ok === true && body.signups === "open");
     } catch {
       accountServiceAvailable = false;
     }
@@ -8662,6 +8664,8 @@ function renderCentralStartCard() {
     } catch (error) {
       console.error(error);
       showError(error.code === "invalid-email" ? "That doesn't look like an email address."
+        : error.code === "signups-closed" ? "Txtshell sync isn't open for new accounts yet."
+        : error?.status === 429 ? centralFailureMessage(error)
         : (error?.name === "TypeError" || error?.status === 0 ? "Can't reach Txtshell right now. Check your connection and try again." : "Couldn't send a code. Try again."));
       emailButton.disabled = false;
     }
