@@ -8665,6 +8665,7 @@ function renderCentralStartCard() {
       console.error(error);
       showError(error.code === "invalid-email" ? "That doesn't look like an email address."
         : error.code === "signups-closed" ? "Txtshell sync isn't open for new accounts yet."
+        : error.code === "code-send-failed" ? "We couldn't send the code. Try again in a minute."
         : error?.status === 429 ? centralFailureMessage(error)
         : (error?.name === "TypeError" || error?.status === 0 ? "Can't reach Txtshell right now. Check your connection and try again." : "Couldn't send a code. Try again."));
       emailButton.disabled = false;
