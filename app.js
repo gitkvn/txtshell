@@ -4605,8 +4605,8 @@ function renderVault() {
   } else if (view === "import-phrase-passphrase") {
     renderSetupCard({
       title: "Choose a passphrase for this browser",
-      subtitle: "This passphrase locks these notes on this browser. If you sign in to your account here later, they join it as they are.",
-      buttonText: "Lock my notes",
+      subtitle: "Protect these notes with a passphrase. If you sign in to your account here later, they join it as they are.",
+      buttonText: "Protect my notes",
       skipRecovery: true,
       onSubmit: handleImportPhraseAdoptSubmit,
       onCancel: exitVaultToNormal,
@@ -5536,13 +5536,13 @@ function renderImportAdoptCard() {
   vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG_DOT}
-      <p class="vault-title">${fromAccount ? "Lock these notes on this browser?" : "Keep these notes encrypted on this browser?"}</p>
+      <p class="vault-title">${fromAccount ? "Protect these notes on this browser?" : "Keep these notes encrypted on this browser?"}</p>
       <p class="vault-subtitle">${fromAccount
         ? "You'll choose a passphrase for this browser next."
         : "This file is from an encrypted Txtshell backup. Use it to set up encryption on this browser too?"}</p>
       <p class="vault-error" hidden></p>
-      <button class="vault-button" type="button" data-action="setup">${fromAccount ? "Lock them with a passphrase" : "Set up encryption"}</button>
-      <button class="vault-button secondary" type="button" data-action="plain">${fromAccount ? "Don't lock them" : "Just import blocks (no encryption)"}</button>
+      <button class="vault-button" type="button" data-action="setup">${fromAccount ? "Protect them with a passphrase" : "Set up encryption"}</button>
+      <button class="vault-button secondary" type="button" data-action="plain">${fromAccount ? "Leave them unprotected" : "Just import blocks (no encryption)"}</button>
     </div>
   `;
   const errorLine = vaultOverlay.querySelector(".vault-error");
@@ -6432,6 +6432,14 @@ function dropCentralSession(reason) {
   console.warn("[txtshell] account session ended", reason);
 }
 
+// A 401 from /v1/blocks: `device-removed` means this device was removed from the account (its
+// session was one the removal ended); anything else is an ordinary ended session.
+async function centralSessionRefused(response) {
+  const body = await response.json().catch(() => ({}));
+  if (body?.error === "device-removed") await centralToldRemovedBySession();
+  else dropCentralSession("401");
+}
+
 // After a 412: pull under the same hold, without the "Pulling…" copy. Shows the
 // existing card if cloud and local differ; a push follows from Keep/Replace.
 // Two devices merging at once: the server lets one push win; the other gets a 412, pulls, merges again
@@ -6569,7 +6577,7 @@ async function flushCloudSync({ evenIfDown = false } = {}) {
     noteSyncServerAnswered(response, url);
     if (response.status === 401) {
       if (isCentral()) {
-        dropCentralSession("401");
+        await centralSessionRefused(response);
         return { status: "auth" };
       }
       setSyncStatus("push-auth");
@@ -6951,7 +6959,7 @@ async function fetchAndDecryptBlocks() {
       return { empty: true, generation: 0 };
     }
     if (response.status === 401) {
-      if (isCentral()) dropCentralSession("401");
+      if (isCentral()) await centralSessionRefused(response);
       throw new Error("auth");
     }
     if (response.status === 403 && isCentral()) {
@@ -8264,9 +8272,31 @@ function clearCentralSession() {
   state.central.email = null;
 }
 
-// A 401 from any account request: the session is gone. Local state untouched.
-document.addEventListener("txcentral:session-lost", () => {
-  if (isCentral() && state.central.session) dropCentralSession("session-lost");
+// Told by the server, on this device's own session, that the device was removed (401
+// `device-removed` — only the session's holder gets that answer; login/verify still says
+// unknown-credential). The session was this device's sign-in, so it speaks for the cached
+// credential when the two match; if they don't (mid re-add), it is only an ended session. Same
+// effect as being told at a sign-in: the row, VK kept until lock, nothing local touched (plan §8).
+async function centralToldRemovedBySession() {
+  const stored = await readCentralMeta().catch(() => null);
+  const ownSession = !!stored?.credentialId && stored.credentialId === state.central.credentialId;
+  state.central.session = null;
+  if (!ownSession) { dropCentralSession("401"); return; }
+  console.warn("[txtshell] account session ended", "device-removed");
+  if (!state.central.removed) {
+    await writeCentralFlags([[CENTRAL_REMOVED_KEY, new Date().toISOString()]]);
+    state.central.removed = true;
+  }
+  setSyncStatus("central-removed"); // the indicator opens the removed card
+  composerHint.textContent = CENTRAL_REMOVED_SENTENCE;
+}
+
+// A 401 from any account request: the session is gone (or, `device-removed`, this device was
+// removed). Local state untouched.
+document.addEventListener("txcentral:session-lost", (event) => {
+  if (!isCentral() || !state.central.session) return;
+  if (event.detail?.code === "device-removed") void centralToldRemovedBySession();
+  else dropCentralSession("session-lost");
 });
 
 // ---------- the cards the ladder drives (flow in central.js, DOM here) ----------
@@ -9680,6 +9710,18 @@ async function beginAccountDevices() {
   composerHint.textContent = "Your account";
 }
 
+// "today 14:02", "yesterday 09:15", "Oct 21" (this year) or "Oct 21, 2025" — local time.
+function relativeWhen(iso, now = new Date()) {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "—";
+  const time = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const day = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((day(now) - day(at)) / 86400000);
+  if (days === 0) return `today ${time}`;
+  if (days === 1) return `yesterday ${time}`;
+  return at.toLocaleDateString([], at.getFullYear() === now.getFullYear() ? { month: "short", day: "numeric" } : { month: "short", day: "numeric", year: "numeric" });
+}
+
 async function renderCentralDevicesCard() {
   vaultOverlay.innerHTML = `
     <div class="vault-card">
@@ -9703,8 +9745,20 @@ async function renderCentralDevicesCard() {
       list.innerHTML = "";
       for (const device of devices) {
         const li = document.createElement("li");
+        li.dataset.credentialId = device.id;
+        li.title = device.id; // for support; the name is what a person recognises
         const label = document.createElement("span");
-        label.textContent = `${device.id.slice(0, 10)}… · ${device.backedUp ? "synced" : "this device only"} · ${device.hasPrfWrap ? "set up" : "needs the 12 words"} · last used ${device.lastUsedAt ? device.lastUsedAt.slice(0, 16).replace("T", " ") : "—"}${device.isCurrent ? " · this device" : ""}`;
+        label.className = "device-label";
+        const name = document.createElement("span");
+        name.className = "device-name";
+        name.textContent = device.label || "Unknown device";
+        const when = document.createElement("span");
+        when.className = "device-when";
+        when.textContent = ` — last used ${device.lastUsedAt ? relativeWhen(device.lastUsedAt) : "never"}${device.isCurrent ? " · this device" : ""}`;
+        const detail = document.createElement("span");
+        detail.className = "device-detail";
+        detail.textContent = ` ${device.backedUp ? "synced" : "this device only"} · ${device.hasPrfWrap ? "set up" : "needs the 12 words"}`;
+        label.append(name, when, detail);
         li.appendChild(label);
         if (!device.isCurrent) {
           const button = document.createElement("button");
@@ -9729,7 +9783,7 @@ async function renderCentralDevicesCard() {
       if (devices.length === 0) list.innerHTML = `<li class="vault-subtitle">No devices listed.</li>`;
     } catch (error) {
       list.innerHTML = "";
-      showError(error.status === 401 ? "Session ended — run /account to sign in again." : "Couldn't load your devices.");
+      showError(error.code === "device-removed" ? CENTRAL_REMOVED_SENTENCE : error.status === 401 ? "Session ended — run /account to sign in again." : "Couldn't load your devices.");
     }
   };
   void load();
@@ -10151,6 +10205,7 @@ async function fetchAndDecryptInbox() {
       signal: controller.signal,
     });
     if (response.status === 401) {
+      if (isCentral() && (await response.json().catch(() => ({})))?.error === "device-removed") await centralToldRemovedBySession();
       throw new Error("auth");
     }
     if (!response.ok) {

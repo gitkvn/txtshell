@@ -42,15 +42,15 @@
   }
 
   // Same-origin API: the account's API lives under the app's own origin (/v1/*). A 401 means
-  // the session is gone (expired, signed out elsewhere, revoked) and is announced so the app
-  // can drop it and show "sign in to resume".
+  // the session is gone (expired, signed out elsewhere, or this device removed — code
+  // `device-removed`) and is announced so the app can drop it and say which.
   async function api(path, method, body, session) {
     const headers = {};
     if (body !== undefined) headers["Content-Type"] = "application/json";
     if (session) headers.Authorization = `Bearer ${session}`;
     const res = await fetch(`${window.location.origin}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
     const data = res.status === 204 ? {} : await res.json().catch(() => ({}));
-    if (res.status === 401 && session) document.dispatchEvent(new CustomEvent("txcentral:session-lost", { detail: { reason: "401" } }));
+    if (res.status === 401 && session) document.dispatchEvent(new CustomEvent("txcentral:session-lost", { detail: { reason: "401", code: data.error || "" } }));
     if (!res.ok) throw new ApiError(method, path, res.status, data.error);
     return data;
   }
@@ -143,6 +143,27 @@
     });
   }
 
+  // What the devices list calls this browser: two words from the server's closed list (schema-f.sql),
+  // sent at registration and at every sign-in. Coarse on purpose — never the user agent itself.
+  function deviceLabel(env = { userAgent: navigator.userAgent, maxTouchPoints: navigator.maxTouchPoints || 0, brave: !!navigator.brave }) {
+    const ua = env.userAgent || "";
+    const os = /iPhone|iPod/.test(ua) ? "iPhone"
+      : /iPad/.test(ua) || (/Macintosh/.test(ua) && (env.maxTouchPoints || 0) > 1) ? "iPad" // iPadOS reports a Mac user agent
+      : /Android/.test(ua) ? "Android"
+      : /CrOS/.test(ua) ? "ChromeOS"
+      : /Windows/.test(ua) ? "Windows"
+      : /Macintosh|Mac OS X/.test(ua) ? "Mac"
+      : /Linux/.test(ua) ? "Linux"
+      : "Other";
+    const browser = /EdgiOS|EdgA?\//.test(ua) ? "Edge"
+      : /FxiOS|Firefox\//.test(ua) ? "Firefox"
+      : env.brave ? "Brave"
+      : /CriOS|Chrome\//.test(ua) ? "Chrome"
+      : /Safari\//.test(ua) ? "Safari"
+      : "Other";
+    return { os, browser };
+  }
+
   const signup = (email) => api("/v1/auth/signup", "POST", { email });
   const verifyEmail = (email, code) => api("/v1/auth/verify-email", "POST", { email, code });
 
@@ -171,7 +192,7 @@
       },
     });
     const hkdfSalt = b64(rand(16));
-    const v = await api("/v1/webauthn/register/verify", "POST", { signupToken, hkdfSalt, response });
+    const v = await api("/v1/webauthn/register/verify", "POST", { signupToken, hkdfSalt, response, device: deviceLabel() });
     return { credentialId: v.credentialId, prfEnabled: ext.prf?.enabled === true, backedUp: v.backedUp === true, rpId: o.rp?.id || "" };
   }
 
@@ -204,7 +225,7 @@
     });
     let v;
     try {
-      v = await api("/v1/webauthn/login/verify", "POST", { response });
+      v = await api("/v1/webauthn/login/verify", "POST", { response, device: deviceLabel() });
     } catch (e) {
       // Which credential the server refused: app.js compares it to the one it cached to tell
       // "this device was removed" from "a different passkey was picked".
@@ -240,7 +261,7 @@
       }
     } catch { /* advisory only */ }
   }
-  const webauthn = { signup, verifyEmail, register, login, assertOffline, waitForFocus, signalUnknownCredential };
+  const webauthn = { signup, verifyEmail, register, login, assertOffline, waitForFocus, signalUnknownCredential, deviceLabel };
 
   // ---------- ladder: bootstrap | rung 1 | rung 2 | abandon ----------
   // ctx: { session, kekWrap, hasPrfWrap, hasRecovery, vk? }
