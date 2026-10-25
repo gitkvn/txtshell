@@ -50,7 +50,7 @@
     if (session) headers.Authorization = `Bearer ${session}`;
     const res = await fetch(`${window.location.origin}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
     const data = res.status === 204 ? {} : await res.json().catch(() => ({}));
-    if (res.status === 401 && session) document.dispatchEvent(new CustomEvent("txcentral:session-lost", { detail: { reason: "401", code: data.error || "" } }));
+    if (res.status === 401 && session) document.dispatchEvent(new CustomEvent("txcentral:session-lost", { detail: { reason: "401", code: data.error || "", session } }));
     if (!res.ok) throw new ApiError(method, path, res.status, data.error);
     return data;
   }
@@ -167,6 +167,16 @@
   const signup = (email) => api("/v1/auth/signup", "POST", { email });
   // The cloud sync waitlist (while signups are allowlist-only): stores the address, sends nothing.
   const waitlist = { join: (email) => api("/v1/waitlist", "POST", { email }) };
+  // Payments (Dodo, server side): checkout before setting up ({checkoutToken}) or to renew (signed in);
+  // claim a signup token once the payment is in (202 {pending} until then); the account card's status;
+  // Dodo's customer portal; undo cancel-at-period-end.
+  const billing = {
+    checkout: (body, session) => api("/v1/billing/checkout", "POST", body || {}, session),
+    claim: (checkoutToken) => api("/v1/billing/claim", "POST", { checkoutToken }),
+    status: (session) => api("/v1/billing", "GET", undefined, session),
+    portal: (session) => api("/v1/billing/portal", "POST", {}, session),
+    resume: (session) => api("/v1/billing/resume", "POST", {}, session),
+  };
   const verifyEmail = (email, code) => api("/v1/auth/verify-email", "POST", { email, code });
 
   async function register(signupToken) {
@@ -353,5 +363,5 @@
     prfWrap: (session) => api("/v1/keys/prf", "GET", undefined, session).then((d) => d.blob),
   };
 
-  window.txCentral = { api, ApiError, keys, phrase, webauthn, waitlist, ladder, devices, PRF_EVAL_CONTEXT, b64, fromB64 };
+  window.txCentral = { api, ApiError, keys, phrase, webauthn, waitlist, billing, ladder, devices, PRF_EVAL_CONTEXT, b64, fromB64 };
 })();

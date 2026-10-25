@@ -182,6 +182,8 @@ const state = {
   central: {
     session: null,
     userId: null,
+    // Payments: the last GET /v1/billing answer (the account card's subscription lines), or null.
+    billing: null,
     credentialId: null,
     // Set after a join that re-keyed local blocks: the next pull that finds the
     // cloud different shows the first-join card (merge) instead of the
@@ -4027,6 +4029,7 @@ function isVaultLocked() {
 // queue on it, so a lock/unlock in the same tab must re-trigger the drain.
 let readySignalSent = false;
 function signalReady() {
+  if (!isVaultLocked()) void resumeCheckoutReturn(); // payments: back from Dodo's checkout (once per load)
   if (readySignalSent) return;
   if (isVaultLocked()) return;
   readySignalSent = true;
@@ -4654,6 +4657,12 @@ function renderVault() {
     renderCentralReaddRescueCard();
   } else if (view === "central-code") {
     renderCentralCodeCard();
+  } else if (view === "central-pay") {
+    renderCentralPayCard();
+  } else if (view === "central-finishing") {
+    renderCentralFinishingCard();
+  } else if (view === "central-paid") {
+    renderCentralPaidCard();
   } else if (view === "central-registered") {
     renderCentralRegisteredCard();
   } else if (view === "central-has-passkey") {
@@ -5208,7 +5217,7 @@ async function performWipe() {
   state.entries = [];
   state.unreadable = [];
   state.encryption = { enabled: false, unlocked: false, masterKey: null, mode: "passphrase" };
-  state.central = { session: null, userId: null, credentialId: null, firstJoin: false, removed: false, readdCredentialId: null, unlockFailures: 0, email: null };
+  state.central = { session: null, userId: null, billing: null, credentialId: null, firstJoin: false, removed: false, readdCredentialId: null, unlockFailures: 0, email: null };
   state.vaultView = null;
   state.vaultPending = null;
   state.editingEntryId = null;
@@ -5974,6 +5983,8 @@ const SYNC_STATUS_LABELS = {
   "central-setup": { short: "Finish setting up sync", full: "Save your 12 words to finish setting up." },
   "central-removed": { short: "Device removed", full: "This device was removed from your account." },
   "central-offline": { short: "Waiting for connection", full: "You're offline. Your notes are saved here and will sync when you're back." },
+  // Payments: the subscription has lapsed (a 402 on push). Notes stay here and editable; pushes wait.
+  "central-lapsed": { short: "Sync paused", full: "Your subscription has ended. Your notes are saved here — renew to sync again." },
 };
 
 // Drives the persistent ambient sync indicator in the footer.
@@ -5992,7 +6003,7 @@ let syncIndicatorState = "idle"; // "idle" | "syncing" | "ok" | "failed"
 let lastFailureReason = null;
 // The failure reasons a person acts on by signing in — the indicator becomes a button that runs
 // the same path as typing /account, and the toast/tooltip say so (plan §8, decision 2026-10-09).
-const CENTRAL_ACTION_REASONS = ["central-signin", "central-offline", "central-setup", "central-removed"];
+const CENTRAL_ACTION_REASONS = ["central-signin", "central-offline", "central-setup", "central-removed", "central-lapsed"];
 const CENTRAL_ACTION_HINT = "click here, or type /account";
 // Failures that mean "no connection": the footer and the account card both read offline, and the
 // connection coming back pushes at once (manual-run findings, 2026-10-12).
@@ -6076,6 +6087,7 @@ async function refreshSyncDoor({ probe = false } = {}) {
 
 // The one account state, read by the footer and by the account card so the two never disagree
 // (manual-run finding 1, 2026-10-12): "on" | "syncing" | "offline" | "paused" | "setup" | "removed",
+// "lapsed" (payments: the subscription ended — a 402 on push; reads and local edits carry on),
 // or "trouble" for a failure that isn't the account's (a server error, too large…). The browser's
 // own offline flag counts at once, before any push has failed.
 function centralSyncState() {
@@ -6083,6 +6095,7 @@ function centralSyncState() {
   const failed = syncIndicatorState === "failed";
   if (syncConnectionDown() || (failed && SYNC_OFFLINE_REASONS.includes(lastFailureReason))) return "offline";
   if (failed && lastFailureReason === "central-setup") return "setup";
+  if (failed && lastFailureReason === "central-lapsed") return "lapsed";
   if (!state.central.session || (failed && lastFailureReason === "central-signin")) return "paused";
   if (failed) return lastFailureReason === "central-removed" ? "removed" : "trouble";
   return syncIndicatorState === "syncing" ? "syncing" : "on";
@@ -6098,6 +6111,7 @@ function footerSyncStatus() {
     case "setup": return failedWith("central-setup");
     case "paused": return failedWith("central-signin");
     case "removed": return failedWith("central-removed");
+    case "lapsed": return failedWith("central-lapsed");
     default: return own;
   }
 }
@@ -6591,6 +6605,10 @@ async function flushCloudSync({ evenIfDown = false } = {}) {
     } else if (response.status === 403 && isCentral()) {
       setSyncStatus("central-setup");
       return { status: "error", reason: "http-403" };
+    } else if (response.status === 402 && isCentral()) {
+      // The subscription has lapsed: the push waits (the notes are saved here), the account card offers Renew.
+      setSyncStatus("central-lapsed");
+      return { status: "error", reason: "http-402" };
     } else if (response.status === 412) {
       // The cloud moved on since this browser last synced. Never retry blindly:
       // pull, compare, and let the existing card decide. The push is not lost —
@@ -8301,6 +8319,9 @@ async function centralToldRemovedBySession() {
 // removed). Local state untouched.
 document.addEventListener("txcentral:session-lost", (event) => {
   if (!isCentral() || !state.central.session) return;
+  // Only the session this browser holds now: a 401 for one it already replaced (a request that was
+  // in flight across a sign-in — e.g. the account card's billing status) says nothing about this one.
+  if (event.detail?.session && event.detail.session !== state.central.session) return;
   if (event.detail?.code === "device-removed") void centralToldRemovedBySession();
   else dropCentralSession("session-lost");
 });
@@ -8878,6 +8899,211 @@ function passkeyPlatformName(env = { userAgent: navigator.userAgent, maxTouchPoi
   return null;
 }
 
+// A signup token in hand: register this browser's sign-in, then the sign-in's own tap
+// (central-registered). Shared by the code card and the card after a checkout.
+async function centralRegisterWithToken(pending, signupToken) {
+  state.vaultView = "central-busy";
+  state.vaultPending = { ...pending, busy: `Setting up ${passkeyPlatformName() || "sign-in"}` };
+  renderVault();
+  const registered = await window.txCentral.webauthn.register(signupToken);
+  if (centralLocked()) {
+    // A re-add from the lock screen: the server now holds a credential this device must sign in
+    // with, whatever happens between here and the settled key (a crash included).
+    await writeCentralFlags([[CENTRAL_READD_CREDENTIAL_KEY, registered.credentialId]]);
+    state.central.readdCredentialId = registered.credentialId;
+  }
+  // The sign-in is its own ceremony behind its own tap: Safari spends the user activation on
+  // the registration, and every browser refuses a ceremony while the sheet's focus settles.
+  state.vaultPending = { ...pending, registered };
+  state.vaultView = "central-registered";
+  renderVault();
+}
+
+// ---------- payments: checkout before setting up, and coming back (2026-10-25-payments.md §1) ----------
+
+// What survives the trip to Dodo's checkout page and back: the verified address and its checkout
+// token (24 hours, server side). Cleared once the payment has been claimed or the person cancels.
+const CENTRAL_CHECKOUT_EMAIL_KEY = "central-checkout-email";
+const CENTRAL_CHECKOUT_TOKEN_KEY = "central-checkout-token";
+// Dodo appends ?status=… on the way back; a hint only (the webhook decides), used for the message.
+const CHECKOUT_FAILED_STATUSES = ["failed", "cancelled"];
+
+async function clearCheckoutPending() {
+  await Promise.all([deleteMeta(CENTRAL_CHECKOUT_EMAIL_KEY), deleteMeta(CENTRAL_CHECKOUT_TOKEN_KEY)]).catch(() => {});
+}
+
+function billingErrorMessage(error) {
+  if (error?.code === "billing-unavailable" || error?.code === "billing-upstream") return "Payments aren't available right now. Try again later.";
+  if (error?.code === "checkout-token-invalid" || error?.code === "checkout-token-required") return "This step has expired. Start again with Get cloud sync — you won't pay twice.";
+  if (error?.status === 429) return centralFailureMessage(error);
+  if (error?.name === "TypeError" || error?.status === 0) return "Can't reach Txtshell right now. Check your connection and try again.";
+  return "Something went wrong. Try again.";
+}
+
+function renderCentralPayCard() {
+  const pending = state.vaultPending || {};
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG_DOT}
+      <p class="vault-title">One more step</p>
+      <p class="vault-subtitle">Txtshell sync is a yearly subscription. You'll pay on the next page, in your currency, tax included.</p>
+      <p class="vault-error"${pending.failed ? "" : " hidden"}>${pending.failed ? "Payment didn't go through. You can try again." : ""}</p>
+      <button class="vault-button" type="button" data-action="pay">Continue to payment</button>
+      <p class="vault-fine" data-field="email">For ${escapeHtml(pending.email || "")}</p>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const button = vaultOverlay.querySelector('[data-action="pay"]');
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    errorLine.hidden = true;
+    try {
+      const { checkoutUrl } = await window.txCentral.billing.checkout({ checkoutToken: pending.checkoutToken });
+      await saveMetaBatch([[CENTRAL_CHECKOUT_EMAIL_KEY, pending.email], [CENTRAL_CHECKOUT_TOKEN_KEY, pending.checkoutToken]]);
+      window.location.assign(checkoutUrl);
+    } catch (error) {
+      if (error?.code === "already-subscribed") {
+        // Paid already (another tab, or the webhook beat us here): claim instead of paying again.
+        state.vaultView = "central-finishing";
+        renderVault();
+        return;
+      }
+      console.error("[txtshell] checkout failed", error?.code || "", error);
+      errorLine.textContent = billingErrorMessage(error);
+      errorLine.hidden = false;
+      button.disabled = false;
+    }
+  });
+  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", () => { void clearCheckoutPending(); exitVaultToNormal(); });
+  window.requestAnimationFrame(() => button.focus());
+}
+
+// Back from checkout: wait for the webhook (claim answers 202 until the payment is in), then one tap
+// sets up this browser's sign-in. A late webhook is not a lost payment: Get cloud sync with the same
+// email later goes straight to setting up.
+const CHECKOUT_CLAIM_INTERVAL_MS = 2000;
+const CHECKOUT_CLAIM_TIMEOUT_MS = 60000;
+let checkoutClaimRun = 0;
+function renderCentralFinishingCard() {
+  const pending = state.vaultPending || {};
+  const run = ++checkoutClaimRun;
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG_DOT}
+      <p class="vault-title">Finishing setup…</p>
+      <p class="vault-subtitle" data-field="line">Confirming your payment.</p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="again" hidden>Check again</button>
+      <button class="vault-link" type="button" data-action="restart" hidden>Get cloud sync</button>
+    </div>
+  `;
+  const line = vaultOverlay.querySelector('[data-field="line"]');
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const again = vaultOverlay.querySelector('[data-action="again"]');
+  const restart = vaultOverlay.querySelector('[data-action="restart"]');
+  again.addEventListener("click", () => { state.vaultView = "central-finishing"; renderVault(); });
+  restart.addEventListener("click", () => { void clearCheckoutPending(); beginGetCloudSync(pending.email || ""); });
+  const stillHere = () => run === checkoutClaimRun && state.vaultView === "central-finishing";
+  void (async () => {
+    const end = Date.now() + CHECKOUT_CLAIM_TIMEOUT_MS;
+    while (stillHere()) {
+      try {
+        const answer = await window.txCentral.billing.claim(pending.checkoutToken);
+        if (!stillHere()) return;
+        if (answer.signupToken) {
+          await clearCheckoutPending();
+          state.vaultPending = { email: pending.email, signupToken: answer.signupToken };
+          state.vaultView = "central-paid";
+          renderVault();
+          return;
+        }
+      } catch (error) {
+        if (!stillHere()) return;
+        if (error?.code === "checkout-token-invalid" || error?.code === "checkout-token-required") {
+          await clearCheckoutPending();
+          line.hidden = true;
+          errorLine.textContent = billingErrorMessage(error);
+          errorLine.hidden = false;
+          restart.hidden = false;
+          return;
+        }
+        // a network blip: keep trying until the timeout
+      }
+      if (Date.now() > end) break;
+      await new Promise((resolve) => window.setTimeout(resolve, CHECKOUT_CLAIM_INTERVAL_MS));
+    }
+    if (!stillHere()) return;
+    line.textContent = "Your payment is still being confirmed. This can take a minute.";
+    again.hidden = false;
+  })();
+}
+
+function renderCentralPaidCard() {
+  const pending = state.vaultPending || {};
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG_DOT}
+      <p class="vault-title">Payment received.</p>
+      <p class="vault-subtitle">${escapeHtml(platformOr((n) => `Now set up ${n} for this browser.`, "Now set up sign-in for this browser."))}</p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="setup">${escapeHtml(passkeyPlatformName() ? `Set up ${passkeyPlatformName()}` : "Set up sign-in")}</button>
+    </div>
+  `;
+  const button = vaultOverlay.querySelector('[data-action="setup"]');
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await centralRegisterWithToken({ email: pending.email }, pending.signupToken);
+    } catch (error) {
+      if (error?.name === "InvalidStateError") {
+        state.vaultPending = { email: pending.email };
+        state.vaultView = "central-has-passkey";
+        renderVault();
+        return;
+      }
+      centralFlowFailed(error, "central-paid");
+    }
+  });
+  window.requestAnimationFrame(() => button.focus());
+}
+
+// On load (and after an unlock): Dodo sends the browser back to /?checkout=return. A browser with no
+// account here finishes setting up; one with an account renewed, so wait for the webhook and push.
+let checkoutReturnHandled = false;
+async function resumeCheckoutReturn() {
+  if (checkoutReturnHandled || isVaultLocked()) return;
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("checkout") !== "return") return;
+  checkoutReturnHandled = true;
+  const hint = params.get("status") || "";
+  window.history.replaceState(null, "", window.location.pathname + window.location.hash); // Dodo's ids out of the address bar
+  if (isCentral()) {
+    void centralRenewReturned();
+    return;
+  }
+  const [email, checkoutToken] = await Promise.all([getMeta(CENTRAL_CHECKOUT_EMAIL_KEY), getMeta(CENTRAL_CHECKOUT_TOKEN_KEY)]);
+  if (!email || !checkoutToken) return;
+  const failed = CHECKOUT_FAILED_STATUSES.includes(hint);
+  state.vaultPending = { email, checkoutToken, failed };
+  state.vaultView = failed ? "central-pay" : "central-finishing";
+  renderVault();
+}
+
+// Renewed (signed in): wait until the account may sync again, then send what waited.
+async function centralRenewReturned() {
+  const end = Date.now() + CHECKOUT_CLAIM_TIMEOUT_MS;
+  while (Date.now() < end) {
+    const billing = await refreshBilling();
+    if (billing?.allowed) {
+      composerHint.textContent = "Sync is on again.";
+      void flushCloudSync();
+      return;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, CHECKOUT_CLAIM_INTERVAL_MS));
+  }
+}
+
 function renderCentralCodeCard() {
   const pending = state.vaultPending || {};
   vaultOverlay.innerHTML = `
@@ -8900,22 +9126,15 @@ function renderCentralCodeCard() {
     if (!/^\d{6}$/.test(code)) { errorLine.textContent = "Enter the 6-digit code."; errorLine.hidden = false; return; }
     submitButton.disabled = true;
     try {
-      const { signupToken } = await window.txCentral.webauthn.verifyEmail(pending.email, code);
-      state.vaultView = "central-busy";
-      state.vaultPending = { ...pending, busy: `Setting up ${passkeyPlatformName() || "sign-in"}` };
-      renderVault();
-      const registered = await window.txCentral.webauthn.register(signupToken);
-      if (centralLocked()) {
-        // A re-add from the lock screen: the server now holds a credential this device must sign in
-        // with, whatever happens between here and the settled key (a crash included).
-        await writeCentralFlags([[CENTRAL_READD_CREDENTIAL_KEY, registered.credentialId]]);
-        state.central.readdCredentialId = registered.credentialId;
+      const verified = await window.txCentral.webauthn.verifyEmail(pending.email, code);
+      if (verified.checkoutToken) {
+        // Payments: this address pays before setting up (no device, not on the free list, nothing paid).
+        state.vaultPending = { email: pending.email, checkoutToken: verified.checkoutToken };
+        state.vaultView = "central-pay";
+        renderVault();
+        return;
       }
-      // The sign-in is its own ceremony behind its own tap: Safari spends the user activation on
-      // the registration, and every browser refuses a ceremony while the sheet's focus settles.
-      state.vaultPending = { ...pending, registered };
-      state.vaultView = "central-registered";
-      renderVault();
+      await centralRegisterWithToken(pending, verified.signupToken);
     } catch (error) {
       if (error?.name === "InvalidStateError") {
         // The authenticator already holds a passkey for this account (the server's
@@ -9653,6 +9872,7 @@ function openAccountCard() {
   state.vaultPending = null;
   state.vaultView = "central-account";
   renderVault();
+  void refreshBilling();
   composerHint.textContent = "Txtshell sync";
 }
 
@@ -9660,6 +9880,74 @@ function openAccountCard() {
 function platformOr(withName, without) {
   const name = passkeyPlatformName();
   return name ? withName(name) : without;
+}
+
+// Payments: what the account card says about the subscription (GET /v1/billing), kept from the last
+// answer so a re-render has it at once; refreshed whenever the card opens.
+async function refreshBilling() {
+  if (!isCentral() || !state.central.session || !window.txCentral?.billing) return null;
+  try {
+    state.central.billing = await window.txCentral.billing.status(state.central.session);
+  } catch {
+    return state.central.billing || null;
+  }
+  if (state.vaultView === "central-account") renderVault();
+  return state.central.billing;
+}
+
+function billingDate(iso) {
+  return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
+// The signed-in card's subscription lines (only while sign-ups are paid, and only for an account
+// with a subscription or a comp — the free list shows nothing).
+function accountBillingLines(billing) {
+  if (!billing || billing.mode !== "paid" || !billing.source) return "";
+  const line = (text) => `<p class="vault-subtitle" data-field="billing">${escapeHtml(text)}</p>`;
+  if (billing.source === "comp") return billing.periodEnd ? line(`Free until ${billingDate(billing.periodEnd)}.`) : "";
+  if ((billing.status === "past_due" || billing.status === "on_hold") && billing.graceUntil) {
+    return `${line(`Your renewal payment didn't go through. Sync keeps working until ${billingDate(billing.graceUntil)}.`)}
+      <button class="vault-button" type="button" data-action="billing-portal">Update payment</button>`;
+  }
+  if (billing.status === "cancelled" && billing.periodEnd) return line(`Sync is on until ${billingDate(billing.periodEnd)}. It won't renew.`);
+  if (billing.status === "active" && billing.cancelAtPeriodEnd && billing.periodEnd) {
+    return `${line(`Sync is on until ${billingDate(billing.periodEnd)}. It won't renew.`)}
+      <button class="vault-button secondary" type="button" data-action="billing-resume">Keep syncing</button>`;
+  }
+  if (billing.status === "active" && billing.periodEnd) {
+    return `${line(`Renews ${billingDate(billing.periodEnd)}.`)}
+      <button class="vault-link" type="button" data-action="billing-portal">Manage billing</button>`;
+  }
+  return "";
+}
+
+async function openBillingPortal(errorLine) {
+  try {
+    const { link } = await window.txCentral.billing.portal(state.central.session);
+    window.location.assign(link);
+  } catch (error) {
+    errorLine.textContent = billingErrorMessage(error);
+    errorLine.hidden = false;
+  }
+}
+
+async function startRenewCheckout(errorLine, button) {
+  if (button) button.disabled = true;
+  try {
+    const { checkoutUrl } = await window.txCentral.billing.checkout({}, state.central.session);
+    window.location.assign(checkoutUrl);
+  } catch (error) {
+    if (error?.code === "already-subscribed") {
+      // Renewed elsewhere since: push what waited.
+      await refreshBilling();
+      void flushCloudSync();
+      exitVaultToNormal();
+      return;
+    }
+    errorLine.textContent = billingErrorMessage(error);
+    errorLine.hidden = false;
+    if (button) button.disabled = false;
+  }
 }
 
 function renderCentralAccountCard() {
@@ -9675,6 +9963,7 @@ function renderCentralAccountCard() {
     body = `
       <p class="vault-title">${escapeHtml(title)}</p>
       <p class="vault-subtitle" data-field="last-synced">${escapeHtml(line)}</p>
+      ${accountBillingLines(state.central.billing)}
       ${state.central.email ? `<p class="vault-subtitle" data-field="email">Signed in as ${escapeHtml(state.central.email)}</p>` : ""}
       <button class="vault-button secondary" type="button" data-action="signout">Sign out</button>
       <button class="vault-link" type="button" data-action="new-words">Get new 12 words</button>
@@ -9687,6 +9976,14 @@ function renderCentralAccountCard() {
       <p class="vault-title">Sync is paused.</p>
       <p class="vault-subtitle">Sign in to continue.</p>
       <button class="vault-button" type="button" data-action="signin">${escapeHtml(signInLabel)}</button>
+      ${quietSignOut}
+      ${close}`;
+  } else if (kind === "lapsed") {
+    body = `
+      <p class="vault-title">Sync is paused.</p>
+      <p class="vault-subtitle">Your notes are here and you can keep writing — they just won't sync. Renew to sync again.</p>
+      <button class="vault-button" type="button" data-action="billing-renew">Renew</button>
+      ${state.central.billing?.manageable ? `<button class="vault-link" type="button" data-action="billing-portal">Manage billing</button>` : ""}
       ${quietSignOut}
       ${close}`;
   } else if (kind === "offline") {
@@ -9725,6 +10022,21 @@ function renderCentralAccountCard() {
   on("new-words", () => { state.vaultView = "central-new-words"; renderVault(); });
   on("save-words", () => { void centralFinishSetup(); });
   on("readd", () => { lockVault(); void beginCentralReadd(); });
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  on("billing-portal", () => { void openBillingPortal(errorLine); });
+  on("billing-renew", (event) => { void startRenewCheckout(errorLine, event.currentTarget); });
+  on("billing-resume", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      state.central.billing = await window.txCentral.billing.resume(state.central.session);
+      renderVault();
+    } catch (error) {
+      errorLine.textContent = billingErrorMessage(error);
+      errorLine.hidden = false;
+      button.disabled = false;
+    }
+  });
 }
 
 // Sign out from the card asks first; the consequence lives here, not as small print on the card
