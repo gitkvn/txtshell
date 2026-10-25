@@ -144,6 +144,7 @@ const SLASH_COMMANDS = [
   { name: "/account phrase", description: "Get new 12 words (the current ones stop working)" },
   { name: "/account signout", description: "Sign out and lock this device; your notes stay here" },
   { name: "/account leave", description: "Stop syncing this device; keep its notes here with a passphrase" },
+  { name: "/account delete", description: "Delete your account and its cloud copy; cancels your subscription" },
   { name: "/inbox", description: "Triage captures synced from your phone" },
   { name: "/font", description: "Set note font size in px (11–24, default 14); /font reset restores default" },
   { name: "/sym", description: "Chemistry & math symbol palette (₂ → Δ ²⁺); ;; toggles it anywhere" },
@@ -1405,6 +1406,11 @@ function submitComposer() {
   }
   if (text === "/account leave") {
     void beginAccountLeave();
+    return;
+  }
+
+  if (text === "/account delete") {
+    void beginAccountDelete();
     return;
   }
 
@@ -4659,6 +4665,24 @@ function renderVault() {
     renderCentralCodeCard();
   } else if (view === "central-pay") {
     renderCentralPayCard();
+  } else if (view === "central-refund") {
+    renderCentralRefundCard();
+  } else if (view === "central-refunded") {
+    renderCentralRefundedCard();
+  } else if (view === "central-delete") {
+    renderCentralDeleteCard();
+  } else if (view === "central-deleted") {
+    renderSetupCard({
+      title: "Your account is deleted",
+      subtitle: "Choose a passphrase to keep your notes on this browser. They stay here, locked with it.",
+      buttonText: "Keep my notes here",
+      skipRecovery: true,
+      onSubmit: handleAccountLeaveSubmit,
+      onCancel: () => {
+        exitVaultToNormal();
+        composerHint.textContent = "Your account is deleted. Your notes are still here — run /account leave to keep them with a passphrase.";
+      },
+    });
   } else if (view === "central-finishing") {
     renderCentralFinishingCard();
   } else if (view === "central-paid") {
@@ -9916,9 +9940,59 @@ function accountBillingLines(billing) {
   }
   if (billing.status === "active" && billing.periodEnd) {
     return `${line(`Renews ${billingDate(billing.periodEnd)}.`)}
-      <button class="vault-link" type="button" data-action="billing-portal">Manage billing</button>`;
+      <button class="vault-link" type="button" data-action="billing-portal">Manage billing</button>${refundLink(billing)}`;
   }
-  return "";
+  return refundLink(billing);
+}
+
+// The self-serve refund, offered while the last payment is under 14 days old (once per account).
+function refundLink(billing) {
+  return billing?.refundable ? `<button class="vault-link" type="button" data-action="billing-refund">Request a refund</button>` : "";
+}
+
+function renderCentralRefundCard() {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card" data-account-confirm="refund">
+      ${SYNC_ICON_SVG}
+      <p class="vault-title">Request a refund?</p>
+      <p class="vault-subtitle">You'll get back what you paid for this year, in the currency you paid. Your subscription ends and sync pauses now. Your notes stay on your devices, and the cloud copy is kept for 12 months if you come back.</p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="confirm">Refund</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const button = vaultOverlay.querySelector('[data-action="confirm"]');
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    errorLine.hidden = true;
+    try {
+      state.central.billing = await window.txCentral.billing.refund(state.central.session);
+      setSyncStatus("central-lapsed"); // what the next push would say; no need to wait for it
+      state.vaultView = "central-refunded";
+      renderVault();
+    } catch (error) {
+      errorLine.textContent = error?.code === "refund-not-available" ? "This payment can't be refunded here any more. Write to hello@txtshell.com." : billingErrorMessage(error);
+      errorLine.hidden = false;
+      button.disabled = false;
+    }
+  });
+  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", openAccountCard);
+  window.requestAnimationFrame(() => button.focus());
+}
+
+function renderCentralRefundedCard() {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${SYNC_ICON_SVG}
+      <p class="vault-title">Refunded.</p>
+      <p class="vault-subtitle">Sync is paused. Your notes are here and you can keep writing. The refund can take a few days to reach your account.</p>
+      <button class="vault-button" type="button" data-action="done">Done</button>
+    </div>
+  `;
+  const button = vaultOverlay.querySelector('[data-action="done"]');
+  button.addEventListener("click", exitVaultToNormal);
+  window.requestAnimationFrame(() => button.focus());
 }
 
 async function openBillingPortal(errorLine) {
@@ -9970,7 +10044,8 @@ function renderCentralAccountCard() {
       <button class="vault-link" type="button" data-action="devices">Your devices</button>
       ${leave}
       <p class="vault-fine">Stopping keeps your notes here, locked with a passphrase you choose.</p>
-      ${close}`;
+      ${close}
+      <button class="vault-link quiet" type="button" data-action="delete-account">Delete account</button>`;
   } else if (kind === "paused") {
     body = `
       <p class="vault-title">Sync is paused.</p>
@@ -10025,6 +10100,8 @@ function renderCentralAccountCard() {
   const errorLine = vaultOverlay.querySelector(".vault-error");
   on("billing-portal", () => { void openBillingPortal(errorLine); });
   on("billing-renew", (event) => { void startRenewCheckout(errorLine, event.currentTarget); });
+  on("billing-refund", () => { state.vaultView = "central-refund"; renderVault(); });
+  on("delete-account", () => { void beginAccountDelete(); });
   on("billing-resume", async (event) => {
     const button = event.currentTarget;
     button.disabled = true;
@@ -10321,6 +10398,78 @@ async function accountSignOut() {
 
 // Convert back to an ordinary passphrase vault with the SAME key: no record is
 // rewritten; the account and its other devices are unaffected.
+// ---------- /account delete (2026-10-25-payments.md §5) ----------
+// One card: the account's email to confirm, then Delete. The tap signs in (a fresh session, which the
+// server requires, and this device's key, kept to re-lock the notes here with a passphrase); the server
+// cancels the subscription with Dodo first and deletes nothing if Dodo doesn't confirm; then every row
+// and every cloud copy go. Then a passphrase keeps the notes on this browser (as /account leave does).
+async function beginAccountDelete() {
+  if (!isCentral()) { composerHint.textContent = "No Txtshell account on this browser."; return; }
+  setEditorValue("");
+  clearDraft();
+  await refreshBilling(); // first, so the card shows the refund line if a refund is still possible
+  state.vaultPending = null;
+  state.vaultView = "central-delete";
+  renderVault();
+}
+
+function renderCentralDeleteCard() {
+  const refundable = Boolean(state.central.billing?.refundable);
+  vaultOverlay.innerHTML = `
+    <div class="vault-card" data-account-confirm="delete">
+      ${SYNC_ICON_SVG}
+      <p class="vault-title">Delete your account?</p>
+      <p class="vault-subtitle">This deletes your account, cancels your subscription and erases the cloud copy of your notes. Notes on your devices stay there. This can't be undone.</p>
+      ${refundable ? `<p class="vault-subtitle" data-field="refund">Your last payment was less than 14 days ago. You can get a refund first.</p>
+      <button class="vault-link lead" type="button" data-action="refund">Request a refund</button>` : ""}
+      <p class="vault-subtitle">Type your account's email to confirm.</p>
+      <p class="vault-error" hidden></p>
+      <input class="vault-input" data-field="email" type="email" placeholder="you@example.com" autocomplete="off" spellcheck="false" />
+      <button class="vault-button danger" type="button" data-action="delete">Delete account</button>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const input = vaultOverlay.querySelector('[data-field="email"]');
+  const button = vaultOverlay.querySelector('[data-action="delete"]');
+  vaultOverlay.querySelector('[data-action="refund"]')?.addEventListener("click", () => { state.vaultView = "central-refund"; renderVault(); });
+  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", exitVaultToNormal);
+  const showError = (message) => { errorLine.textContent = message; errorLine.hidden = false; };
+  button.addEventListener("click", async () => {
+    const confirm = input.value.trim();
+    if (!confirm) { showError("Type your account's email to confirm."); return; }
+    button.disabled = true;
+    errorLine.hidden = true;
+    let vk;
+    try {
+      // The ceremony is the consent and the fresh sign-in; its PRF re-opens this device's key so the
+      // notes here can be locked with a passphrase once the account is gone.
+      const stored = await readCentralMeta();
+      const login = await window.txCentral.webauthn.login({ allowCredentialIds: [stored.credentialId] });
+      const kekWrap = await window.txCentral.keys.kekFromPrf(login.prf, stored.hkdfSalt);
+      login.prf.fill(0);
+      vk = await window.txCentral.keys.unwrapVK(stored.prfWrap, kekWrap, true);
+      if (!(await verifyMasterKey(vk))) throw new Error("wrong-key");
+      await window.txCentral.account.delete(login.session, confirm);
+    } catch (error) {
+      console.error("[txtshell] delete account failed", error?.code || "", error);
+      showError(error?.code === "confirm-mismatch" ? "That doesn't match this account's email."
+        : error?.code === "billing-upstream" || error?.code === "billing-unavailable" ? "Couldn't cancel your subscription, so nothing was deleted. Try again in a minute."
+        : error?.name === "NotAllowedError" ? "Delete needs you to confirm on this device. Try again."
+        : error?.name === "TypeError" || error?.status === 0 ? "Can't reach Txtshell right now. Check your connection and try again."
+        : "Couldn't delete your account. Try again.");
+      button.disabled = false;
+      return;
+    }
+    clearCentralSession();
+    state.central.billing = null;
+    state.vaultPending = { leaveKey: vk, deleted: true };
+    state.vaultView = "central-deleted";
+    renderVault();
+  });
+  window.requestAnimationFrame(() => input.focus());
+}
+
 async function beginAccountLeave() {
   if (!isCentral()) { composerHint.textContent = "No Txtshell account on this browser."; return; }
   setEditorValue("");
@@ -10339,6 +10488,7 @@ async function beginAccountLeave() {
 }
 
 async function handleAccountLeaveSubmit(passphrase) {
+  const deleted = Boolean(state.vaultPending?.deleted); // after /account delete: the account is gone
   const vk = state.vaultPending?.leaveKey;
   if (!vk) throw new Error("missing-key");
   const saltPass = randomBytes(16);
@@ -10367,7 +10517,9 @@ async function handleAccountLeaveSubmit(passphrase) {
   renderVault();
   updateLockButton();
   setSyncStatus("ok");
-  composerHint.textContent = "Stopped syncing. Your notes stay here, locked with your passphrase. You can turn sync back on with /sync setup.";
+  composerHint.textContent = deleted
+    ? "Account deleted. Your notes stay here, locked with your passphrase."
+    : "Stopped syncing. Your notes stay here, locked with your passphrase. You can turn sync back on with /sync setup.";
   render();
   entryInput.focus();
 }

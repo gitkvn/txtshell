@@ -176,7 +176,11 @@
     status: (session) => api("/v1/billing", "GET", undefined, session),
     portal: (session) => api("/v1/billing/portal", "POST", {}, session),
     resume: (session) => api("/v1/billing/resume", "POST", {}, session),
+    refund: (session) => api("/v1/billing/refund", "POST", {}, session),
   };
+  // Delete account: the session must come from a sign-in in the last 10 minutes (the app signs in on
+  // the Delete tap); confirm is the account's email.
+  const account = { delete: (session, confirm) => api("/v1/account/delete", "POST", { confirm }, session) };
   const verifyEmail = (email, code) => api("/v1/auth/verify-email", "POST", { email, code });
 
   async function register(signupToken) {
@@ -363,5 +367,5 @@
     prfWrap: (session) => api("/v1/keys/prf", "GET", undefined, session).then((d) => d.blob),
   };
 
-  window.txCentral = { api, ApiError, keys, phrase, webauthn, waitlist, billing, ladder, devices, PRF_EVAL_CONTEXT, b64, fromB64 };
+  window.txCentral = { api, ApiError, keys, phrase, webauthn, waitlist, billing, account, ladder, devices, PRF_EVAL_CONTEXT, b64, fromB64 };
 })();
