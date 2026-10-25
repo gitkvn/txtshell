@@ -4644,6 +4644,12 @@ function renderVault() {
     renderKeyMismatchCard();
   } else if (view === "central-start") {
     renderCentralStartCard();
+  } else if (view === "central-email-signin" || view === "central-email-new") {
+    renderCentralEmailCard(view === "central-email-signin" ? "signin" : "new");
+  } else if (view === "central-waitlist") {
+    renderCentralWaitlistCard();
+  } else if (view === "central-waitlist-joined") {
+    renderCentralWaitlistJoinedCard();
   } else if (view === "central-readd-rescue") {
     renderCentralReaddRescueCard();
   } else if (view === "central-code") {
@@ -6044,10 +6050,10 @@ function syncedShortText(now = Date.now()) {
 // Keeps "2 min ago" (footer and an open account card) current.
 window.setInterval(() => { if (lastSyncedAt) renderSyncIndicator(); }, 30000);
 
-// The door for a browser with no account (plan §17.3): shown only where the account service answers
-// on this origin and is open for new accounts (`signups: "open"`; while it is allowlist-only the door
-// stays hidden and /account still opens the sign-in card), and never on an install that syncs
-// through its own (self-hosted) Worker.
+// The door for a browser with no account (plan §17.3): shown wherever the account service answers on
+// this origin, in either signups mode (2026-10-25-sync-door.md §1 — while it is allowlist-only, Get
+// cloud sync leads to the waitlist), and never on an install that syncs through its own
+// (self-hosted) Worker.
 let accountServiceAvailable = false;
 let selfHostedSyncConfigured = false;
 async function refreshSyncDoor({ probe = false } = {}) {
@@ -6055,7 +6061,7 @@ async function refreshSyncDoor({ probe = false } = {}) {
     try {
       const response = await fetch(`${window.location.origin}/v1/health`, { cache: "no-store" });
       const body = response.ok ? await response.json().catch(() => null) : null;
-      accountServiceAvailable = centralAvailable() && Boolean(body && body.ok === true && body.signups === "open");
+      accountServiceAvailable = centralAvailable() && Boolean(body && body.ok === true);
     } catch {
       accountServiceAvailable = false;
     }
@@ -8627,8 +8633,60 @@ function renderCentralAbandonCard() {
 function renderCentralStartCard() {
   // Locked account vault: the same cards run as a re-add (plan §8). Email first — the passkey
   // this device has is revoked, missing or failing, which is why the user is here.
-  const readd = centralLocked();
-  vaultOverlay.innerHTML = readd ? `
+  if (centralLocked()) {
+    renderCentralReaddStartCard();
+    return;
+  }
+  // No account here: two paths (2026-10-25-sync-door.md §2). Sign in — this device's sign-in, or
+  // the email for a device without it; Get cloud sync — a new account (or the waitlist).
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG_DOT}
+      <p class="vault-title">Txtshell sync</p>
+      <p class="vault-error" hidden></p>
+      <p class="vault-subtitle" data-field="returning">Already have an account?</p>
+      <button class="vault-button secondary" type="button" data-action="signin">${escapeHtml(passkeyPlatformName() ? `Sign in with ${passkeyPlatformName()}` : "Sign in")}</button>
+      <button class="vault-link" type="button" data-action="email-signin">Use your email instead</button>
+      <hr class="vault-divider" />
+      <p class="vault-subtitle" data-field="new">New to Txtshell sync?</p>
+      <button class="vault-button" type="button" data-action="new">Get cloud sync</button>
+      <p class="vault-fine" data-field="fine">Your notes stay encrypted. We can't read them.</p>
+      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+    </div>
+  `;
+  const signinButton = vaultOverlay.querySelector('[data-action="signin"]');
+  signinButton.addEventListener("click", async () => {
+    vaultOverlay.querySelectorAll('[data-action="signin"], [data-action="email-signin"], [data-action="new"]').forEach((button) => { button.disabled = true; });
+    try {
+      await centralJoin({ via: "signin" });
+    } catch (error) {
+      if (error?.name === "NotAllowedError" && !/focus/i.test(error?.message || "")) {
+        // Nothing on this device to sign in with (the sheet offered a phone or a key and nothing
+        // came, or it was closed): point to the email path, which serves a new device too.
+        console.warn("[txtshell] sign-in refused", error?.name || "", error);
+        state.vaultView = "central-start";
+        renderVault();
+        const line = vaultOverlay.querySelector(".vault-error");
+        line.textContent = "No sign-in found on this device. Use your email instead.";
+        line.hidden = false;
+        vaultOverlay.querySelector('[data-action="email-signin"]').focus();
+        return;
+      }
+      centralFlowFailed(error, "central-start");
+    }
+  });
+  vaultOverlay.querySelector('[data-action="email-signin"]').addEventListener("click", () => {
+    state.vaultPending = null;
+    state.vaultView = "central-email-signin";
+    renderVault();
+  });
+  vaultOverlay.querySelector('[data-action="new"]').addEventListener("click", () => beginGetCloudSync());
+  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", exitVaultToNormal);
+}
+
+// The re-add's email card (a locked account vault), unchanged by the two-path card.
+function renderCentralReaddStartCard() {
+  vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG}
       <p class="vault-title">${state.central.removed ? "Add this device again" : "Use your 12 words"}</p>
@@ -8638,63 +8696,99 @@ function renderCentralStartCard() {
       <button class="vault-button" type="button" data-action="email">Send a code</button>
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
     </div>
-  ` : `
+  `;
+  bindCentralEmailCard({ onClosed: (showError) => showError("No account uses that email.") });
+  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", exitVaultToNormal);
+}
+
+// Get cloud sync, the one place a new account starts: the button opens the email card, and
+// startGetCloudSync maps the server's answer to the next card — the code, or the waitlist. After
+// payments, checkout is one more branch there (and one in the server's newAccountPath).
+function beginGetCloudSync(email = "") {
+  state.vaultPending = email ? { email } : null;
+  state.vaultView = "central-email-new";
+  renderVault();
+}
+
+async function startGetCloudSync(email) {
+  try {
+    return { next: "code", result: await window.txCentral.webauthn.signup(email) };
+  } catch (error) {
+    if (error.code === "signups-closed") return { next: "waitlist" };
+    throw error;
+  }
+}
+
+// The two email cards: "Sign in with your email" (a device without its sign-in) and "Get cloud
+// sync". Both ask the same route for a code; they differ only in what a refused address gets.
+function renderCentralEmailCard(kind) {
+  const signin = kind === "signin";
+  vaultOverlay.innerHTML = `
     <div class="vault-card">
       ${LOCK_ICON_SVG_DOT}
-      <p class="vault-title">Txtshell sync</p>
+      <p class="vault-title">${signin ? "Sign in with your email" : "Get cloud sync"}</p>
+      <p class="vault-subtitle">${signin ? "We'll send you a code to add this browser to your account." : "Enter your email. We'll send a code to set it up on this browser."}</p>
       <p class="vault-error" hidden></p>
-      <p class="vault-subtitle" data-field="returning">Used Txtshell sync on this device before?</p>
-      <button class="vault-button secondary" type="button" data-action="signin">${escapeHtml(passkeyPlatformName() ? `Sign in with ${passkeyPlatformName()}` : "Sign in")}</button>
-      <p class="vault-or" aria-hidden="true"><span>or</span></p>
-      <p class="vault-subtitle" data-field="new">New here, or on a new device?</p>
+      ${signin ? `<button class="vault-link lead" type="button" data-action="to-new" hidden>Get cloud sync</button>` : ""}
       <input class="vault-input" data-field="email" type="email" placeholder="you@example.com" autocomplete="email" spellcheck="false" />
-      <button class="vault-button" type="button" data-action="email">Continue</button>
-      <p class="vault-fine" data-field="fine">Your notes stay encrypted. We can't read them.</p>
-      <button class="vault-link" type="button" data-action="cancel">Cancel</button>
+      <button class="vault-button" type="button" data-action="email">${signin ? "Send a code" : "Continue"}</button>
+      <button class="vault-link" type="button" data-action="back">Back</button>
     </div>
   `;
+  const emailInput = vaultOverlay.querySelector('[data-field="email"]');
+  emailInput.value = state.vaultPending?.email || "";
+  const toNew = vaultOverlay.querySelector('[data-action="to-new"]');
+  if (toNew) toNew.addEventListener("click", () => beginGetCloudSync(emailInput.value.trim()));
+  bindCentralEmailCard({
+    getCloudSync: !signin,
+    onClosed: (showError, email) => {
+      if (signin) {
+        showError("No account uses that email.");
+        toNew.hidden = false;
+        return;
+      }
+      state.vaultPending = { email };
+      state.vaultView = "central-waitlist";
+      renderVault();
+    },
+  });
+  vaultOverlay.querySelector('[data-action="back"]').addEventListener("click", () => {
+    state.vaultPending = null;
+    state.vaultView = "central-start";
+    renderVault();
+  });
+  window.requestAnimationFrame(() => emailInput.focus());
+}
+
+// The email field, its button and its errors, shared by the email cards and the re-add card.
+// `onClosed(showError, email)`: what an address that may not sign up gets (403 signups-closed).
+function bindCentralEmailCard({ getCloudSync = false, onClosed }) {
   const errorLine = vaultOverlay.querySelector(".vault-error");
   const showError = (message) => { errorLine.textContent = message; errorLine.hidden = !message; };
-  const signinButton = vaultOverlay.querySelector('[data-action="signin"]');
   const emailButton = vaultOverlay.querySelector('[data-action="email"]');
   const emailInput = vaultOverlay.querySelector('[data-field="email"]');
-  if (signinButton) {
-    signinButton.addEventListener("click", async () => {
-      signinButton.disabled = true;
-      emailButton.disabled = true;
-      try {
-        await centralJoin({ via: "signin" });
-      } catch (error) {
-        if (error?.name === "NotAllowedError" && !/focus/i.test(error?.message || "")) {
-          // Nothing on this device to sign in with (the sheet offered a phone or a key and nothing
-          // came, or it was closed): point to the email path, which serves a new device too.
-          console.warn("[txtshell] sign-in refused", error?.name || "", error);
-          state.vaultView = "central-start";
-          renderVault();
-          const line = vaultOverlay.querySelector(".vault-error");
-          line.textContent = "No sign-in found on this device. Use your email instead.";
-          line.hidden = false;
-          vaultOverlay.querySelector('[data-field="email"]').focus();
-          return;
-        }
-        centralFlowFailed(error, "central-start");
-      }
-    });
-  }
+  const toCode = (email, result) => {
+    state.vaultPending = { email, echoCode: typeof result.code === "string" ? result.code : "" };
+    state.vaultView = "central-code";
+    renderVault();
+  };
   const sendCode = async () => {
     const email = emailInput.value.trim();
     if (!email) { showError("Enter your email."); return; }
     showError("");
     emailButton.disabled = true;
     try {
-      const result = await window.txCentral.webauthn.signup(email);
-      state.vaultPending = { email, echoCode: typeof result.code === "string" ? result.code : "" };
-      state.vaultView = "central-code";
-      renderVault();
+      if (getCloudSync) {
+        const { next, result } = await startGetCloudSync(email);
+        if (next === "code") toCode(email, result);
+        else { emailButton.disabled = false; onClosed(showError, email); }
+        return;
+      }
+      toCode(email, await window.txCentral.webauthn.signup(email));
     } catch (error) {
+      if (error.code === "signups-closed") { emailButton.disabled = false; onClosed(showError, email); return; }
       console.error(error);
       showError(error.code === "invalid-email" ? "That doesn't look like an email address."
-        : error.code === "signups-closed" ? "Txtshell sync isn't open for new accounts yet."
         : error.code === "code-send-failed" ? "We couldn't send the code. Try again in a minute."
         : error?.status === 429 ? centralFailureMessage(error)
         : (error?.name === "TypeError" || error?.status === 0 ? "Can't reach Txtshell right now. Check your connection and try again." : "Couldn't send a code. Try again."));
@@ -8703,7 +8797,71 @@ function renderCentralStartCard() {
   };
   emailButton.addEventListener("click", sendCode);
   emailInput.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); sendCode(); } });
-  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", exitVaultToNormal);
+}
+
+// While signups are allowlist-only, an address that may not sign up can wait (schema-h.sql). The
+// address is stored only on this tap; nothing is emailed.
+function renderCentralWaitlistCard() {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG_DOT}
+      <p class="vault-title">Cloud sync is in private beta.</p>
+      <p class="vault-subtitle">Leave your email and we'll invite you.</p>
+      <p class="vault-error" hidden></p>
+      <input class="vault-input" data-field="email" type="email" placeholder="you@example.com" autocomplete="email" spellcheck="false" />
+      <button class="vault-button" type="button" data-action="join">Join the waitlist</button>
+      <p class="vault-fine">We'll only use it to invite you.</p>
+      <button class="vault-link" type="button" data-action="back">Back</button>
+    </div>
+  `;
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const showError = (message) => { errorLine.textContent = message; errorLine.hidden = !message; };
+  const input = vaultOverlay.querySelector('[data-field="email"]');
+  input.value = state.vaultPending?.email || "";
+  const button = vaultOverlay.querySelector('[data-action="join"]');
+  const join = async () => {
+    const email = input.value.trim();
+    if (!email) { showError("Enter your email."); return; }
+    showError("");
+    button.disabled = true;
+    try {
+      await window.txCentral.waitlist.join(email);
+      state.vaultPending = { email };
+      state.vaultView = "central-waitlist-joined";
+      renderVault();
+    } catch (error) {
+      if (error.code === "signups-open") {
+        // Sign-ups opened since this card did: the address gets its code instead.
+        beginGetCloudSync(email);
+        vaultOverlay.querySelector('[data-action="email"]').click();
+        return;
+      }
+      console.error(error);
+      showError(error.code === "invalid-email" ? "That doesn't look like an email address."
+        : error.code === "waitlist-full" ? "The waitlist is full for now. Try again later."
+        : error?.status === 429 ? centralFailureMessage(error)
+        : (error?.name === "TypeError" || error?.status === 0 ? "Can't reach Txtshell right now. Check your connection and try again." : "Couldn't add you. Try again."));
+      button.disabled = false;
+    }
+  };
+  button.addEventListener("click", join);
+  input.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); join(); } });
+  vaultOverlay.querySelector('[data-action="back"]').addEventListener("click", () => beginGetCloudSync(input.value.trim()));
+  window.requestAnimationFrame(() => button.focus());
+}
+
+function renderCentralWaitlistJoinedCard() {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG_DOT}
+      <p class="vault-title">You're on the list.</p>
+      <p class="vault-subtitle">We'll email ${escapeHtml(state.vaultPending?.email || "you")} when there's room. Your notes stay on this device and work as they do now.</p>
+      <button class="vault-button" type="button" data-action="done">Done</button>
+    </div>
+  `;
+  const button = vaultOverlay.querySelector('[data-action="done"]');
+  button.addEventListener("click", exitVaultToNormal);
+  window.requestAnimationFrame(() => button.focus());
 }
 
 // The name a person knows this device's passkey by, for the setup copy. Best effort from the user

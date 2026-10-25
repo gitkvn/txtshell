@@ -165,6 +165,8 @@
   }
 
   const signup = (email) => api("/v1/auth/signup", "POST", { email });
+  // The cloud sync waitlist (while signups are allowlist-only): stores the address, sends nothing.
+  const waitlist = { join: (email) => api("/v1/waitlist", "POST", { email }) };
   const verifyEmail = (email, code) => api("/v1/auth/verify-email", "POST", { email, code });
 
   async function register(signupToken) {
@@ -351,5 +353,5 @@
     prfWrap: (session) => api("/v1/keys/prf", "GET", undefined, session).then((d) => d.blob),
   };
 
-  window.txCentral = { api, ApiError, keys, phrase, webauthn, ladder, devices, PRF_EVAL_CONTEXT, b64, fromB64 };
+  window.txCentral = { api, ApiError, keys, phrase, webauthn, waitlist, ladder, devices, PRF_EVAL_CONTEXT, b64, fromB64 };
 })();

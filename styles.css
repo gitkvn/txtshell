@@ -1417,6 +1417,15 @@ kbd {
   opacity: 0.7;
 }
 
+/* The way on from an error line ("No account uses that email." → Get cloud sync): the accent, so it
+   reads as something to tap rather than a label. */
+.vault-link.lead {
+  margin: -4px 0 12px;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 /* Phrase entry on a cold device: twelve numbered boxes (the textarea on narrow screens). */
 .phrase-cells {
   display: grid;
@@ -1471,21 +1480,12 @@ kbd {
   margin: 0 0 10px;
 }
 
-/* The signed-out card: "— or —" between the two questions, and the small print at the foot. */
-.vault-or {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--muted);
-  font-size: 0.75rem;
-  margin: 18px 0 14px;
-}
-
-.vault-or::before,
-.vault-or::after {
-  content: "";
-  flex: 1;
+/* The signed-out card: a rule between its two paths (Sign in / Get cloud sync), and the small
+   print at the foot. */
+.vault-divider {
+  border: 0;
   border-top: 1px solid var(--line);
+  margin: 18px 0 14px;
 }
 
 .vault-fine {
