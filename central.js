@@ -51,6 +51,8 @@
     const res = await fetch(`${window.location.origin}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
     const data = res.status === 204 ? {} : await res.json().catch(() => ({}));
     if (res.status === 401 && session) document.dispatchEvent(new CustomEvent("txcentral:session-lost", { detail: { reason: "401", code: data.error || "", session } }));
+    // Security hardening §1: something the account's devices should be told (a trusted session only).
+    if (session && res.headers.get("x-account-notice") === "1") document.dispatchEvent(new CustomEvent("txcentral:account-notice", { detail: { session } }));
     if (!res.ok) throw new ApiError(method, path, res.status, data.error);
     return data;
   }
@@ -85,6 +87,62 @@
     return Array.from(ct.slice(0, 8), (b) => b.toString(16).padStart(2, "0")).join("");
   }
   const keys = { kekFromPrf, kekFromEntropy, generateVK, wrapVK, unwrapVK, witness, newSalt: () => b64(rand(16)) };
+
+  // ---------- vault proof (security hardening §0) ----------
+  // The account's proof key: an ECDSA P-256 pair whose private half is stored encrypted under VK
+  // (IV || AES-GCM(PKCS#8)). A device that can open it holds VK; it proves so by signing a fresh,
+  // single-use challenge bound to its own credential. Nothing derived from VK leaves the device.
+  const PROOF_MESSAGE = "txtshell-vault-proof-v1";
+  async function newProofKey(vk) {
+    const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+    const spki = new Uint8Array(await crypto.subtle.exportKey("spki", pair.publicKey));
+    const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey));
+    const iv = rand(12);
+    const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, vk, pkcs8));
+    pkcs8.fill(0);
+    const out = new Uint8Array(12 + sealed.length); out.set(iv); out.set(sealed, 12);
+    return { publicKey: b64(spki), wrapped: b64(out) };
+  }
+  async function openProofKey(wrappedB64, vk) {
+    const bytes = fromB64(wrappedB64);
+    const pkcs8 = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes.slice(0, 12) }, vk, bytes.slice(12)));
+    try {
+      return await crypto.subtle.importKey("pkcs8", pkcs8, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+    } finally { pkcs8.fill(0); }
+  }
+  // What login() learned about each session: its credential, and whether it is trusted already.
+  const sessionInfo = new Map();
+  // Make sure the account has a proof key, then (when this session isn't trusted yet) prove. Resolves
+  // true when the session is trusted; false against a Worker without vault proofs (a 404 route), or
+  // when this device may not make the missing proof key (another trusted device is live).
+  async function proveVault(session, vk) {
+    const info = sessionInfo.get(session) || {};
+    let pk = null;
+    try { pk = await api("/v1/vault/proof-key", "GET", undefined, session); }
+    catch (e) { if (e.code === "not-found") return false; if (e.code !== "no-proof-key") throw e; }
+    if (!pk) {
+      const made = await newProofKey(vk);
+      try { await api("/v1/vault/proof-key", "PUT", made, session); pk = made; }
+      catch (e) {
+        if (e.code === "proof-key-exists") pk = await api("/v1/vault/proof-key", "GET", undefined, session);
+        else if (e.code === "vault-proof-required") return false;
+        else throw e;
+      }
+    }
+    if (info.trusted) return true;
+    const key = await openProofKey(pk.wrapped, vk);
+    const { challenge } = await api("/v1/vault/prove/options", "POST", {}, session);
+    const signature = new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, enc.encode(`${PROOF_MESSAGE}|${challenge}|${info.credentialId || ""}`)));
+    await api("/v1/vault/prove", "POST", { challenge, signature: b64(signature) }, session);
+    sessionInfo.set(session, { ...info, trusted: true });
+    return true;
+  }
+  // Inside the ladder: never fails a sign-in. A device that couldn't prove is told so by the first
+  // request that needs trust (403 vault-proof-required), and app.js retries then.
+  async function proveQuietly(session, vk) {
+    try { return await proveVault(session, vk); }
+    catch (e) { console.warn("[txtshell] vault proof failed", e?.code || e?.name || "", e); return false; }
+  }
 
   // ---------- phrase: BIP-39 mnemonic ↔ entropy ----------
   const WORDS = window.BIP39_ENGLISH;
@@ -180,7 +238,12 @@
   };
   // Delete account: the session must come from a sign-in in the last 10 minutes (the app signs in on
   // the Delete tap); confirm is the account's email.
-  const account = { delete: (session, confirm) => api("/v1/account/delete", "POST", { confirm }, session) };
+  const account = {
+    delete: (session, confirm) => api("/v1/account/delete", "POST", { confirm }, session),
+    // Security hardening §1: what the account's devices are told, and "That was me".
+    events: (session) => api("/v1/account/events", "GET", undefined, session).then((d) => d.events || []),
+    ack: (session, id) => api(`/v1/account/events/${id}/ack`, "POST", {}, session),
+  };
   const verifyEmail = (email, code) => api("/v1/auth/verify-email", "POST", { email, code });
 
   async function register(signupToken) {
@@ -249,7 +312,8 @@
       throw e;
     }
     if (!prf || prf.length !== 32) throw Object.assign(new Error("no PRF output from this passkey"), { code: "no-prf" });
-    return { prf, session: v.sessionToken, credentialId: v.credentialId, hkdfSalt: v.hkdfSalt, userId: v.userId, email: typeof v.email === "string" ? v.email : "", hasPrfWrap: v.hasPrfWrap === true, hasRecovery: v.hasRecovery === true, rpId: o.rpId };
+    sessionInfo.set(v.sessionToken, { credentialId: v.credentialId, trusted: v.trusted === true });
+    return { prf, session: v.sessionToken, credentialId: v.credentialId, hkdfSalt: v.hkdfSalt, userId: v.userId, email: typeof v.email === "string" ? v.email : "", hasPrfWrap: v.hasPrfWrap === true, hasRecovery: v.hasRecovery === true, rpId: o.rpId, trusted: v.trusted === true, notices: Number(v.notices) || 0 };
   }
 
   // Offline unlock: no server. A client-generated challenge, this device's credential only, the
@@ -296,12 +360,15 @@
     const kekRec = await kekFromEntropy(entropy, salt);
     const prfWrap = await wrapVK(vkX, ctx.kekWrap);
     const recWrap = await wrapVK(vkX, kekRec);
+    const proof = await newProofKey(vkX);                             // the device that makes the vault is trusted with it
     try {
-      await api("/v1/keys/bootstrap", "POST", { prf: { blob: prfWrap }, recovery: { blob: recWrap, hkdfSalt: salt } }, ctx.session);
+      await api("/v1/keys/bootstrap", "POST", { prf: { blob: prfWrap }, recovery: { blob: recWrap, hkdfSalt: salt }, proof }, ctx.session);
     } catch (e) {
       if (e.code === "keys-exist") return null;                     // another device won; the caller falls through to rung 1/2
       throw e;
     }
+    const info = sessionInfo.get(ctx.session);
+    if (info) sessionInfo.set(ctx.session, { ...info, trusted: true });
     await ui.forcedSave(words, { kind: afterAbandon ? "abandon" : "signup" });   // the copy lives in app.js
     return { vk: await unwrapVK(prfWrap, ctx.kekWrap, false), prfWrap, via: afterAbandon ? "abandon" : "bootstrap", abandoned: afterAbandon === true };
   }
@@ -325,7 +392,9 @@
       catch { lastError = "These aren't the 12 words for this account. If you got new words, use the newest ones."; continue; }   // GCM tag = the check; nothing written
       const prfWrap = await wrapVK(vkX, ctx.kekWrap);
       await api("/v1/keys/prf", "PUT", { blob: prfWrap }, ctx.session);
-      return { vk: await unwrapVK(prfWrap, ctx.kekWrap, false), prfWrap, via: "rung2" };
+      const vk = await unwrapVK(prfWrap, ctx.kekWrap, false);
+      await proveQuietly(ctx.session, vk);                            // the 12 words opened VK: prove it (no card)
+      return { vk, prfWrap, via: "rung2" };
     }
   }
 
@@ -336,15 +405,20 @@
     }
     try {
       const { blob } = await api("/v1/keys/prf", "GET", undefined, ctx.session);
-      return { vk: await unwrapVK(blob, ctx.kekWrap, false), prfWrap: blob, via: "rung1" };     // rung 1
+      const vk = await unwrapVK(blob, ctx.kekWrap, false);           // rung 1
+      await proveQuietly(ctx.session, vk);                            // not trusted yet (a re-key, or from before proofs): prove; trusted: make sure the proof key exists
+      return { vk, prfWrap: blob, via: "rung1" };
     } catch (e) {
       if (e.status !== 404 && e.name !== "OperationError") throw e;  // anything else is a real error
     }
     return rung2(ctx, ui);                                            // rung 2
   }
 
-  // Abandon from the rung-2 fork: the server forgets the vault; the caller bootstraps anew.
+  // Abandon from the rung-2 fork: the server forgets the vault; the caller bootstraps anew. From a
+  // device that only proved its email, while the account's other devices are live, it answers
+  // {pending: true, executeAfter} instead (security hardening §2); asking again after that runs it.
   const abandon = (session, confirmEmail) => api("/v1/vault/abandon", "POST", { confirm: confirmEmail }, session);
+  const cancelAbandon = (session) => api("/v1/vault/abandon", "DELETE", undefined, session);
 
   // Rotate the recovery phrase: VK (extractable for the moment) under a new phrase; the old
   // phrase is dead the instant the PUT lands.
@@ -357,7 +431,7 @@
     await ui.forcedSave(words, { kind: "rotate" });
   }
 
-  const ladder = { run, bootstrap, rung2, abandon, rotate };
+  const ladder = { run, bootstrap, rung2, abandon, cancelAbandon, rotate, prove: proveVault };
 
   // ---------- devices / sessions ----------
   const devices = {

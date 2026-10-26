@@ -4665,6 +4665,10 @@ function renderVault() {
     renderCentralCodeCard();
   } else if (view === "central-pay") {
     renderCentralPayCard();
+  } else if (view === "central-reset-pending") {
+    renderCentralResetPendingCard();
+  } else if (view === "central-notice") {
+    renderCentralNoticeCard();
   } else if (view === "central-refund") {
     renderCentralRefundCard();
   } else if (view === "central-refunded") {
@@ -6009,6 +6013,9 @@ const SYNC_STATUS_LABELS = {
   "central-offline": { short: "Waiting for connection", full: "You're offline. Your notes are saved here and will sync when you're back." },
   // Payments: the subscription has lapsed (a 402 on push). Notes stay here and editable; pushes wait.
   "central-lapsed": { short: "Sync paused", full: "Your subscription has ended. Your notes are saved here — renew to sync again." },
+  // Security hardening §2: this device hasn't shown it can open the account's notes (and couldn't
+  // prove it just now) — the 12 words make it a full device.
+  "central-proof": { short: "Sign in with your 12 words first", full: "Sign in with your 12 words first." },
 };
 
 // Drives the persistent ambient sync indicator in the footer.
@@ -6622,6 +6629,7 @@ async function flushCloudSync({ evenIfDown = false } = {}) {
     // In account mode, an answer that isn't the sync server's (a captive portal) is no connection.
     if (isCentral() && !syncServerAnswered(response, url)) throw new TypeError("not the sync server");
     noteSyncServerAnswered(response, url);
+    if (isCentral() && response.headers.get("x-account-notice") === "1") void showAccountNotices();
     if (response.status === 401) {
       if (isCentral()) {
         await centralSessionRefused(response);
@@ -6630,6 +6638,11 @@ async function flushCloudSync({ evenIfDown = false } = {}) {
       setSyncStatus("push-auth");
       return { status: "auth" };
     } else if (response.status === 403 && isCentral()) {
+      if ((await response.clone().json().catch(() => ({}))).error === "vault-proof-required") {
+        // Not trusted yet (a proof that failed at sign-in): prove now with the key in memory, then push again.
+        if (await centralProofRefused()) window.setTimeout(() => scheduleCloudSync(), 0);
+        return { status: "error", reason: "http-403" };
+      }
       setSyncStatus("central-setup");
       return { status: "error", reason: "http-403" };
     } else if (response.status === 402 && isCentral()) {
@@ -6971,7 +6984,17 @@ function renderMirrorDisplayCard() {
 // be unlocked. Returns { empty: true } on a 404 (no blob yet) or { empty: false,
 // entries } on success. Throws typed errors so callers can map to clear messages:
 // "not-configured" | "locked" | "auth" | "http-<status>" | "decrypt" | "malformed".
+// A pull refused for want of trust proves (with the key in memory) and tries once more.
 async function fetchAndDecryptBlocks() {
+  try {
+    return await fetchAndDecryptBlocksOnce();
+  } catch (error) {
+    if (error?.message === "proof" && await centralProofRefused()) return fetchAndDecryptBlocksOnce();
+    throw error;
+  }
+}
+
+async function fetchAndDecryptBlocksOnce() {
   if (!(state.encryption.enabled && state.encryption.unlocked && state.encryption.masterKey)) {
     throw new Error("locked");
   }
@@ -7000,6 +7023,7 @@ async function fetchAndDecryptBlocks() {
     });
     if (isCentral() && !syncServerAnswered(response, url)) throw new TypeError("not the sync server");
     noteSyncServerAnswered(response, url);
+    if (isCentral() && response.headers.get("x-account-notice") === "1") void showAccountNotices(); // §1, on a 304 too
     if (response.status === 304) {
       return { empty: false, upToDate: true, generation: known };
     }
@@ -7014,6 +7038,7 @@ async function fetchAndDecryptBlocks() {
       throw new Error("auth");
     }
     if (response.status === 403 && isCentral()) {
+      if ((await response.clone().json().catch(() => ({}))).error === "vault-proof-required") throw new Error("proof");
       throw new Error("setup");
     }
     if (!response.ok) {
@@ -8639,6 +8664,53 @@ function renderCentralRung2Card() {
 
 // The fork on the rung-2 screen: start the account's vault over. Typed email
 // confirms it; other devices' copies become unreadable until they re-join.
+// The reset has run: the ladder goes on to the new vault.
+async function centralStartedOver() {
+  await clearSyncState();
+  state.vaultView = "central-busy";
+  state.vaultPending = { ...(state.vaultPending || {}), busy: "Starting over" };
+  renderVault();
+  settleCentralCard({ kind: "abandoned" });
+}
+
+// Waiting out the hold (requester side). Close leaves it waiting; while the card stays open it asks
+// again once the time has come (in the gates, 2 s), and the reset runs.
+let resetPendingTimer = null;
+function renderCentralResetPendingCard() {
+  const pending = state.vaultPending?.resetPending || {};
+  const day = pending.executeAfter ? new Date(pending.executeAfter).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : "";
+  vaultOverlay.innerHTML = `
+    <div class="vault-card">
+      ${LOCK_ICON_SVG}
+      <p class="vault-title">Starting over is on hold</p>
+      <p class="vault-subtitle">Your notes in the cloud will be erased on ${escapeHtml(day)} so you can start over, unless it's stopped from one of your signed-in devices. We've emailed you.</p>
+      <p class="vault-subtitle">Come back after then and choose Start over again to finish.</p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-link" type="button" data-action="close">Close</button>
+    </div>
+  `;
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  vaultOverlay.querySelector('[data-action="close"]').addEventListener("click", () => {
+    window.clearTimeout(resetPendingTimer);
+    cancelCentralCard();
+  });
+  window.clearTimeout(resetPendingTimer);
+  const wait = Date.parse(pending.executeAfter || "") - Date.now();
+  if (Number.isFinite(wait) && wait < 60 * 60 * 1000) {
+    resetPendingTimer = window.setTimeout(async () => {
+      if (state.vaultView !== "central-reset-pending") return;
+      try {
+        const result = await window.txCentral.ladder.abandon(state.central.session, pending.confirm);
+        if (result?.pending) { state.vaultPending = { ...(state.vaultPending || {}), resetPending: { ...pending, executeAfter: result.executeAfter } }; renderVault(); return; }
+        await centralStartedOver();
+      } catch (error) {
+        errorLine.textContent = error.code === "reset-cancelled" ? "Your request to start over was stopped from one of your devices." : "Couldn't start over. Try again.";
+        errorLine.hidden = false;
+      }
+    }, Math.max(0, wait) + 500);
+  }
+}
+
 function renderCentralAbandonCard() {
   vaultOverlay.innerHTML = `
     <div class="vault-card">
@@ -8657,14 +8729,20 @@ function renderCentralAbandonCard() {
   submitButton.addEventListener("click", async () => {
     submitButton.disabled = true;
     try {
-      await window.txCentral.ladder.abandon(state.central.session, input.value.trim());
-      await clearSyncState();
-      state.vaultView = "central-busy";
-      state.vaultPending = { ...(state.vaultPending || {}), busy: "Starting over" };
-      renderVault();
-      settleCentralCard({ kind: "abandoned" });
+      const result = await window.txCentral.ladder.abandon(state.central.session, input.value.trim());
+      if (result?.pending) {
+        // Security hardening §2: the account's other devices are live, so this waits (7 days) and
+        // they're told. Asking again after that runs it.
+        state.vaultPending = { ...(state.vaultPending || {}), resetPending: { executeAfter: result.executeAfter, confirm: input.value.trim() } };
+        state.vaultView = "central-reset-pending";
+        renderVault();
+        return;
+      }
+      await centralStartedOver();
     } catch (error) {
-      errorLine.textContent = error.code === "confirm-mismatch" ? "That doesn't match this account's email." : "Couldn't start over. Try again.";
+      errorLine.textContent = error.code === "confirm-mismatch" ? "That doesn't match this account's email."
+        : error.code === "reset-cancelled" ? "Your request to start over was stopped from one of your devices."
+        : "Couldn't start over. Try again.";
       errorLine.hidden = false;
       submitButton.disabled = false;
     }
@@ -8976,7 +9054,7 @@ function renderCentralPayCard() {
       <p class="vault-subtitle">Txtshell sync is a yearly subscription. You'll pay on the next page, in your currency, tax included.</p>
       <p class="vault-error"${pending.failed ? "" : " hidden"}>${pending.failed ? "Payment didn't go through. You can try again." : ""}</p>
       <button class="vault-button" type="button" data-action="pay">Continue to payment</button>
-      <p class="vault-fine" data-field="email">For ${escapeHtml(pending.email || "")}</p>
+      <p class="vault-fine" data-field="price">₹1,200 a year (about US$14), tax included.</p>
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
     </div>
   `;
@@ -9242,6 +9320,7 @@ function centralFailureMessage(error) {
   if (error?.code === "unknown-credential") return CENTRAL_REMOVED_SENTENCE;
   if (error?.code === "no-prf") return "That sign-in can't lock your notes in this browser. Try an up-to-date Safari, Chrome or Edge, or another way to sign in.";
   if (error?.status === 429 || error?.code === "rate-limited") return "Too many tries — wait a minute and try again.";
+  if (error?.code === "vault-proof-required") return "Sign in with your 12 words first";
   switch (error?.name) {
     case "InvalidStateError": return "This device is already set up for your account. Sign in instead.";
     case "NotAllowedError": return "Signing in didn't finish — the prompt was closed, or the page lost focus. Click the page, then try again.";
@@ -9909,6 +9988,107 @@ function platformOr(withName, without) {
   return name ? withName(name) : without;
 }
 
+// ---------- security hardening: trust and notices (2026-10-24-security-hardening.md) ----------
+
+// A request refused with 403 vault-proof-required: prove with the key in memory (once a minute at
+// most). true when the session is trusted now.
+let proofAttempt = null;
+async function centralProofRefused() {
+  if (!isCentral() || !state.central.session || !state.encryption.masterKey) { setSyncStatus("central-proof"); return false; }
+  if (!proofAttempt) {
+    proofAttempt = window.txCentral.ladder.prove(state.central.session, state.encryption.masterKey).catch(() => false);
+    window.setTimeout(() => { proofAttempt = null; }, 60000);
+  }
+  const ok = await proofAttempt;
+  if (!ok) setSyncStatus("central-proof");
+  return ok;
+}
+
+// §1: the server says (X-Account-Notice) there's something this account's devices should be told —
+// a device added with an email code, a reset asked for. A card over the notes, not a hint (a hint can
+// be missed). Never over another card: it waits for the next request. (The gates' harness sets
+// window.__txtshellSuppressNotices so that suites about other things aren't interrupted.)
+let noticeLoading = false;
+async function showAccountNotices() {
+  if (window.__txtshellSuppressNotices || noticeLoading) return;
+  if (!isCentral() || !state.central.session || isVaultLocked() || state.vaultView) return;
+  noticeLoading = true;
+  try {
+    const events = await window.txCentral.account.events(state.central.session);
+    if (!events.length || state.vaultView) return;
+    state.vaultPending = { notices: events };
+    state.vaultView = "central-notice";
+    renderVault();
+  } catch {
+    // shown at the next request
+  } finally {
+    noticeLoading = false;
+  }
+}
+document.addEventListener("txcentral:account-notice", () => { void showAccountNotices(); });
+
+function noticeWhen(iso) {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString() ? `today at ${time}` : `on ${d.toLocaleDateString(undefined, { day: "numeric", month: "short" })} at ${time}`;
+}
+
+function renderCentralNoticeCard() {
+  const events = state.vaultPending?.notices || [];
+  const e = events[0];
+  if (!e) { exitVaultToNormal(); return; }
+  const next = () => {
+    events.shift();
+    if (events.length) renderVault();
+    else exitVaultToNormal();
+  };
+  if (e.kind === "reset-requested") {
+    const asked = new Date(e.createdAt);
+    const day = (iso) => new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    vaultOverlay.innerHTML = `
+      <div class="vault-card" data-notice="reset-requested">
+        ${SYNC_ICON_SVG}
+        <p class="vault-title">Someone asked to erase your notes from the cloud</p>
+        <p class="vault-subtitle">On ${escapeHtml(day(e.createdAt))} at ${escapeHtml(asked.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }))}, someone used a code sent to your email to start your account over. Your notes in the cloud will be erased on ${escapeHtml(day(e.executeAfter))} unless you stop it. Notes on this device stay either way.</p>
+        <p class="vault-error" hidden></p>
+        <button class="vault-button" type="button" data-action="stop">Stop it</button>
+        <button class="vault-link" type="button" data-action="allow">Let it happen</button>
+      </div>
+    `;
+  } else {
+    vaultOverlay.innerHTML = `
+      <div class="vault-card" data-notice="device-added">
+        ${SYNC_ICON_SVG}
+        <p class="vault-title">New device on your account</p>
+        <p class="vault-subtitle">${escapeHtml(e.label || "A new device")} was added ${escapeHtml(noticeWhen(e.createdAt))} with a code sent to your email. It can't open your notes without your 12 words.</p>
+        <p class="vault-error" hidden></p>
+        <button class="vault-button" type="button" data-action="ack">That was me</button>
+        <button class="vault-button secondary" type="button" data-action="remove">Remove it</button>
+        <p class="vault-fine">If it wasn't you: remove it, then change your email password, since whoever added it could read your email.</p>
+      </div>
+    `;
+  }
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const act = (action, fn) => {
+    const button = vaultOverlay.querySelector(`[data-action="${action}"]`);
+    button?.addEventListener("click", async () => {
+      vaultOverlay.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+      try {
+        await fn();
+        next();
+      } catch (error) {
+        errorLine.textContent = centralFailureMessage(error);
+        errorLine.hidden = false;
+        vaultOverlay.querySelectorAll("button").forEach((b) => { b.disabled = false; });
+      }
+    });
+  };
+  act("ack", () => window.txCentral.account.ack(state.central.session, e.id));
+  act("remove", () => window.txCentral.devices.revoke(state.central.session, e.credentialId));
+  act("stop", () => window.txCentral.ladder.cancelAbandon(state.central.session));
+  act("allow", () => window.txCentral.account.ack(state.central.session, e.id));
+}
+
 // Payments: what the account card says about the subscription (GET /v1/billing), kept from the last
 // answer so a re-render has it at once; refreshed whenever the card opens.
 async function refreshBilling() {
@@ -10248,7 +10428,7 @@ async function beginAccountDevices() {
     composerHint.textContent = "No Txtshell account on this browser — run /account to sign in.";
     return;
   }
-  if (!state.central.session) {
+  if (!state.central.session && !state.central.removed) {
     composerHint.textContent = "Sign in first — run /account.";
     return;
   }
@@ -10256,8 +10436,8 @@ async function beginAccountDevices() {
   clearDraft();
   state.vaultPending = null;
   state.vaultView = "central-devices";
+  if (!state.central.removed) composerHint.textContent = "Your account";
   renderVault();
-  composerHint.textContent = "Your account";
 }
 
 // "today 14:02", "yesterday 09:15", "Oct 21" (this year) or "Oct 21, 2025" — local time.
@@ -10289,6 +10469,14 @@ async function renderCentralDevicesCard() {
   const list = vaultOverlay.querySelector('[data-field="devices"]');
   const errorLine = vaultOverlay.querySelector(".vault-error");
   const showError = (message) => { errorLine.textContent = message; errorLine.hidden = !message; };
+  if (state.central.removed) {
+    // Already told this device was removed (whichever request heard it first): say so; there's no list to load.
+    list.innerHTML = "";
+    showError(CENTRAL_REMOVED_SENTENCE);
+    composerHint.textContent = CENTRAL_REMOVED_SENTENCE;
+    vaultOverlay.querySelector('[data-action="close"]').addEventListener("click", exitVaultToNormal);
+    return;
+  }
   const load = async () => {
     try {
       const devices = await window.txCentral.devices.list(state.central.session);
@@ -10307,7 +10495,7 @@ async function renderCentralDevicesCard() {
         when.textContent = ` — last used ${device.lastUsedAt ? relativeWhen(device.lastUsedAt) : "never"}${device.isCurrent ? " · this device" : ""}`;
         const detail = document.createElement("span");
         detail.className = "device-detail";
-        detail.textContent = ` ${device.backedUp ? "synced" : "this device only"} · ${device.hasPrfWrap ? "set up" : "needs the 12 words"}`;
+        detail.textContent = ` ${device.backedUp ? "synced" : "this device only"} · ${device.hasPrfWrap ? "set up" : "needs the 12 words"}${device.unconfirmed ? " · added with an email code · not confirmed" : ""}`;
         label.append(name, when, detail);
         li.appendChild(label);
         if (!device.isCurrent) {
