@@ -8,7 +8,7 @@
     <link rel="icon" type="image/svg+xml" href="./logo-shell.svg" />
     <!-- Bump ?v= on every deploy that changes the file — index.html is no-cache,
          so a new URL forces browsers past any stale cached copy. -->
-    <link rel="stylesheet" href="./styles.css?v=20261025-1" />
+    <link rel="stylesheet" href="./styles.css?v=20261026-1" />
     <!-- Decides before first paint whether the first-visit intro overlay shows,
          so neither first-timers nor returning users see a flash. -->
     <script src="./intro-boot.js?v=20260822-1"></script>
@@ -370,7 +370,8 @@
               <div class="intro-tier-num">03</div>
               <h3>Cloud sync</h3>
               <p>We handle sync across your devices — end-to-end encrypted, unreadable to us.</p>
-              <div class="intro-tier-price">$4/mo <span class="intro-soon">· coming soon</span></div>
+              <div class="intro-tier-price" data-field="cloud-price">₹1,200 a year<span class="intro-soon" data-field="cloud-status"> · private beta</span></div>
+              <div class="intro-tier-note" data-field="cloud-note">About US$14. Shown in your currency at checkout, tax included.</div>
             </div>
           </div>
         </section>
@@ -418,6 +419,6 @@
     <script src="./qrcode.js" integrity="sha384-74+AUd6tbAWrmm+GTFCXAWWFlqfuBEui1i9+CR7l70syLHvWFw8UwtK7zdW19BZI" crossorigin="anonymous"></script>
     <script src="./bip39-english.js?v=20261008-1"></script>
     <script src="./central.js?v=20261025-3"></script>
-    <script src="./app.js?v=20261025-3"></script>
+    <script src="./app.js?v=20261026-1"></script>
   </body>
 </html>

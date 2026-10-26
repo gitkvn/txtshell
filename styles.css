@@ -2101,6 +2101,14 @@ html.show-intro .intro-overlay,
   color: var(--muted);
 }
 
+/* Cloud sync's price, in other currencies: the static fallback (payments decision 9, 2026-10-25). */
+.intro-tier-note {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
 /* --- footer --- */
 .intro-footer {
   display: flex;

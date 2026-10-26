@@ -6097,6 +6097,9 @@ async function refreshSyncDoor({ probe = false } = {}) {
       const response = await fetch(`${window.location.origin}/v1/health`, { cache: "no-store" });
       const body = response.ok ? await response.json().catch(() => null) : null;
       accountServiceAvailable = centralAvailable() && Boolean(body && body.ok === true);
+      // The homepage's Cloud sync tier says "private beta" until anyone can buy it (signups "paid").
+      const betaTag = document.querySelector('[data-field="cloud-status"]');
+      if (betaTag) betaTag.hidden = body?.signups === "paid";
     } catch {
       accountServiceAvailable = false;
     }
