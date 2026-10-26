@@ -10458,7 +10458,7 @@ function renderCentralDeleteCard() {
       console.error("[txtshell] delete account failed", error?.code || "", error);
       showError(error?.code === "confirm-mismatch" ? "That doesn't match this account's email."
         : error?.code === "billing-upstream" || error?.code === "billing-unavailable" ? "Couldn't cancel your subscription, so nothing was deleted. Try again in a minute."
-        : error?.name === "NotAllowedError" ? "Delete needs you to confirm on this device. Try again."
+        : error?.name === "NotAllowedError" ? "Confirm it's you on this device to delete. Try again."
         : error?.name === "TypeError" || error?.status === 0 ? "Can't reach Txtshell right now. Check your connection and try again."
         : "Couldn't delete your account. Try again.");
       button.disabled = false;
