@@ -10168,7 +10168,7 @@ function renderCentralRefundCard() {
     <div class="vault-card" data-account-confirm="refund">
       ${SYNC_ICON_SVG}
       <p class="vault-title">Request a refund?</p>
-      <p class="vault-subtitle">You'll get back what you paid for this year, in the currency you paid. Your subscription ends and sync pauses now. Your notes stay on your devices, and the cloud copy is kept for 12 months if you come back.</p>
+      <p class="vault-subtitle">You'll get back what you paid for this year, in the currency you paid. The amount can differ slightly if exchange rates have moved. Your subscription ends and sync pauses now. Your notes stay on your devices, and the cloud copy is kept for 12 months if you come back.</p>
       <p class="vault-error" hidden></p>
       <button class="vault-button" type="button" data-action="confirm">Refund</button>
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
