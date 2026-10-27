@@ -4036,6 +4036,7 @@ function isVaultLocked() {
 let readySignalSent = false;
 function signalReady() {
   if (!isVaultLocked()) void resumeCheckoutReturn(); // payments: back from Dodo's checkout (once per load)
+  if (!isVaultLocked()) resumeBillingLink(); // the renewal reminder's link (once per load)
   if (readySignalSent) return;
   if (isVaultLocked()) return;
   readySignalSent = true;
@@ -9195,6 +9196,30 @@ async function resumeCheckoutReturn() {
   renderVault();
 }
 
+// The renewal reminder links to /?billing=manage: the account card, where Manage billing is. A
+// browser with no account here gets the sign-in card first; the link stays in the address bar until
+// the sign-in finishes (finishCentralJoin → signalReady → here), then the account card opens.
+let billingLinkHandled = false;
+let billingLinkSignInShown = false;
+function resumeBillingLink() {
+  if (billingLinkHandled || isVaultLocked()) return;
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("billing") !== "manage") return;
+  if (isCentral()) {
+    billingLinkHandled = true;
+    params.delete("billing");
+    const query = params.toString();
+    window.history.replaceState(null, "", window.location.pathname + (query ? `?${query}` : "") + window.location.hash);
+    openAccountCard();
+    return;
+  }
+  if (billingLinkSignInShown || state.vaultView) return;
+  billingLinkSignInShown = true;
+  state.vaultPending = null;
+  state.vaultView = "central-start";
+  renderVault();
+}
+
 // Renewed (signed in): wait until the account may sync again, then send what waited.
 async function centralRenewReturned() {
   const end = Date.now() + CHECKOUT_CLAIM_TIMEOUT_MS;
@@ -10120,6 +10145,11 @@ function accountBillingLines(billing) {
   if (billing.status === "active" && billing.cancelAtPeriodEnd && billing.periodEnd) {
     return `${line(`Sync is on until ${billingDate(billing.periodEnd)}. It won't renew.`)}
       <button class="vault-button secondary" type="button" data-action="billing-resume">Keep syncing</button>`;
+  }
+  // The renewal's payment is processing: Indian cards and UPI are debited about 48 hours after the date.
+  if (billing.status === "renewing") {
+    return `${line("Renewing — your payment is being processed.")}
+      <button class="vault-link" type="button" data-action="billing-portal">Manage billing</button>${refundLink(billing)}`;
   }
   if (billing.status === "active" && billing.periodEnd) {
     return `${line(`Renews ${billingDate(billing.periodEnd)}.`)}
