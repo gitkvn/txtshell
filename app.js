@@ -8684,7 +8684,7 @@ function renderCentralResetPendingCard() {
       ${LOCK_ICON_SVG}
       <p class="vault-title">Starting over is on hold</p>
       <p class="vault-subtitle">Your notes in the cloud will be erased on ${escapeHtml(day)} so you can start over, unless it's stopped from one of your signed-in devices. We've emailed you.</p>
-      <p class="vault-subtitle">Come back after then and choose Start over again to finish.</p>
+      <p class="vault-subtitle">Come back after that date and choose Start over again to finish.</p>
       <p class="vault-error" hidden></p>
       <button class="vault-link" type="button" data-action="close">Close</button>
     </div>
