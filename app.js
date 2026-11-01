@@ -4672,6 +4672,8 @@ function renderVault() {
     renderCentralNoticeCard();
   } else if (view === "central-refund") {
     renderCentralRefundCard();
+  } else if (view === "central-cancel") {
+    renderCentralCancelCard();
   } else if (view === "central-refunded") {
     renderCentralRefundedCard();
   } else if (view === "central-delete") {
@@ -10138,6 +10140,11 @@ function accountBillingLines(billing) {
   if (!billing || billing.mode !== "paid" || !billing.source) return "";
   const line = (text) => `<p class="vault-subtitle" data-field="billing">${escapeHtml(text)}</p>`;
   if (billing.source === "comp") return billing.periodEnd ? line(`Free until ${billingDate(billing.periodEnd)}.`) : "";
+  // A retry's debit is pending: updating the payment method now could charge twice. Cancelling stays open.
+  if (billing.retrying) {
+    return `${line("We're retrying your payment. This can take up to 2 days.")}
+      ${billing.cancelAtPeriodEnd ? line("Your subscription won't renew.") : `<button class="vault-link" type="button" data-action="billing-cancel">Cancel subscription</button>`}`;
+  }
   if ((billing.status === "past_due" || billing.status === "on_hold") && billing.graceUntil) {
     return `${line(`Your renewal payment didn't go through. Sync keeps working until ${billingDate(billing.graceUntil)}.`)}
       <p class="vault-fine" data-field="billing-note">Updating your payment method charges the outstanding amount straight away.</p>
@@ -10196,6 +10203,35 @@ function renderCentralRefundCard() {
   window.requestAnimationFrame(() => button.focus());
 }
 
+function renderCentralCancelCard() {
+  vaultOverlay.innerHTML = `
+    <div class="vault-card" data-account-confirm="cancel">
+      ${SYNC_ICON_SVG}
+      <p class="vault-title">Cancel your subscription?</p>
+      <p class="vault-subtitle">It won't renew. The payment in progress may still go through. Your notes stay on your devices.</p>
+      <p class="vault-error" hidden></p>
+      <button class="vault-button" type="button" data-action="confirm">Cancel subscription</button>
+      <button class="vault-link" type="button" data-action="cancel">Keep subscription</button>
+    </div>
+  `;
+  const errorLine = vaultOverlay.querySelector(".vault-error");
+  const button = vaultOverlay.querySelector('[data-action="confirm"]');
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    errorLine.hidden = true;
+    try {
+      state.central.billing = await window.txCentral.billing.cancel(state.central.session);
+      openAccountCard();
+    } catch (error) {
+      errorLine.textContent = billingErrorMessage(error);
+      errorLine.hidden = false;
+      button.disabled = false;
+    }
+  });
+  vaultOverlay.querySelector('[data-action="cancel"]').addEventListener("click", openAccountCard);
+  window.requestAnimationFrame(() => button.focus());
+}
+
 function renderCentralRefundedCard() {
   vaultOverlay.innerHTML = `
     <div class="vault-card">
@@ -10215,6 +10251,11 @@ async function openBillingPortal(errorLine) {
     const { link } = await window.txCentral.billing.portal(state.central.session);
     window.location.assign(link);
   } catch (error) {
+    if (error?.code === "retry-in-progress") { // a card left open from before the retry
+      await refreshBilling();
+      renderVault();
+      return;
+    }
     errorLine.textContent = billingErrorMessage(error);
     errorLine.hidden = false;
   }
@@ -10316,6 +10357,7 @@ function renderCentralAccountCard() {
   on("billing-portal", () => { void openBillingPortal(errorLine); });
   on("billing-renew", (event) => { void startRenewCheckout(errorLine, event.currentTarget); });
   on("billing-refund", () => { state.vaultView = "central-refund"; renderVault(); });
+  on("billing-cancel", () => { state.vaultView = "central-cancel"; renderVault(); });
   on("delete-account", () => { void beginAccountDelete(); });
   on("billing-resume", async (event) => {
     const button = event.currentTarget;

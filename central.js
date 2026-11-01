@@ -234,6 +234,7 @@
     status: (session) => api("/v1/billing", "GET", undefined, session),
     portal: (session) => api("/v1/billing/portal", "POST", {}, session),
     resume: (session) => api("/v1/billing/resume", "POST", {}, session),
+    cancel: (session) => api("/v1/billing/cancel", "POST", {}, session),
     refund: (session) => api("/v1/billing/refund", "POST", {}, session),
   };
   // Delete account: the session must come from a sign-in in the last 10 minutes (the app signs in on
