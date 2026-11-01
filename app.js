@@ -9055,7 +9055,8 @@ function renderCentralPayCard() {
       <p class="vault-subtitle">Txtshell sync is a yearly subscription. You'll pay on the next page, in your currency, tax included.</p>
       <p class="vault-error"${pending.failed ? "" : " hidden"}>${pending.failed ? "Payment didn't go through. You can try again." : ""}</p>
       <button class="vault-button" type="button" data-action="pay">Continue to payment</button>
-      <p class="vault-fine" data-field="price">₹1,200 a year (about US$14), tax included.</p>
+      <p class="vault-fine" data-field="price">₹1,200 a year (US$14.99), tax included.</p>
+      <p class="vault-fine" data-field="receipt-note">Paying in rupees? Dodo's receipt shows the item in US dollars for reference. You're charged ₹1,200, including GST.</p>
       <button class="vault-link" type="button" data-action="cancel">Cancel</button>
     </div>
   `;
@@ -10139,6 +10140,7 @@ function accountBillingLines(billing) {
   if (billing.source === "comp") return billing.periodEnd ? line(`Free until ${billingDate(billing.periodEnd)}.`) : "";
   if ((billing.status === "past_due" || billing.status === "on_hold") && billing.graceUntil) {
     return `${line(`Your renewal payment didn't go through. Sync keeps working until ${billingDate(billing.graceUntil)}.`)}
+      <p class="vault-fine" data-field="billing-note">Updating your payment method charges the outstanding amount straight away.</p>
       <button class="vault-button" type="button" data-action="billing-portal">Update payment</button>`;
   }
   if (billing.status === "cancelled" && billing.periodEnd) return line(`Sync is on until ${billingDate(billing.periodEnd)}. It won't renew.`);
