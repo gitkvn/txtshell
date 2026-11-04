@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Privacy Policy — Txtshell</title>
-<meta name="description" content="How Txtshell handles your data — which is to say, as little as cryptographically possible." />
+<meta name="description" content="How Txtshell handles your data: what we keep, why, and for how long." />
 <link rel="icon" type="image/svg+xml" href="/logo-shell.svg" />
 <script>
   // Apply the app's saved theme before first paint (key must match THEME_KEY in app.js).
@@ -54,6 +54,13 @@
   footer { margin-top: 56px; padding-top: 24px; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.8125rem; color: var(--muted); display: flex; gap: 20px; flex-wrap: wrap; }
   footer a { color: var(--muted); text-decoration: none; }
   footer a:hover { color: var(--ink); }
+  h3 { font-family: var(--font-mono); font-weight: 500; font-size: 0.9375rem; margin: 28px 0 10px; }
+  code { font-family: var(--font-mono); font-size: 0.875em; }
+  .table-wrap { overflow-x: auto; margin: 0 0 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.875rem; line-height: 1.5; }
+  th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  th { font-family: var(--font-mono); font-weight: 500; font-size: 0.8125rem; color: var(--muted); }
+  td:first-child, th:first-child { padding-left: 0; }
 </style>
 </head>
 <body>
@@ -64,50 +71,124 @@
   </a>
 
   <h1>Privacy Policy</h1>
-  <p class="updated">Last updated: 25 October 2026</p>
+  <p class="updated">Last updated: 4 November 2026</p>
 
-  <p class="lead">Txtshell is built so that we handle as little of your data as cryptographically possible. This policy explains what that means in practice.</p>
-
-  <div class="note">Summary: Your notes are encrypted on your device with a key that never leaves it. We cannot read them. When you use local-only mode, nothing you write is sent to us at all.</div>
-
-  <h2>Your notes</h2>
-  <p>By default, Txtshell runs entirely in your browser. Your notes are stored locally on your device (in your browser's storage) and encrypted with a key derived from your passphrase or passkey. <strong>That key never leaves your device and is never sent to us.</strong></p>
-  <p>In local-only mode, your notes are never transmitted anywhere. We do not receive, store, or have any ability to read them.</p>
-
-  <h2>If you use sync</h2>
-  <p>Txtshell offers optional sync so your notes can appear across your devices. Sync is designed to be end-to-end encrypted: what leaves your device is a block of encrypted data with no key attached. Whoever stores that data — whether that is you (self-hosted) or us (cloud sync) — receives only ciphertext they cannot decrypt.</p>
+  <h2>Who we are</h2>
+  <p>Txtshell is run by <strong>Kavan Ravi</strong>, an individual based in <strong>Hyderabad, India</strong>. In this policy, “we” and “us” mean Kavan Ravi.</p>
   <ul>
-    <li><strong>Self-hosted sync:</strong> you run the sync server on your own cloud account. Your encrypted data never touches our infrastructure. We have no involvement in or access to it.</li>
-    <li><strong>Cloud sync (coming soon):</strong> we store your encrypted data on our servers so it can sync between your devices. We store only ciphertext; we do not hold your encryption key and cannot read your notes. To operate this service we process limited account information — see below.</li>
+    <li><strong>Contact for anything in this policy:</strong> <a href="mailto:hello@txtshell.com">hello@txtshell.com</a></li>
+    <li><strong>Grievance officer</strong> (India’s Digital Personal Data Protection Act, 2023): Kavan Ravi, <a href="mailto:hello@txtshell.com">hello@txtshell.com</a>. We reply within 30 days.</li>
   </ul>
 
-  <h2>Account information (cloud sync only)</h2>
-  <p>If and when you sign up for paid cloud sync, we process the minimum information needed to run the service:</p>
+  <h2>The short version</h2>
   <ul>
-    <li><strong>Email address</strong> — to create your account, sign you in, and send service-related messages.</li>
-    <li><strong>Authentication data</strong> — passkey/credential identifiers used to log you in. We do not store passwords.</li>
-    <li><strong>Subscription/billing data</strong> — handled by our payment processor; we do not store your full card details.</li>
-    <li><strong>Encrypted note data</strong> — stored as ciphertext we cannot read.</li>
+    <li>Txtshell works without an account. Then your notes stay in your browser and we never receive them.</li>
+    <li>If you use cloud sync, your notes are <strong>end-to-end encrypted</strong> on your device before they are uploaded. We store only the encrypted copy and can’t read it.</li>
+    <li>We keep the minimum we need to run your account and your subscription, and we list all of it below.</li>
+    <li>No analytics, no advertising, no tracking pixels, no third-party scripts, and no tracking in our emails.</li>
+    <li>Payments are handled by Dodo Payments. We never see your card or bank details.</li>
   </ul>
-  <p>We do not sell your data, and we do not use it to build advertising profiles.</p>
 
-  <h2>Analytics</h2>
-  <p>We may use privacy-respecting, aggregate analytics to understand overall traffic and usage (for example, how many people visit). These do not identify you personally and do not access your notes.</p>
+  <h2>Using Txtshell without an account</h2>
+  <ul>
+    <li><strong>Your notes are stored in your browser</strong> (IndexedDB) on your device. We never receive them.</li>
+    <li><strong>They are not encrypted by default.</strong> Anyone with access to your browser profile can read them. You can encrypt them on your device with a passphrase (<code>/encrypt</code>), or by using an account.</li>
+    <li><strong>Preferences</strong> such as your theme are kept in your browser’s local storage.</li>
+    <li><strong>No cookies.</strong> Txtshell sets none.</li>
+    <li><strong>Deleting:</strong> delete notes in the app, or erase everything with <code>/wipe</code>. Clearing your browser’s site data also removes them.</li>
+  </ul>
 
-  <h2>What we cannot do</h2>
-  <p>Because your notes are encrypted with a key we never hold, there are things we are simply unable to do, even if compelled: we cannot read your notes, we cannot recover them if you lose your passphrase and recovery key, and we cannot hand your readable notes to anyone. This is a property of the cryptography, not just a promise.</p>
+  <h2>Using cloud sync (an account)</h2>
+
+  <h3>Your notes</h3>
+  <ul>
+    <li>Encrypted on your device with a key we never receive, using passkeys and your 12-word recovery phrase. We store only the encrypted copy, and we can’t read your notes or their contents.</li>
+    <li>We can see technical details of the encrypted copy: its size, when it was uploaded, and which of your devices uploaded it.</li>
+    <li><strong>If you lose every passkey and your 12 words, nobody can recover your notes, including us.</strong></li>
+  </ul>
+
+  <h3>What we keep about you</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>What</th><th>Why</th><th>How long</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Email address</strong></td><td>Your account; sign-in codes; service emails (below)</td><td>While you have an account</td></tr>
+      <tr><td><strong>Sign-in data:</strong> for each passkey, its public key, the type of authenticator, a device label (for example “Mac · Chrome”), and when it was added and last used; your sign-in sessions</td><td>Signing you in, showing you your devices, security</td><td>While you have an account (sessions: up to 7 days)</td></tr>
+      <tr><td><strong>Security notices:</strong> for example “a new device was added”</td><td>Telling you about changes to your account</td><td>Until you acknowledge them, then 90 days; unacknowledged ones after 180 days (except a warning about a pending erase request, kept until that request ends)</td></tr>
+      <tr><td><strong>Subscription data:</strong> our Dodo Payments customer and subscription identifiers, status, renewal or end date, whether it is set to cancel, the identifier and date of your last payment, and whether you have used your self-serve refund</td><td>Knowing whether your account syncs; refunds</td><td>While you have an account</td></tr>
+      <tr><td><strong>Records of billing emails we sent you</strong> (type and subject)</td><td>Not sending the same notice twice</td><td>400 days</td></tr>
+      <tr><td><strong>Payment events from Dodo Payments</strong> (an identifier, the event type, the time, and which account it belongs to)</td><td>Processing each event only once</td><td>90 days</td></tr>
+      <tr><td><strong>Payment events we can’t match to an account</strong> (event type, subscription identifier, email address)</td><td>Sorting out the payment by hand</td><td>90 days</td></tr>
+      <tr><td><strong>Earlier encrypted copies</strong> of your notes, when the current one is replaced or erased</td><td>Restoring them if something goes wrong</td><td>Up to 30 days</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>We do <strong>not</strong> store your card or bank details, your billing address, or payment amounts.</p>
+
+  <h3>Abuse prevention</h3>
+  <p>To stop abuse (for example, too many sign-in attempts), we count requests per IP address and per email address for a short time. These counters store a <strong>one-way keyed hash</strong>, not the address itself, and are deleted within about a day.</p>
+  <p>Like any website, Cloudflare (our host) processes your IP address and browser details to deliver each request and protect the service. We don’t receive or keep a log of them.</p>
+
+  <h3>Unfinished sign-ups</h3>
+  <p>If you start creating an account but don’t finish it (no passkey added), we delete your email address and anything linked to it after 7 days, unless you’ve already paid.</p>
+
+  <h2>The waitlist</h2>
+  <p>If you join the waitlist, we keep <strong>only your email address</strong>, to invite you. It is deleted when you confirm that address to create an account, or after 12 months, whichever comes first. Write to us to be removed sooner.</p>
+
+  <h2>Emails we send</h2>
+  <p>All are about your account or your subscription. We send no marketing.</p>
+  <ul>
+    <li><strong>Sign-in codes.</strong></li>
+    <li><strong>Security emails:</strong> a new device was added to your account; someone asked to erase your cloud notes; that request was stopped.</li>
+    <li><strong>Renewal reminder:</strong> 30 days before your subscription renews.</li>
+    <li><strong>Deletion warnings:</strong> 30 days and 7 days before a lapsed account’s cloud data is deleted.</li>
+  </ul>
+  <p>Dodo Payments also emails you directly: receipts, renewal and payment notices, and reminders if a payment fails. Its emails are covered by its own privacy policy.</p>
+
+  <h2>Payments</h2>
+  <ul>
+    <li><strong>Dodo Payments is our merchant of record.</strong> It sells you the subscription, takes payment, collects the tax, and issues your invoice.</li>
+    <li>You give Dodo Payments your name, email, billing country or address and payment details on its own pages. It handles them under <strong><a href="https://dodopayments.com/legal/privacy-policy">its own privacy policy</a></strong>, and keeps invoices and tax records as the law requires.</li>
+    <li><strong>We send Dodo Payments</strong> your email address and our internal account identifier, so a payment can be matched to your account.</li>
+    <li><strong>We receive from Dodo Payments</strong> the status of your subscription and payments.</li>
+  </ul>
+
+  <h2>Who else handles your data</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Provider</th><th>What it does</th><th>Where</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Cloudflare, Inc.</strong></td><td>Hosts the website and app, runs the sync service, stores the encrypted data and account records, and receives mail sent to hello@txtshell.com</td><td>Account data and encrypted notes are stored in Cloudflare’s Asia-Pacific region; requests are served from Cloudflare’s global network</td></tr>
+      <tr><td><strong>Resend, Inc.</strong></td><td>Sends our emails</td><td>Sent from Tokyo, Japan; Resend is a US company</td></tr>
+      <tr><td><strong>Dodo Payments</strong></td><td>Payments, as above</td><td>As set out in <a href="https://dodopayments.com/legal/privacy-policy">its privacy policy</a></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>We don’t sell or share your data with anyone else, and we don’t use it to train AI models.</p>
+
+  <h2>How long we keep things after you stop</h2>
+  <ul>
+    <li><strong>Your notes on your devices</strong> stay there until you delete them. Nothing we do removes them.</li>
+    <li><strong>When a subscription ends</strong> (cancelled and the paid year over, lapsed after a failed payment, or refunded): sync pauses, and your encrypted copy and account are kept for <strong>at least 12 months</strong> so you can pick up where you left off. Then they are deleted. We email you 30 days and 7 days before.</li>
+    <li><strong>Deleting your account</strong> (<code>/account delete</code> in the app) deletes your account and every encrypted copy at once, including earlier copies. Short-lived records, such as abuse-prevention counters and payment events, expire on their own as listed above. Dodo Payments keeps its own records of your purchases.</li>
+  </ul>
 
   <h2>Your rights</h2>
-  <p>Depending on your location, you may have rights to access, correct, export, or delete the personal information we hold about you (such as your account email). Because your notes are stored and encrypted on your side, you already control them directly — you can export or delete them at any time from within the app. For account-level requests, contact us at the address below.</p>
+  <p>You can ask to <strong>access, correct or delete</strong> your personal data, or to <strong>withdraw consent</strong> where we rely on it, by writing to <a href="mailto:hello@txtshell.com">hello@txtshell.com</a>. You can delete your account and its cloud data yourself, at any time, in the app (<code>/account delete</code>).</p>
+  <p>If you’re not satisfied with our reply, you can complain to the Data Protection Board of India, or, if you’re in the EU or UK, to your local data protection authority.</p>
+  <p>We use your data to provide the service you asked for, to keep it secure and prevent abuse, and where the law requires it.</p>
 
-  <h2>Data retention</h2>
-  <p>Local notes remain on your device until you delete them. For cloud sync, encrypted data and account information are retained while your account is active and for a limited period after cancellation, after which they are deleted. When the encrypted copy of your notes in the cloud is replaced or erased (for example, when you start over), the earlier encrypted copy is kept for up to 30 days so it can be restored, and then deleted. If you join the cloud sync waitlist, we keep your email address to invite you, and use it for nothing else. It's deleted when you create your account, or after 12 months.</p>
+  <h2>Children</h2>
+  <p>Accounts and subscriptions are for people <strong>18 or older</strong>. Txtshell without an account collects nothing about anyone.</p>
+
+  <h2>Security</h2>
+  <p>End-to-end encryption, passkey sign-in (no passwords), encryption in transit (HTTPS), and an email and in-app notice whenever a new device is added to your account. No system is perfectly secure. If a breach affects your personal data, we will tell you and the authorities as the law requires.</p>
+
+  <h2>The browser extension</h2>
+  <p>The Txtshell browser extension has its own privacy notice at <a href="/privacy-extension.html">txtshell.com/privacy-extension</a>. It sends nothing to any server itself. What you capture with it becomes a note in Txtshell, and syncs only if you use cloud sync.</p>
 
   <h2>Changes to this policy</h2>
-  <p>We may update this policy as the product evolves (for example, when cloud sync launches). Material changes will be reflected here with an updated date.</p>
-
-  <h2>Contact</h2>
-  <p>Questions about privacy? Contact us at <a href="mailto:hello@txtshell.com">hello@txtshell.com</a>.</p>
+  <p>We’ll update the date above when this policy changes. For a significant change we’ll email account holders before it takes effect.</p>
 
   <footer>
     <a href="/">Home</a>
